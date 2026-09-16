@@ -50,10 +50,20 @@ class PalletView(QtInteractor):
         """Draw one independent gap line; never form a continuous outer rail."""
         self.add_mesh(pv.Line(start, end), color="#3d8582", line_width=2, name=name)
 
+    def _add_t_end(self, point: tuple[float, float, float], perpendicular: str, size: float, name: str) -> None:
+        """Add a short perpendicular end mark, like a technical drawing dimension."""
+        x, y, z = point
+        if perpendicular == "y":
+            start, end = (x, y - size, z), (x, y + size, z)
+        else:
+            start, end = (x - size, y, z), (x + size, y, z)
+        self._add_dimension_segment(start, end, name)
+
     def _add_length_gap_dimensions(self, result: PalletResult) -> None:
         """Place clear-gap labels along X without visual rails outside the model."""
         direction = result.length_result
         offset = max(50.0, result.pallet_width * 0.055)
+        tick = max(14.0, offset * 0.18)
         y, z = -offset, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
@@ -62,6 +72,8 @@ class PalletView(QtInteractor):
             end = direction.beam_centers[index + 1] - direction.beam_width / 2
             display_y = self._display_y(result, y)
             self._add_dimension_segment((start, display_y, z), (end, display_y, z), f"length-gap-{index}")
+            self._add_t_end((start, display_y, z), "y", tick, f"length-start-tick-{index}")
+            self._add_t_end((end, display_y, z), "y", tick, f"length-end-tick-{index}")
             points.append(((start + end) / 2, display_y, z))
             labels.append(f"{format_mm(gap)} mm")
         self.add_point_labels(points, labels, name="length-gap-labels", point_size=0, font_size=12,
@@ -72,6 +84,7 @@ class PalletView(QtInteractor):
         """Place clear-gap labels along Y without visual rails outside the model."""
         direction = result.width_result
         offset = max(50.0, result.pallet_length * 0.035)
+        tick = max(14.0, offset * 0.18)
         x, z = -offset, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
@@ -81,6 +94,8 @@ class PalletView(QtInteractor):
             display_start = self._display_y(result, start)
             display_end = self._display_y(result, end)
             self._add_dimension_segment((x, display_start, z), (x, display_end, z), f"width-gap-{index}")
+            self._add_t_end((x, display_start, z), "x", tick, f"width-start-tick-{index}")
+            self._add_t_end((x, display_end, z), "x", tick, f"width-end-tick-{index}")
             points.append((x, self._display_y(result, (start + end) / 2), z))
             labels.append(f"{format_mm(gap)} mm")
         self.add_point_labels(points, labels, name="width-gap-labels", point_size=0, font_size=12,
