@@ -31,6 +31,11 @@ class MainWindow(QMainWindow):
             self.layer_buttons.addButton(button)
         self.width_upper.setChecked(True)
         self.view = PalletView(self)
+        self.show_length_gaps = QCheckBox("Зазоры X")
+        self.show_width_gaps = QCheckBox("Зазоры Y")
+        self.show_length_gaps.setChecked(True)
+        self.show_width_gaps.setChecked(True)
+        self._last_result = None
         self.camera_combo = QComboBox()
         self.camera_combo.addItem("Изометрия", "isometric")
         self.camera_combo.addItem("Сверху", "top")
@@ -124,6 +129,8 @@ class MainWindow(QMainWindow):
         unit_label = QLabel("мм")
         unit_label.setObjectName("paneHint")
         view_heading.addWidget(unit_label)
+        view_heading.addWidget(self.show_length_gaps)
+        view_heading.addWidget(self.show_width_gaps)
         self.camera_combo.setObjectName("cameraCombo")
         self.camera_combo.currentIndexChanged.connect(self._set_camera)
         view_heading.addWidget(self.camera_combo)
@@ -149,6 +156,8 @@ class MainWindow(QMainWindow):
         self.width_panel.changed.connect(lambda: self._set_stale(True))
         self.layer_buttons.buttonClicked.connect(self._layer_changed)
         self.rounding_checkbox.toggled.connect(lambda: self._set_stale(True))
+        self.show_length_gaps.toggled.connect(self._refresh_dimension_annotations)
+        self.show_width_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.setStyleSheet(self._stylesheet())
 
     def _header(self) -> QFrame:
@@ -246,6 +255,14 @@ class MainWindow(QMainWindow):
         }
         handlers[self.camera_combo.itemData(index)]()
 
+    def _refresh_dimension_annotations(self) -> None:
+        if self._last_result is not None:
+            self.view.show_pallet(
+                self._last_result,
+                show_length_gaps=self.show_length_gaps.isChecked(),
+                show_width_gaps=self.show_width_gaps.isChecked(),
+            )
+
     def calculate(self) -> None:
         try:
             length = calculate_direction(self.length_panel.values(self.rounding_checkbox.isChecked()))
@@ -256,7 +273,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Невозможная геометрия", str(exc))
             return
         self.results.show_result(result)
-        self.view.show_pallet(result)
+        self._last_result = result
+        self._refresh_dimension_annotations()
         self._set_stale(False)
 
     def reset_example(self) -> None:
