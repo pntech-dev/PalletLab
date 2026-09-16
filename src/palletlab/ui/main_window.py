@@ -18,8 +18,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("PalletLab — калькулятор-визуализатор поддона")
         self.resize(1400, 900)
-        self.length_panel = DirectionInputPanel("Длина — координаты брусьев по длине (X)", "1070 460 1300 499", "123", "552")
-        self.width_panel = DirectionInputPanel("Ширина — координаты брусьев по ширине (Y)", "560 720", "277.55", "179")
+        self.length_panel = DirectionInputPanel("Расчёт по длине — центры опор на оси X", "1070 460 1300 499", "123", "552")
+        self.width_panel = DirectionInputPanel("Расчёт по ширине — центры опор на оси Y", "560 720", "277.55", "179")
         self.layer_combo = QComboBox()
         self.layer_combo.addItem("Вдоль ширины", "width")
         self.layer_combo.addItem("Вдоль длины", "length")
@@ -52,7 +52,24 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setWidget(controls)
         splitter.addWidget(scroll)
-        splitter.addWidget(self.view)
+        viewport = QWidget()
+        viewport_layout = QVBoxLayout(viewport)
+        viewport_layout.setContentsMargins(0, 0, 0, 0)
+        camera_layout = QHBoxLayout()
+        for label, handler in (
+            ("Изометрия", self.view.camera_isometric),
+            ("Сверху", self.view.camera_top),
+            ("Спереди", self.view.camera_front),
+            ("Сбоку", self.view.camera_side),
+            ("Вписать модель", self.view.reset_camera),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(handler)
+            camera_layout.addWidget(button)
+        camera_layout.addStretch()
+        viewport_layout.addLayout(camera_layout)
+        viewport_layout.addWidget(self.view)
+        splitter.addWidget(viewport)
         splitter.setSizes([420, 980])
         root_layout.addWidget(splitter, 1)
         result_frame = QFrame()
