@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QPoint, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from palletlab.core.models import DirectionInput
@@ -17,6 +18,45 @@ SECTIONS = {
 }
 
 
+class StyledComboBox(QComboBox):
+    """A QComboBox with a stable drawn chevron instead of platform arrows."""
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        arrow_width = 26
+        rect = self.rect().adjusted(self.width() - arrow_width, 1, -1, -1)
+        painter.fillRect(rect, QColor("#f3f0e9"))
+        painter.setPen(QPen(QColor("#466168"), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        center_x, center_y = rect.center().x(), rect.center().y()
+        painter.drawLine(QPoint(center_x - 4, center_y - 2), QPoint(center_x, center_y + 2))
+        painter.drawLine(QPoint(center_x, center_y + 2), QPoint(center_x + 4, center_y - 2))
+        painter.end()
+
+
+class StyledDoubleSpinBox(QDoubleSpinBox):
+    """A QDoubleSpinBox whose increment controls remain crisp at every DPI."""
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(self.width() - 22, 1, -1, -1)
+        painter.fillRect(rect, QColor("#f3f0e9") if self.isEnabled() else QColor("#ece9e2"))
+        painter.setPen(QPen(QColor("#d8d3c8"), 1))
+        painter.drawLine(rect.left(), rect.top(), rect.left(), rect.bottom())
+        middle = rect.center().y()
+        painter.drawLine(rect.left(), middle, rect.right(), middle)
+        painter.setPen(QPen(QColor("#466168"), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        center_x = rect.center().x()
+        painter.drawLine(QPoint(center_x - 3, middle - 4), QPoint(center_x, middle - 7))
+        painter.drawLine(QPoint(center_x, middle - 7), QPoint(center_x + 3, middle - 4))
+        painter.drawLine(QPoint(center_x - 3, middle + 4), QPoint(center_x, middle + 7))
+        painter.drawLine(QPoint(center_x, middle + 7), QPoint(center_x + 3, middle + 4))
+        painter.end()
+
+
 class DirectionInputPanel(QGroupBox):
     changed = pyqtSignal()
 
@@ -24,7 +64,7 @@ class DirectionInputPanel(QGroupBox):
                  parent: QWidget | None = None):
         super().__init__(title, parent)
         self.setObjectName("directionCard")
-        self.section = QComboBox()
+        self.section = StyledComboBox()
         self.section.setObjectName("sectionCombo")
         self.section.addItems(SECTIONS)
         self.height = self._spin(70.0)
@@ -63,7 +103,7 @@ class DirectionInputPanel(QGroupBox):
 
     @staticmethod
     def _spin(value: float) -> QDoubleSpinBox:
-        widget = QDoubleSpinBox()
+        widget = StyledDoubleSpinBox()
         widget.setDecimals(3)
         widget.setRange(0.0, 1_000_000.0)
         widget.setValue(value)

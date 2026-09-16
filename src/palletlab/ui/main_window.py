@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QApplication, QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
+from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.core.calculator import build_pallet, calculate_direction
 from palletlab.core.validation import CalculationError
-from palletlab.ui.input_panel import DirectionInputPanel
+from palletlab.ui.input_panel import DirectionInputPanel, StyledComboBox
 from palletlab.ui.results_panel import ResultsPanel
 from palletlab.visualization.pallet_view import PalletView
 
@@ -30,7 +30,7 @@ class MainWindow(QMainWindow):
             self.layer_buttons.addButton(button)
         self.width_upper.setChecked(True)
         self.view = PalletView(self)
-        self.camera_combo = QComboBox()
+        self.camera_combo = StyledComboBox()
         self.camera_combo.addItem("Изометрия", "isometric")
         self.camera_combo.addItem("Сверху", "top")
         self.camera_combo.addItem("Спереди", "front")
