@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
+from PyQt5.QtWidgets import (QApplication, QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.core.calculator import build_pallet, calculate_direction
@@ -30,6 +30,11 @@ class MainWindow(QMainWindow):
             self.layer_buttons.addButton(button)
         self.width_upper.setChecked(True)
         self.view = PalletView(self)
+        self.camera_combo = QComboBox()
+        self.camera_combo.addItem("Изометрия", "isometric")
+        self.camera_combo.addItem("Сверху", "top")
+        self.camera_combo.addItem("Спереди", "front")
+        self.camera_combo.addItem("Сбоку", "side")
         self.results = ResultsPanel()
         self._build_ui()
         self._set_stale(False)
@@ -44,6 +49,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._header())
         splitter = QSplitter(Qt.Horizontal)
         splitter.setObjectName("workspace")
+        splitter.setChildrenCollapsible(False)
         controls = QWidget()
         controls_layout = QVBoxLayout(controls)
         controls_layout.setContentsMargins(4, 4, 8, 4)
@@ -81,39 +87,34 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(reset_button)
         controls_layout.addStretch()
         scroll = QScrollArea()
+        scroll.setObjectName("parametersScroll")
         scroll.setWidgetResizable(True)
+        scroll.setViewportMargins(0, 0, 8, 0)
         scroll.setWidget(controls)
         splitter.addWidget(scroll)
         viewport = QWidget()
         viewport_layout = QVBoxLayout(viewport)
         viewport_layout.setContentsMargins(0, 0, 0, 0)
-        viewport_layout.setSpacing(8)
+        viewport_layout.setSpacing(6)
         view_heading = QHBoxLayout()
         title_block = QVBoxLayout()
         view_title = QLabel("3D-модель поддона")
         view_title.setObjectName("paneTitle")
+        view_title.setToolTip("Вращайте модель мышью, колёсиком меняйте масштаб.")
         title_block.addWidget(view_title)
-        view_hint = QLabel("Вращайте мышью; колёсиком меняйте масштаб.")
-        view_hint.setObjectName("paneHint")
-        title_block.addWidget(view_hint)
         view_heading.addLayout(title_block)
         view_heading.addStretch()
-        view_heading.addWidget(QLabel("Размеры в мм"))
+        unit_label = QLabel("мм")
+        unit_label.setObjectName("paneHint")
+        view_heading.addWidget(unit_label)
+        self.camera_combo.setObjectName("cameraCombo")
+        self.camera_combo.currentIndexChanged.connect(self._set_camera)
+        view_heading.addWidget(self.camera_combo)
+        fit_button = QPushButton("Вписать")
+        fit_button.setObjectName("cameraButton")
+        fit_button.clicked.connect(self.view.camera_fit)
+        view_heading.addWidget(fit_button)
         viewport_layout.addLayout(view_heading)
-        camera_layout = QHBoxLayout()
-        for label, handler in (
-            ("Изометрия", self.view.camera_isometric),
-            ("Сверху", self.view.camera_top),
-            ("Спереди", self.view.camera_front),
-            ("Сбоку", self.view.camera_side),
-            ("Вписать модель", self.view.camera_fit),
-        ):
-            button = QPushButton(label)
-            button.setObjectName("cameraButton")
-            button.clicked.connect(handler)
-            camera_layout.addWidget(button)
-        camera_layout.addStretch()
-        viewport_layout.addLayout(camera_layout)
         viewport_layout.addWidget(self.view)
         splitter.addWidget(viewport)
         splitter.setSizes([420, 980])
@@ -171,27 +172,22 @@ class MainWindow(QMainWindow):
             }
             QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 2px solid #4b7a76; }
             QDoubleSpinBox:disabled { background: #f1eee8; color: #81837e; }
-            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
-                width: 20px; background: #f6f3ed; border-left: 1px solid #d8d3c8;
-            }
-            QDoubleSpinBox::up-button { subcontrol-origin: border; subcontrol-position: top right; border-top-right-radius: 6px; border-bottom: 1px solid #d8d3c8; }
-            QDoubleSpinBox::down-button { subcontrol-origin: border; subcontrol-position: bottom right; border-bottom-right-radius: 6px; }
-            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: #e9e5dc; }
-            QDoubleSpinBox::up-arrow { image: none; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 5px solid #466168; }
-            QDoubleSpinBox::down-arrow { image: none; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #466168; }
+            QComboBox::drop-down { subcontrol-origin: border; subcontrol-position: top right; width: 26px; background: #f3f0e9; border-left: 1px solid #d8d3c8; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+            QComboBox::drop-down:hover { background: #e9e5dc; }
             QPushButton { background: #fffdf9; border: 1px solid #d8d3c8; border-radius: 7px; padding: 8px 11px; color: #33464a; }
             QPushButton:hover { background: #f0ece3; border-color: #bcb5a7; }
             QPushButton:checked { background: #dfece9; border: 2px solid #4b7a76; color: #1f5c58; font-weight: 650; }
             QPushButton#calculateButton { background: #255e64; border: 1px solid #255e64; color: #ffffff; font-weight: 650; }
             QPushButton#calculateButton:hover { background: #1e4e53; }
-            QPushButton#cameraButton { padding: 6px 9px; font-size: 12px; }
+            QComboBox#cameraCombo { min-width: 115px; }
+            QPushButton#cameraButton { padding: 6px 12px; font-size: 12px; }
             QTextBrowser#resultCard { background: #f9f7f1; border: 1px solid #ece6dc; border-radius: 9px; padding: 4px 10px; }
             QLabel#resultSummary { color: #203b40; font-size: 18px; font-weight: 650; }
             QLabel#resultNote { color: #55706a; font-size: 12px; }
-            QScrollArea { border: none; background: transparent; }
-            QScrollBar:vertical { background: transparent; width: 10px; margin: 4px 0; }
-            QScrollBar::handle:vertical { background: #b8b6ae; border-radius: 5px; min-height: 28px; }
-            QScrollBar::handle:vertical:hover { background: #8d918d; }
+            QScrollArea#parametersScroll { border: none; background: transparent; }
+            QScrollBar:vertical { background: #efede7; width: 8px; margin: 8px 3px 8px 2px; border-radius: 4px; }
+            QScrollBar::handle:vertical { background: #a8a59c; border-radius: 4px; min-height: 32px; }
+            QScrollBar::handle:vertical:hover { background: #777a73; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
             QSplitter::handle { background: #e5dfd4; width: 1px; }
@@ -211,6 +207,15 @@ class MainWindow(QMainWindow):
     def _layer_changed(self, *_args) -> None:
         # Layer change is an input change; rebuild only after a successful calculation.
         self._set_stale(True)
+
+    def _set_camera(self, index: int) -> None:
+        handlers = {
+            "isometric": self.view.camera_isometric,
+            "top": self.view.camera_top,
+            "front": self.view.camera_front,
+            "side": self.view.camera_side,
+        }
+        handlers[self.camera_combo.itemData(index)]()
 
     def calculate(self) -> None:
         try:
