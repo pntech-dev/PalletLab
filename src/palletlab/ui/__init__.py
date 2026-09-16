@@ -1,0 +1,2 @@
+"""Qt interface for PalletLab."""
+
