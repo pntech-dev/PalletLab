@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, Q
                              QMessageBox, QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.core.calculator import build_pallet, calculate_direction
+from palletlab.core.formatting import format_mm
 from palletlab.core.validation import CalculationError
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
@@ -35,6 +36,9 @@ class MainWindow(QMainWindow):
         self.show_length_gaps.setChecked(True)
         self.show_width_gaps.setChecked(True)
         self._last_result = None
+        self.scene_info = QLabel()
+        self.scene_info.setObjectName("sceneInfo")
+        self.scene_info.setWordWrap(True)
         self.camera_combo = QComboBox()
         self.camera_combo.addItem("Изометрия", "isometric")
         self.camera_combo.addItem("Сверху", "top")
@@ -139,6 +143,7 @@ class MainWindow(QMainWindow):
         view_heading.addWidget(fit_button)
         viewport_layout.addLayout(view_heading)
         viewport_layout.addWidget(self.view)
+        viewport_layout.addWidget(self.scene_info)
         splitter.addWidget(viewport)
         splitter.setSizes([420, 980])
         root_layout.addWidget(splitter, 1)
@@ -213,6 +218,7 @@ class MainWindow(QMainWindow):
             QTextBrowser#resultCard { background: #f9f7f1; border: 1px solid #ece6dc; border-radius: 9px; padding: 4px 10px; }
             QLabel#resultSummary { color: #203b40; font-size: 18px; font-weight: 650; }
             QLabel#resultNote { color: #55706a; font-size: 12px; }
+            QLabel#sceneInfo { background: #fffdf9; border: 1px solid #e5dfd4; border-radius: 8px; color: #21474d; font-size: 12px; font-weight: 600; padding: 8px 12px; }
             QScrollArea#parametersScroll { border: none; background: transparent; }
             QScrollBar:vertical { background: #efede7; width: 8px; margin: 8px 3px 8px 2px; border-radius: 4px; }
             QScrollBar::handle:vertical { background: #a8a59c; border-radius: 4px; min-height: 32px; }
@@ -253,6 +259,14 @@ class MainWindow(QMainWindow):
                 show_width_gaps=self.show_width_gaps.isChecked(),
             )
 
+    def _update_scene_info(self, result) -> None:
+        self.scene_info.setText(
+            f"Габариты поддона: длина {format_mm(result.pallet_length)} мм · "
+            f"ширина {format_mm(result.pallet_width)} мм · высота {format_mm(result.pallet_height)} мм    "
+            f"|    Балки: поперечные {format_mm(result.pallet_width)} мм · "
+            f"продольные {format_mm(result.pallet_length)} мм"
+        )
+
     def calculate(self) -> None:
         try:
             length = calculate_direction(self.length_panel.values(self.rounding_checkbox.isChecked()))
@@ -263,6 +277,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Невозможная геометрия", str(exc))
             return
         self._last_result = result
+        self._update_scene_info(result)
         self._refresh_dimension_annotations()
         self._set_stale(False)
 

@@ -32,7 +32,6 @@ class PalletView(QtInteractor):
         if show_width_gaps:
             self._add_width_gap_dimensions(result)
         self.add_axes()
-        self._add_scene_info(result)
         if camera_position is None:
             self.camera_top()
         else:
@@ -45,55 +44,34 @@ class PalletView(QtInteractor):
         """Mirror only the visual Y axis so calculated (0, 0) is upper-left."""
         return result.pallet_width - y
 
-    def _add_scene_info(self, result: PalletResult) -> None:
-        self.add_text(
-            f"Габариты: длина {format_mm(result.pallet_length)} мм · "
-            f"ширина {format_mm(result.pallet_width)} мм · высота {format_mm(result.pallet_height)} мм\n"
-            f"Балки: поперечные {format_mm(result.pallet_width)} мм · "
-            f"продольные {format_mm(result.pallet_length)} мм",
-            position="lower_left", font_size=11, color="#173f45", name="scene-info",
-        )
-
-    def _add_line(self, start: tuple[float, float, float], end: tuple[float, float, float], name: str) -> None:
-        self.add_mesh(pv.Line(start, end), color="#25636a", line_width=2, name=name)
-
     def _add_length_gap_dimensions(self, result: PalletResult) -> None:
-        """Draw clear gaps along X above the pallet's zero-Y edge."""
+        """Place clear-gap labels along X without visual rails outside the model."""
         direction = result.length_result
         offset = max(50.0, result.pallet_width * 0.055)
-        tick = max(20.0, offset * 0.22)
         y, z = -offset, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
         for index, gap in enumerate(direction.gaps):
             start = direction.beam_centers[index] + direction.beam_width / 2
             end = direction.beam_centers[index + 1] - direction.beam_width / 2
-            display_y = self._display_y(result, y)
-            self._add_line((start, display_y, z), (end, display_y, z), f"length-gap-{index}")
-            self._add_line((start, self._display_y(result, y - tick), z), (start, self._display_y(result, y + tick), z), f"length-tick-start-{index}")
-            self._add_line((end, self._display_y(result, y - tick), z), (end, self._display_y(result, y + tick), z), f"length-tick-end-{index}")
-            points.append(((start + end) / 2, self._display_y(result, y - tick * 1.3), z))
-            labels.append(f"{format_mm(gap)} мм")
+            points.append(((start + end) / 2, self._display_y(result, y), z))
+            labels.append(f"{format_mm(gap)} mm")
         self.add_point_labels(points, labels, name="length-gap-labels", point_size=0, font_size=12,
                               text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
                               fill_shape=True, always_visible=True)
 
     def _add_width_gap_dimensions(self, result: PalletResult) -> None:
-        """Draw clear gaps along Y left of the pallet's zero-X edge."""
+        """Place clear-gap labels along Y without visual rails outside the model."""
         direction = result.width_result
         offset = max(50.0, result.pallet_length * 0.035)
-        tick = max(20.0, offset * 0.22)
         x, z = -offset, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
         for index, gap in enumerate(direction.gaps):
             start = direction.beam_centers[index] + direction.beam_width / 2
             end = direction.beam_centers[index + 1] - direction.beam_width / 2
-            self._add_line((x, self._display_y(result, start), z), (x, self._display_y(result, end), z), f"width-gap-{index}")
-            self._add_line((x - tick, self._display_y(result, start), z), (x + tick, self._display_y(result, start), z), f"width-tick-start-{index}")
-            self._add_line((x - tick, self._display_y(result, end), z), (x + tick, self._display_y(result, end), z), f"width-tick-end-{index}")
-            points.append((x - tick * 1.9, self._display_y(result, (start + end) / 2), z))
-            labels.append(f"{format_mm(gap)} мм")
+            points.append((x, self._display_y(result, (start + end) / 2), z))
+            labels.append(f"{format_mm(gap)} mm")
         self.add_point_labels(points, labels, name="width-gap-labels", point_size=0, font_size=12,
                               text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
                               fill_shape=True, always_visible=True)
