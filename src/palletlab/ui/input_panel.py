@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLineEdit, QWidget
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from palletlab.core.models import DirectionInput
 from palletlab.core.validation import CalculationError
@@ -20,9 +20,12 @@ SECTIONS = {
 class DirectionInputPanel(QGroupBox):
     changed = pyqtSignal()
 
-    def __init__(self, title: str, distances: str, first: str, last: str, parent: QWidget | None = None):
+    def __init__(self, title: str, description: str, distances: str, first: str, last: str,
+                 parent: QWidget | None = None):
         super().__init__(title, parent)
+        self.setObjectName("directionCard")
         self.section = QComboBox()
+        self.section.setObjectName("sectionCombo")
         self.section.addItems(SECTIONS)
         self.height = self._spin(70.0)
         self.width = self._spin(50.0)
@@ -32,16 +35,26 @@ class DirectionInputPanel(QGroupBox):
         self.last = self._spin(float(last))
         self.margin_start = self._spin(100.0)
         self.margin_end = self._spin(100.0)
-        layout = QFormLayout(self)
-        layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        layout.addRow("Сечение (высота × ширина)", self.section)
-        layout.addRow("Высота бруса, мм", self.height)
-        layout.addRow("Ширина бруса, мм", self.width)
-        layout.addRow("Между центрами опор, мм", self.distances)
-        layout.addRow("От габарита до первой опоры, мм", self.first)
-        layout.addRow("От последней опоры до габарита, мм", self.last)
-        layout.addRow("Отступ поддона в начале, мм", self.margin_start)
-        layout.addRow("Отступ поддона в конце, мм", self.margin_end)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 20, 16, 16)
+        layout.setSpacing(10)
+        hint = QLabel(description)
+        hint.setObjectName("sectionHint")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        form = QFormLayout()
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.addRow("Сечение · высота × ширина", self.section)
+        form.addRow("Высота", self.height)
+        form.addRow("Ширина", self.width)
+        form.addRow("Центры соседних опор", self.distances)
+        form.addRow("Габарит → первая опора", self.first)
+        form.addRow("Последняя опора → габарит", self.last)
+        form.addRow("Отступ в начале", self.margin_start)
+        form.addRow("Отступ в конце", self.margin_end)
+        layout.addLayout(form)
         self.section.currentTextChanged.connect(self._section_changed)
         for field in (self.height, self.width, self.first, self.last, self.margin_start, self.margin_end):
             field.valueChanged.connect(self.changed)
@@ -55,6 +68,7 @@ class DirectionInputPanel(QGroupBox):
         widget.setRange(0.0, 1_000_000.0)
         widget.setValue(value)
         widget.setSingleStep(1.0)
+        widget.setSuffix(" мм")
         return widget
 
     def _section_changed(self, name: str) -> None:

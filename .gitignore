@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.codebase-memory/
 .mypy_cache/
 .coverage
 htmlcov/
@@ -14,4 +15,3 @@ dist/
 *.swp
 Thumbs.db
 Desktop.ini
-
