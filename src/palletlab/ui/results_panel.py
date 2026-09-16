@@ -43,7 +43,7 @@ class ResultsPanel(QWidget):
         return card
 
     @staticmethod
-    def _direction_html(title: str, result: DirectionResult) -> str:
+    def _direction_html(title: str, result: DirectionResult, beam_label: str, beam_length: float) -> str:
         gaps = "".join(
             f"<li>Брус {index + 1} → Брус {index + 2}: <b>{format_mm(gap)} мм</b></li>"
             for index, gap in enumerate(result.gaps)
@@ -53,6 +53,7 @@ class ResultsPanel(QWidget):
             f"Габарит оборудования: <b>{format_mm(result.machine_size)} мм</b><br>"
             f"Габарит поддона: <b>{format_mm(result.pallet_size)} мм</b><br>"
             f"Опор: <b>{result.support_count}</b> · Брусьев: <b>{result.beam_count}</b>"
+            f"<p>{beam_label}: <b>{format_mm(beam_length)} мм</b></p>"
             f"<p>Чистые расстояния между гранями:</p><ul>{gaps}</ul>"
         )
 
@@ -61,9 +62,17 @@ class ResultsPanel(QWidget):
             f"Поддон  ·  {format_mm(result.pallet_length)} × {format_mm(result.pallet_width)} × "
             f"{format_mm(result.pallet_height)} мм"
         )
-        self.length_card.setHtml(self._direction_html("01  Расчёт по длине", result.length_result))
-        self.width_card.setHtml(self._direction_html("02  Расчёт по ширине", result.width_result))
-        self.note.setText("Расчёт сходится: сумма чистых промежутков и ширин брусьев равна габариту поддона.")
+        self.length_card.setHtml(self._direction_html(
+            "01  Расчёт по длине", result.length_result, "Длина поперечных балок", result.pallet_width
+        ))
+        self.width_card.setHtml(self._direction_html(
+            "02  Расчёт по ширине", result.width_result, "Длина продольных балок", result.pallet_length
+        ))
+        rounded = result.length_result.rounding_applied or result.width_result.rounding_applied
+        self.note.setText(
+            "Габарит округлён вверх до кратного 5 мм; остаток добавлен к крайнему промежутку."
+            if rounded else "Расчёт сходится: сумма чистых промежутков и ширин брусьев равна габариту поддона."
+        )
 
     def set_stale(self, stale: bool) -> None:
         if stale:

@@ -31,6 +31,24 @@ def test_length_example_calculates_specification_values():
     assert result.gaps == pytest.approx((148, 1020, 410, 1250, 449, 577))
 
 
+def test_optional_rounding_increases_pallet_to_next_five_mm_without_moving_supports():
+    exact = calculate_direction(LENGTH_EXAMPLE)
+    rounded = calculate_direction(DirectionInput(
+        70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100, round_pallet_size=True
+    ))
+    assert exact.pallet_size == 4204
+    assert rounded.raw_pallet_size == 4204
+    assert rounded.pallet_size == 4205
+    assert rounded.rounding_applied
+    assert rounded.support_positions == exact.support_positions
+    assert rounded.gaps[-1] == pytest.approx(exact.gaps[-1] + 1)
+
+
+def test_rounding_fractional_dimension_uses_next_five_mm():
+    rounded = calculate_direction(DirectionInput(70, 50, (560, 720), 277.55, 179, 100, 100, True))
+    assert rounded.pallet_size == 1940
+
+
 def test_custom_section_and_asymmetric_margins_are_used():
     result = calculate_direction(DirectionInput(42.5, 80.25, (300.5,), 100.25, 50.5, 20.25, 70.75))
     assert result.machine_size == pytest.approx(451.25)

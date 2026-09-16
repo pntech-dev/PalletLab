@@ -20,12 +20,15 @@ class DirectionInput:
     last_support_to_edge: float
     margin_start: float
     margin_end: float
+    round_pallet_size: bool = False
 
 
 @dataclass(frozen=True)
 class DirectionResult:
     machine_size: float
+    raw_pallet_size: float
     pallet_size: float
+    rounding_applied: bool
     beam_width: float
     beam_height: float
     support_positions: tuple[float, ...]
@@ -63,4 +66,3 @@ class PalletResult:
     pallet_height: float
     upper_layer: LayerDirection
     beams_3d: tuple[Beam3D, ...]
-

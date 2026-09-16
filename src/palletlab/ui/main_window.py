@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow,
+from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.core.calculator import build_pallet, calculate_direction
 from palletlab.core.validation import CalculationError
-from palletlab.ui.input_panel import DirectionInputPanel, StyledComboBox
+from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
+from palletlab.ui.input_panel import DirectionInputPanel
 from palletlab.ui.results_panel import ResultsPanel
 from palletlab.visualization.pallet_view import PalletView
 
@@ -30,7 +31,7 @@ class MainWindow(QMainWindow):
             self.layer_buttons.addButton(button)
         self.width_upper.setChecked(True)
         self.view = PalletView(self)
-        self.camera_combo = StyledComboBox()
+        self.camera_combo = QComboBox()
         self.camera_combo.addItem("Изометрия", "isometric")
         self.camera_combo.addItem("Сверху", "top")
         self.camera_combo.addItem("Спереди", "front")
@@ -77,21 +78,37 @@ class MainWindow(QMainWindow):
         choices.addWidget(self.length_upper)
         layer_layout.addLayout(choices)
         controls_layout.addWidget(layer_card)
-        calculate_button = QPushButton("Рассчитать и построить")
-        calculate_button.setObjectName("calculateButton")
-        calculate_button.clicked.connect(self.calculate)
-        calculate_button.setMinimumHeight(42)
-        reset_button = QPushButton("Сбросить пример")
-        reset_button.clicked.connect(self.reset_example)
-        controls_layout.addWidget(calculate_button)
-        controls_layout.addWidget(reset_button)
         controls_layout.addStretch()
         scroll = QScrollArea()
         scroll.setObjectName("parametersScroll")
         scroll.setWidgetResizable(True)
         scroll.setViewportMargins(0, 0, 8, 0)
         scroll.setWidget(controls)
-        splitter.addWidget(scroll)
+        action_panel = QFrame()
+        action_panel.setObjectName("actionPanel")
+        action_layout = QVBoxLayout(action_panel)
+        action_layout.setContentsMargins(14, 12, 14, 12)
+        self.rounding_checkbox = QCheckBox("Округлять габарит поддона до 5 мм")
+        self.rounding_checkbox.setChecked(True)
+        self.rounding_checkbox.setToolTip("При выключении используются точные расчётные размеры.")
+        action_layout.addWidget(self.rounding_checkbox)
+        buttons = QHBoxLayout()
+        calculate_button = QPushButton("Рассчитать и построить")
+        calculate_button.setObjectName("calculateButton")
+        calculate_button.clicked.connect(self.calculate)
+        calculate_button.setMinimumHeight(42)
+        reset_button = QPushButton("Сбросить пример")
+        reset_button.clicked.connect(self.reset_example)
+        buttons.addWidget(calculate_button, 1)
+        buttons.addWidget(reset_button)
+        action_layout.addLayout(buttons)
+        sidebar = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(10)
+        sidebar_layout.addWidget(scroll, 1)
+        sidebar_layout.addWidget(action_panel)
+        splitter.addWidget(sidebar)
         viewport = QWidget()
         viewport_layout = QVBoxLayout(viewport)
         viewport_layout.setContentsMargins(0, 0, 0, 0)
@@ -131,6 +148,7 @@ class MainWindow(QMainWindow):
         self.length_panel.changed.connect(lambda: self._set_stale(True))
         self.width_panel.changed.connect(lambda: self._set_stale(True))
         self.layer_buttons.buttonClicked.connect(self._layer_changed)
+        self.rounding_checkbox.toggled.connect(lambda: self._set_stale(True))
         self.setStyleSheet(self._stylesheet())
 
     def _header(self) -> QFrame:
@@ -156,7 +174,7 @@ class MainWindow(QMainWindow):
     def _stylesheet() -> str:
         return """
             QWidget#appRoot { background: #f6f3ed; color: #263238; font-family: 'Segoe UI'; font-size: 13px; }
-            QFrame#appHeader, QFrame#resultsFrame, QFrame#layerCard, QGroupBox#directionCard {
+            QFrame#appHeader, QFrame#resultsFrame, QFrame#layerCard, QFrame#actionPanel, QGroupBox#directionCard {
                 background: #fffdf9; border: 1px solid #e5dfd4; border-radius: 12px;
             }
             QLabel#eyebrow { color: #9a6840; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
@@ -172,8 +190,19 @@ class MainWindow(QMainWindow):
             }
             QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 2px solid #4b7a76; }
             QDoubleSpinBox:disabled { background: #f1eee8; color: #81837e; }
-            QComboBox::drop-down { subcontrol-origin: border; subcontrol-position: top right; width: 26px; background: #f3f0e9; border-left: 1px solid #d8d3c8; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+            QComboBox::drop-down { subcontrol-origin: border; subcontrol-position: top right; width: 28px; background: #f3f0e9; border-left: 1px solid #d8d3c8; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
             QComboBox::drop-down:hover { background: #e9e5dc; }
+            QComboBox::down-arrow { image: url(:/icons/chevron-down.svg); width: 12px; height: 12px; }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 22px; background: #f3f0e9; border-left: 1px solid #d8d3c8; }
+            QDoubleSpinBox::up-button { subcontrol-origin: border; subcontrol-position: top right; border-top-right-radius: 6px; border-bottom: 1px solid #d8d3c8; }
+            QDoubleSpinBox::down-button { subcontrol-origin: border; subcontrol-position: bottom right; border-bottom-right-radius: 6px; }
+            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: #e9e5dc; }
+            QDoubleSpinBox::up-arrow { image: url(:/icons/chevron-up.svg); width: 12px; height: 12px; }
+            QDoubleSpinBox::down-arrow { image: url(:/icons/chevron-down.svg); width: 12px; height: 12px; }
+            QCheckBox { spacing: 8px; color: #33464a; }
+            QCheckBox::indicator { width: 18px; height: 18px; border: 1px solid #bdb7ac; border-radius: 5px; background: #fff; }
+            QCheckBox::indicator:hover { border-color: #4b7a76; }
+            QCheckBox::indicator:checked { background: #255e64; border-color: #255e64; image: url(:/icons/check.svg); }
             QPushButton { background: #fffdf9; border: 1px solid #d8d3c8; border-radius: 7px; padding: 8px 11px; color: #33464a; }
             QPushButton:hover { background: #f0ece3; border-color: #bcb5a7; }
             QPushButton:checked { background: #dfece9; border: 2px solid #4b7a76; color: #1f5c58; font-weight: 650; }
@@ -219,8 +248,8 @@ class MainWindow(QMainWindow):
 
     def calculate(self) -> None:
         try:
-            length = calculate_direction(self.length_panel.values())
-            width = calculate_direction(self.width_panel.values())
+            length = calculate_direction(self.length_panel.values(self.rounding_checkbox.isChecked()))
+            width = calculate_direction(self.width_panel.values(self.rounding_checkbox.isChecked()))
             result = build_pallet(length, width, self.upper_layer())
         except CalculationError as exc:
             self._set_stale(True)

@@ -11,6 +11,11 @@ from .validation import CalculationError
 EPSILON = 1e-7
 
 
+def round_up_to_five(value: float) -> float:
+    """Round a non-negative measurement upward to the next whole 5 mm."""
+    return math.ceil(value / 5 - EPSILON) * 5
+
+
 def _validate_measurements(values: Iterable[tuple[str, float]], *, allow_empty: bool = False) -> None:
     for name, value in values:
         if not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -44,7 +49,8 @@ def calculate_direction(data: DirectionInput) -> DirectionResult:
     )
 
     machine_size = data.first_edge_to_support + sum(data.support_distances) + data.last_support_to_edge
-    pallet_size = data.margin_start + machine_size + data.margin_end
+    raw_pallet_size = data.margin_start + machine_size + data.margin_end
+    pallet_size = round_up_to_five(raw_pallet_size) if data.round_pallet_size else raw_pallet_size
     support_positions = [data.margin_start + data.first_edge_to_support]
     for distance in data.support_distances:
         support_positions.append(support_positions[-1] + distance)
@@ -68,7 +74,9 @@ def calculate_direction(data: DirectionInput) -> DirectionResult:
         raise CalculationError("Проверка геометрии не сошлась; модель не построена.")
     return DirectionResult(
         machine_size=machine_size,
+        raw_pallet_size=raw_pallet_size,
         pallet_size=pallet_size,
+        rounding_applied=data.round_pallet_size and not math.isclose(raw_pallet_size, pallet_size, abs_tol=EPSILON),
         beam_width=data.beam_width,
         beam_height=data.beam_height,
         support_positions=tuple(support_positions),

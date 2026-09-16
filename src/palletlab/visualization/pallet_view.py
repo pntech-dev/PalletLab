@@ -30,7 +30,10 @@ class PalletView(QtInteractor):
             f"Height: {format_mm(result.pallet_height)} mm",
             position="upper_left", font_size=11, color="#1f2937", name="dimensions",
         )
-        self.reset_camera()
+        # The initial orientation is a plan view: X grows left-to-right and
+        # Y grows from the upper edge downward, so coordinate origin (0, 0)
+        # is the visible upper-left pallet corner.
+        self.camera_top()
 
     def camera_isometric(self) -> None:
         self.view_isometric()
@@ -38,7 +41,8 @@ class PalletView(QtInteractor):
 
     def camera_top(self) -> None:
         self.view_xy()
-        self.reset_camera()
+        self.camera.SetViewUp(0, -1, 0)
+        self.reset_camera(render=True)
 
     def camera_front(self) -> None:
         self.view_xz()

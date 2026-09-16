@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QPoint, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from palletlab.core.models import DirectionInput
@@ -18,43 +17,11 @@ SECTIONS = {
 }
 
 
-class StyledComboBox(QComboBox):
-    """A QComboBox with a stable drawn chevron instead of platform arrows."""
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """Keep numeric values stable while the parent form is being scrolled."""
 
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        arrow_width = 26
-        rect = self.rect().adjusted(self.width() - arrow_width, 1, -1, -1)
-        painter.fillRect(rect, QColor("#f3f0e9"))
-        painter.setPen(QPen(QColor("#466168"), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        center_x, center_y = rect.center().x(), rect.center().y()
-        painter.drawLine(QPoint(center_x - 4, center_y - 2), QPoint(center_x, center_y + 2))
-        painter.drawLine(QPoint(center_x, center_y + 2), QPoint(center_x + 4, center_y - 2))
-        painter.end()
-
-
-class StyledDoubleSpinBox(QDoubleSpinBox):
-    """A QDoubleSpinBox whose increment controls remain crisp at every DPI."""
-
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        rect = self.rect().adjusted(self.width() - 22, 1, -1, -1)
-        painter.fillRect(rect, QColor("#f3f0e9") if self.isEnabled() else QColor("#ece9e2"))
-        painter.setPen(QPen(QColor("#d8d3c8"), 1))
-        painter.drawLine(rect.left(), rect.top(), rect.left(), rect.bottom())
-        middle = rect.center().y()
-        painter.drawLine(rect.left(), middle, rect.right(), middle)
-        painter.setPen(QPen(QColor("#466168"), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        center_x = rect.center().x()
-        painter.drawLine(QPoint(center_x - 3, middle - 4), QPoint(center_x, middle - 7))
-        painter.drawLine(QPoint(center_x, middle - 7), QPoint(center_x + 3, middle - 4))
-        painter.drawLine(QPoint(center_x - 3, middle + 4), QPoint(center_x, middle + 7))
-        painter.drawLine(QPoint(center_x, middle + 7), QPoint(center_x + 3, middle + 4))
-        painter.end()
+    def wheelEvent(self, event) -> None:
+        event.ignore()
 
 
 class DirectionInputPanel(QGroupBox):
@@ -64,7 +31,7 @@ class DirectionInputPanel(QGroupBox):
                  parent: QWidget | None = None):
         super().__init__(title, parent)
         self.setObjectName("directionCard")
-        self.section = StyledComboBox()
+        self.section = QComboBox()
         self.section.setObjectName("sectionCombo")
         self.section.addItems(SECTIONS)
         self.height = self._spin(70.0)
@@ -103,7 +70,7 @@ class DirectionInputPanel(QGroupBox):
 
     @staticmethod
     def _spin(value: float) -> QDoubleSpinBox:
-        widget = StyledDoubleSpinBox()
+        widget = NoWheelDoubleSpinBox()
         widget.setDecimals(3)
         widget.setRange(0.0, 1_000_000.0)
         widget.setValue(value)
@@ -121,7 +88,7 @@ class DirectionInputPanel(QGroupBox):
             self.width.setValue(dimensions[1])
         self.changed.emit()
 
-    def values(self) -> DirectionInput:
+    def values(self, round_pallet_size: bool = False) -> DirectionInput:
         raw = self.distances.text().strip().replace(",", ".")
         if not raw:
             raise CalculationError("Заполните расстояния между центрами соседних опор.")
@@ -133,6 +100,7 @@ class DirectionInputPanel(QGroupBox):
             beam_height=self.height.value(), beam_width=self.width.value(), support_distances=distances,
             first_edge_to_support=self.first.value(), last_support_to_edge=self.last.value(),
             margin_start=self.margin_start.value(), margin_end=self.margin_end.value(),
+            round_pallet_size=round_pallet_size,
         )
 
     def reset_example(self, distances: str, first: float, last: float) -> None:
