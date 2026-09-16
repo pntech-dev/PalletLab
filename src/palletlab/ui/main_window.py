@@ -10,7 +10,6 @@ from palletlab.core.calculator import build_pallet, calculate_direction
 from palletlab.core.validation import CalculationError
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
-from palletlab.ui.results_panel import ResultsPanel
 from palletlab.visualization.pallet_view import PalletView
 
 
@@ -41,7 +40,6 @@ class MainWindow(QMainWindow):
         self.camera_combo.addItem("Сверху", "top")
         self.camera_combo.addItem("Спереди", "front")
         self.camera_combo.addItem("Сбоку", "side")
-        self.results = ResultsPanel()
         self._build_ui()
         self._set_stale(False)
         self.calculate()
@@ -104,6 +102,7 @@ class MainWindow(QMainWindow):
         calculate_button.setMinimumHeight(42)
         reset_button = QPushButton("Сбросить пример")
         reset_button.clicked.connect(self.reset_example)
+        reset_button.setMinimumHeight(42)
         buttons.addWidget(calculate_button, 1)
         buttons.addWidget(reset_button)
         action_layout.addLayout(buttons)
@@ -143,14 +142,6 @@ class MainWindow(QMainWindow):
         splitter.addWidget(viewport)
         splitter.setSizes([420, 980])
         root_layout.addWidget(splitter, 1)
-        result_frame = QFrame()
-        result_frame.setObjectName("resultsFrame")
-        result_layout = QVBoxLayout(result_frame)
-        result_layout.setContentsMargins(16, 14, 16, 14)
-        result_layout.setSpacing(8)
-        result_layout.addWidget(QLabel("Результаты расчёта"))
-        result_layout.addWidget(self.results)
-        root_layout.addWidget(result_frame, 0)
         self.setCentralWidget(root)
         self.length_panel.changed.connect(lambda: self._set_stale(True))
         self.width_panel.changed.connect(lambda: self._set_stale(True))
@@ -232,7 +223,6 @@ class MainWindow(QMainWindow):
         """
 
     def _set_stale(self, stale: bool) -> None:
-        self.results.set_stale(stale)
         if stale:
             self.status_badge.setText("Требуется пересчёт")
             self.status_badge.setStyleSheet("background: #f8ead9; color: #8a5525;")
@@ -272,7 +262,6 @@ class MainWindow(QMainWindow):
             self._set_stale(True)
             QMessageBox.warning(self, "Невозможная геометрия", str(exc))
             return
-        self.results.show_result(result)
         self._last_result = result
         self._refresh_dimension_annotations()
         self._set_stale(False)
