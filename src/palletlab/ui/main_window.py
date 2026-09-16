@@ -22,7 +22,7 @@ class MainWindow(QMainWindow):
         self.resize(min(1400, int(screen.width() * 0.92)), min(900, int(screen.height() * 0.90)))
         self.setMinimumSize(900, 650)
         self.length_panel = DirectionInputPanel("01  Длина", "Центры опор задаются по оси X. Эти координаты определяют поперечные брусья.", "1070 460 1300 499", "123", "552")
-        self.width_panel = DirectionInputPanel("02  Ширина", "Центры опор задаются по оси Y. Эти координаты определяют продольные брусья.", "560 720", "277.55", "179")
+        self.width_panel = DirectionInputPanel("02  Ширина", "Центры опор задаются по оси Y. Эти координаты определяют продольные брусья.", "560 720", "277", "179")
         self.width_upper = QPushButton("Вдоль ширины")
         self.length_upper = QPushButton("Вдоль длины")
         self.layer_buttons = QButtonGroup(self)
@@ -283,7 +283,7 @@ class MainWindow(QMainWindow):
 
     def reset_example(self) -> None:
         self.length_panel.reset_example("1070 460 1300 499", 123, 552)
-        self.width_panel.reset_example("560 720", 277.55, 179)
+        self.width_panel.reset_example("560 720", 277, 179)
         self.width_upper.setChecked(True)
         self.calculate()
 
