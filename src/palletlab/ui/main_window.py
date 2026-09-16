@@ -17,7 +17,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("PalletLab — расчёт поддонов")
-        self.resize(1400, 900)
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.resize(min(1400, int(screen.width() * 0.92)), min(900, int(screen.height() * 0.90)))
+        self.setMinimumSize(900, 650)
         self.length_panel = DirectionInputPanel("01  Длина", "Центры опор задаются по оси X. Эти координаты определяют поперечные брусья.", "1070 460 1300 499", "123", "552")
         self.width_panel = DirectionInputPanel("02  Ширина", "Центры опор задаются по оси Y. Эти координаты определяют продольные брусья.", "560 720", "277.55", "179")
         self.width_upper = QPushButton("Вдоль ширины")
@@ -104,7 +106,7 @@ class MainWindow(QMainWindow):
             ("Сверху", self.view.camera_top),
             ("Спереди", self.view.camera_front),
             ("Сбоку", self.view.camera_side),
-            ("Вписать модель", self.view.reset_camera),
+            ("Вписать модель", self.view.camera_fit),
         ):
             button = QPushButton(label)
             button.setObjectName("cameraButton")
@@ -169,6 +171,14 @@ class MainWindow(QMainWindow):
             }
             QLineEdit:focus, QDoubleSpinBox:focus, QComboBox:focus { border: 2px solid #4b7a76; }
             QDoubleSpinBox:disabled { background: #f1eee8; color: #81837e; }
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+                width: 20px; background: #f6f3ed; border-left: 1px solid #d8d3c8;
+            }
+            QDoubleSpinBox::up-button { subcontrol-origin: border; subcontrol-position: top right; border-top-right-radius: 6px; border-bottom: 1px solid #d8d3c8; }
+            QDoubleSpinBox::down-button { subcontrol-origin: border; subcontrol-position: bottom right; border-bottom-right-radius: 6px; }
+            QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: #e9e5dc; }
+            QDoubleSpinBox::up-arrow { image: none; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 5px solid #466168; }
+            QDoubleSpinBox::down-arrow { image: none; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #466168; }
             QPushButton { background: #fffdf9; border: 1px solid #d8d3c8; border-radius: 7px; padding: 8px 11px; color: #33464a; }
             QPushButton:hover { background: #f0ece3; border-color: #bcb5a7; }
             QPushButton:checked { background: #dfece9; border: 2px solid #4b7a76; color: #1f5c58; font-weight: 650; }
@@ -179,6 +189,11 @@ class MainWindow(QMainWindow):
             QLabel#resultSummary { color: #203b40; font-size: 18px; font-weight: 650; }
             QLabel#resultNote { color: #55706a; font-size: 12px; }
             QScrollArea { border: none; background: transparent; }
+            QScrollBar:vertical { background: transparent; width: 10px; margin: 4px 0; }
+            QScrollBar::handle:vertical { background: #b8b6ae; border-radius: 5px; min-height: 28px; }
+            QScrollBar::handle:vertical:hover { background: #8d918d; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
             QSplitter::handle { background: #e5dfd4; width: 1px; }
         """
 
@@ -221,6 +236,12 @@ class MainWindow(QMainWindow):
 
 
 def run() -> int:
+    # These must be set before QApplication exists so Qt uses logical pixels on
+    # Windows 125%, 150% and mixed-DPI monitor configurations.
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    if hasattr(Qt, "HighDpiScaleFactorRoundingPolicy"):
+        QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("PalletLab")
     window = MainWindow()

@@ -47,3 +47,7 @@ class PalletView(QtInteractor):
     def camera_side(self) -> None:
         self.view_yz()
         self.reset_camera()
+
+    def camera_fit(self) -> None:
+        """Fit the camera without forwarding Qt's clicked(bool) argument."""
+        self.reset_camera(render=True)
