@@ -5,6 +5,7 @@ import pytest
 from palletlab.core.calculator import build_pallet, calculate_direction, pallet_bounds
 from palletlab.core.models import DirectionInput
 from palletlab.core.validation import CalculationError
+from palletlab.visualization.pallet_view import PalletView
 
 
 WIDTH_EXAMPLE = DirectionInput(70, 50, (560, 720), 277.55, 179, 100, 100)
@@ -95,3 +96,38 @@ def test_pallet_geometry_matches_calculated_dimensions_and_layer_switch():
     # Upper-layer toggle must really move the corresponding physical beams.
     assert [b.z for b in width_upper.beams_3d if b.orientation == "length"][0] == pytest.approx(105)
     assert [b.z for b in length_upper.beams_3d if b.orientation == "length"][0] == pytest.approx(35)
+
+
+class _DimensionRecorder:
+    """Minimal non-Qt receiver for testing the coordinates passed to PyVista."""
+
+    _display_y = staticmethod(PalletView._display_y)
+
+    def __init__(self):
+        self.segments = []
+        self.labels = []
+
+    def _add_dimension_segment(self, start, end, name):
+        self.segments.append((start, end, name))
+
+    def _add_t_end(self, point, perpendicular, size, name):
+        pass
+
+    def add_point_labels(self, points, labels, **kwargs):
+        self.labels = list(zip(points, labels))
+
+
+def test_view_dimensions_are_cumulative_from_the_first_beam_outer_face():
+    length = calculate_direction(LENGTH_EXAMPLE)
+    width = calculate_direction(WIDTH_EXAMPLE)
+    result = build_pallet(length, width)
+    recorder = _DimensionRecorder()
+
+    PalletView._add_length_gap_dimensions(recorder, result)
+
+    dimension_segments = [segment for segment in recorder.segments if segment[2].startswith("length-dimension-")]
+    assert len(dimension_segments) == len(length.beam_centers) - 1
+    assert dimension_segments[0][0][0] == pytest.approx(0)
+    assert dimension_segments[0][1][0] == pytest.approx(length.beam_centers[1] + length.beam_width / 2)
+    assert recorder.labels[0][1] == f"{length.beam_centers[1] + length.beam_width / 2:g} mm"
+    assert recorder.labels[-1][1] == f"{length.pallet_size:g} mm"

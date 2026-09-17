@@ -60,45 +60,53 @@ class PalletView(QtInteractor):
         self._add_dimension_segment(start, end, name)
 
     def _add_length_gap_dimensions(self, result: PalletResult) -> None:
-        """Place clear-gap labels along X without visual rails outside the model."""
+        """Place cumulative X dimensions from the first beam's outer face."""
         direction = result.length_result
         offset = max(50.0, result.pallet_width * 0.055)
         tick = max(14.0, offset * 0.18)
-        y, z = -offset, result.pallet_height + 2
+        base = direction.beam_centers[0] - direction.beam_width / 2
+        model_edge_y, z = 0.0, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
-        for index, gap in enumerate(direction.gaps):
-            start = direction.beam_centers[index] + direction.beam_width / 2
-            end = direction.beam_centers[index + 1] - direction.beam_width / 2
-            display_y = self._display_y(result, y)
-            self._add_dimension_segment((start, display_y, z), (end, display_y, z), f"length-gap-{index}")
-            self._add_t_end((start, display_y, z), "y", tick, f"length-start-tick-{index}")
+        for index, center in enumerate(direction.beam_centers[1:], start=1):
+            end = center + direction.beam_width / 2
+            display_y = self._display_y(result, -offset * index)
+            display_model_y = self._display_y(result, model_edge_y)
+            self._add_dimension_segment((base, display_y, z), (end, display_y, z), f"length-dimension-{index}")
+            self._add_dimension_segment((base, display_model_y, z), (base, display_y, z), f"length-base-extension-{index}")
+            self._add_dimension_segment((end, display_model_y, z), (end, display_y, z), f"length-end-extension-{index}")
+            self._add_t_end((base, display_y, z), "y", tick, f"length-start-tick-{index}")
             self._add_t_end((end, display_y, z), "y", tick, f"length-end-tick-{index}")
-            points.append(((start + end) / 2, display_y, z))
-            labels.append(f"{format_mm(gap)} mm")
-        self.add_point_labels(points, labels, name="length-gap-labels", point_size=0, font_size=12,
+            points.append(((base + end) / 2, display_y, z))
+            labels.append(f"{format_mm(end - base)} mm")
+        self.add_point_labels(points, labels, name="length-dimension-labels", point_size=0, font_size=12,
                               text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
                               fill_shape=True, always_visible=True)
 
     def _add_width_gap_dimensions(self, result: PalletResult) -> None:
-        """Place clear-gap labels along Y without visual rails outside the model."""
+        """Place cumulative Y dimensions from the first beam's outer face."""
         direction = result.width_result
         offset = max(50.0, result.pallet_length * 0.035)
         tick = max(14.0, offset * 0.18)
-        x, z = -offset, result.pallet_height + 2
+        base = direction.beam_centers[0] - direction.beam_width / 2
+        model_edge_x, z = 0.0, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
-        for index, gap in enumerate(direction.gaps):
-            start = direction.beam_centers[index] + direction.beam_width / 2
-            end = direction.beam_centers[index + 1] - direction.beam_width / 2
-            display_start = self._display_y(result, start)
+        for index, center in enumerate(direction.beam_centers[1:], start=1):
+            end = center + direction.beam_width / 2
+            x = -offset * index
+            display_start = self._display_y(result, base)
             display_end = self._display_y(result, end)
-            self._add_dimension_segment((x, display_start, z), (x, display_end, z), f"width-gap-{index}")
+            self._add_dimension_segment((x, display_start, z), (x, display_end, z), f"width-dimension-{index}")
+            self._add_dimension_segment((model_edge_x, display_start, z), (x, display_start, z),
+                                        f"width-base-extension-{index}")
+            self._add_dimension_segment((model_edge_x, display_end, z), (x, display_end, z),
+                                        f"width-end-extension-{index}")
             self._add_t_end((x, display_start, z), "x", tick, f"width-start-tick-{index}")
             self._add_t_end((x, display_end, z), "x", tick, f"width-end-tick-{index}")
-            points.append((x, self._display_y(result, (start + end) / 2), z))
-            labels.append(f"{format_mm(gap)} mm")
-        self.add_point_labels(points, labels, name="width-gap-labels", point_size=0, font_size=12,
+            points.append((x, self._display_y(result, (base + end) / 2), z))
+            labels.append(f"{format_mm(end - base)} mm")
+        self.add_point_labels(points, labels, name="width-dimension-labels", point_size=0, font_size=12,
                               text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
                               fill_shape=True, always_visible=True)
 
