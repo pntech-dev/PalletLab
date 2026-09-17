@@ -128,6 +128,8 @@ def test_view_dimensions_are_cumulative_from_the_first_beam_outer_face():
     dimension_segments = [segment for segment in recorder.segments if segment[2].startswith("length-dimension-")]
     assert len(dimension_segments) == len(length.beam_centers) - 1
     assert dimension_segments[0][0][0] == pytest.approx(0)
-    assert dimension_segments[0][1][0] == pytest.approx(length.beam_centers[1] + length.beam_width / 2)
-    assert recorder.labels[0][1] == f"{length.beam_centers[1] + length.beam_width / 2:g} mm"
+    for index, segment in enumerate(dimension_segments[:-1], start=1):
+        assert segment[1][0] == pytest.approx(length.beam_centers[index] - length.beam_width / 2)
+    assert recorder.labels[0][1] == f"{length.beam_centers[1] - length.beam_width / 2:g} mm"
+    assert dimension_segments[-1][1][0] == pytest.approx(length.pallet_size)
     assert recorder.labels[-1][1] == f"{length.pallet_size:g} mm"

@@ -60,7 +60,7 @@ class PalletView(QtInteractor):
         self._add_dimension_segment(start, end, name)
 
     def _add_length_gap_dimensions(self, result: PalletResult) -> None:
-        """Place cumulative X dimensions from the first beam's outer face."""
+        """Place stepped X dimensions: inner faces, then the final outer face."""
         direction = result.length_result
         offset = max(50.0, result.pallet_width * 0.055)
         tick = max(14.0, offset * 0.18)
@@ -69,7 +69,8 @@ class PalletView(QtInteractor):
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
         for index, center in enumerate(direction.beam_centers[1:], start=1):
-            end = center + direction.beam_width / 2
+            is_last_beam = index == len(direction.beam_centers) - 1
+            end = center + direction.beam_width / 2 if is_last_beam else center - direction.beam_width / 2
             display_y = self._display_y(result, -offset * index)
             display_model_y = self._display_y(result, model_edge_y)
             self._add_dimension_segment((base, display_y, z), (end, display_y, z), f"length-dimension-{index}")
@@ -84,7 +85,7 @@ class PalletView(QtInteractor):
                               fill_shape=True, always_visible=True)
 
     def _add_width_gap_dimensions(self, result: PalletResult) -> None:
-        """Place cumulative Y dimensions from the first beam's outer face."""
+        """Place stepped Y dimensions: inner faces, then the final outer face."""
         direction = result.width_result
         offset = max(50.0, result.pallet_length * 0.035)
         tick = max(14.0, offset * 0.18)
@@ -93,7 +94,8 @@ class PalletView(QtInteractor):
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
         for index, center in enumerate(direction.beam_centers[1:], start=1):
-            end = center + direction.beam_width / 2
+            is_last_beam = index == len(direction.beam_centers) - 1
+            end = center + direction.beam_width / 2 if is_last_beam else center - direction.beam_width / 2
             x = -offset * index
             display_start = self._display_y(result, base)
             display_end = self._display_y(result, end)
