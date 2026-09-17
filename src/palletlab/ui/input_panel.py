@@ -104,6 +104,14 @@ class DirectionInputPanel(QGroupBox):
             rounding_step=rounding_step,
         )
 
+    def apply_position_data(self, data: DirectionInput) -> None:
+        """Update only the position fields after an interactive 3D insertion."""
+        self.distances.setText(" ".join(f"{value:g}" for value in data.support_distances))
+        self.first.setValue(data.first_edge_to_support)
+        self.last.setValue(data.last_support_to_edge)
+        self.margin_start.setValue(data.margin_start)
+        self.margin_end.setValue(data.margin_end)
+
     def reset_example(self, distances: str, first: float, last: float) -> None:
         self.section.setCurrentText("70 × 50 мм")
         self.distances.setText(distances)

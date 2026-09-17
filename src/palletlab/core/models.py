@@ -7,6 +7,7 @@ from typing import Literal
 
 
 LayerDirection = Literal["length", "width"]
+PalletAxis = Literal["length", "width"]
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,16 @@ class DirectionResult:
     @property
     def beam_count(self) -> int:
         return len(self.beam_centers)
+
+
+@dataclass(frozen=True)
+class InsertionSlot:
+    """A valid place to insert a same-section beam after an existing beam."""
+
+    axis: PalletAxis
+    after_beam_index: int
+    maximum_clear_gap: float
+    suggested_clear_gap: float
 
 
 @dataclass(frozen=True)

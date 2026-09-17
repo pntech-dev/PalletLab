@@ -2,7 +2,8 @@ import math
 
 import pytest
 
-from palletlab.core.calculator import build_pallet, calculate_direction, pallet_bounds
+from palletlab.core.calculator import (build_pallet, calculate_direction, insert_beam, insert_beam_input,
+                                       insertion_slots, pallet_bounds)
 from palletlab.core.models import DirectionInput
 from palletlab.core.validation import CalculationError
 from palletlab.visualization.pallet_view import PalletView
@@ -103,6 +104,38 @@ def test_pallet_geometry_matches_calculated_dimensions_and_layer_switch():
     # Upper-layer toggle must really move the corresponding physical beams.
     assert [b.z for b in width_upper.beams_3d if b.orientation == "length"][0] == pytest.approx(105)
     assert [b.z for b in length_upper.beams_3d if b.orientation == "length"][0] == pytest.approx(35)
+
+
+def test_interactive_beam_insertion_uses_a_face_gap_and_updates_the_existing_input_model():
+    length = calculate_direction(LENGTH_EXAMPLE)
+    width = calculate_direction(WIDTH_EXAMPLE)
+    result = build_pallet(length, width)
+    slot = next(slot for slot in insertion_slots(result, "length") if slot.after_beam_index == 1)
+    clear_gap = 100
+
+    inserted = insert_beam(result, slot, clear_gap)
+    expected_center = length.beam_centers[1] + length.beam_width + clear_gap
+    assert inserted.length_result.beam_centers[2] == pytest.approx(expected_center)
+    assert inserted.length_result.beam_count == length.beam_count + 1
+    assert pallet_bounds(inserted.beams_3d) == pytest.approx((0, 4204, 0, 1936.55, 0, 140))
+
+    updated_input = insert_beam_input(LENGTH_EXAMPLE, length, slot.after_beam_index, clear_gap)
+    recalculated = calculate_direction(updated_input)
+    assert recalculated.beam_centers == pytest.approx(inserted.length_result.beam_centers)
+
+
+@pytest.mark.parametrize("after_beam_index", [0, -2])
+def test_interactive_insertion_persists_at_the_first_and_last_available_gaps(after_beam_index):
+    length = calculate_direction(LENGTH_EXAMPLE)
+    width = calculate_direction(WIDTH_EXAMPLE)
+    result = build_pallet(length, width)
+    index = len(length.beam_centers) + after_beam_index if after_beam_index < 0 else after_beam_index
+    slot = next(slot for slot in insertion_slots(result, "length") if slot.after_beam_index == index)
+
+    inserted = insert_beam(result, slot, min(20, slot.maximum_clear_gap))
+    updated_input = insert_beam_input(LENGTH_EXAMPLE, length, slot.after_beam_index, min(20, slot.maximum_clear_gap))
+
+    assert calculate_direction(updated_input).beam_centers == pytest.approx(inserted.length_result.beam_centers)
 
 
 class _DimensionRecorder:

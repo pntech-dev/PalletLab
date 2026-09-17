@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from typing import Iterable
 
-from .models import Beam3D, DirectionInput, DirectionResult, LayerDirection, PalletResult
+from .models import Beam3D, DirectionInput, DirectionResult, InsertionSlot, LayerDirection, PalletAxis, PalletResult
 from .validation import CalculationError
 
 EPSILON = 1e-7
@@ -99,6 +100,65 @@ def calculate_direction(data: DirectionInput) -> DirectionResult:
         beam_centers=tuple(centers),
         gaps=gaps,
     )
+
+
+def insertion_slots(result: PalletResult, axis: PalletAxis) -> tuple[InsertionSlot, ...]:
+    """Return gaps large enough to accept a same-section beam in *axis*."""
+    direction = result.length_result if axis == "length" else result.width_result
+    slots = []
+    for after_beam_index, gap in enumerate(direction.gaps):
+        maximum_clear_gap = gap - direction.beam_width
+        if maximum_clear_gap >= -EPSILON:
+            maximum_clear_gap = max(0.0, maximum_clear_gap)
+            slots.append(InsertionSlot(axis, after_beam_index, maximum_clear_gap, maximum_clear_gap / 2))
+    return tuple(slots)
+
+
+def inserted_beam_center(direction: DirectionResult, after_beam_index: int, clear_gap: float) -> float:
+    """Return the centre of a beam placed after an existing beam's outer face."""
+    if not 0 <= after_beam_index < len(direction.gaps):
+        raise CalculationError("Выбранное место для нового бруса больше не существует.")
+    maximum_clear_gap = direction.gaps[after_beam_index] - direction.beam_width
+    if clear_gap < -EPSILON or clear_gap > maximum_clear_gap + EPSILON:
+        raise CalculationError("Новый брус не помещается в выбранный промежуток.")
+    return direction.beam_centers[after_beam_index] + direction.beam_width + max(0.0, clear_gap)
+
+
+def insert_beam(result: PalletResult, slot: InsertionSlot, clear_gap: float) -> PalletResult:
+    """Return a new pallet with one internal same-section beam inserted."""
+    direction = result.length_result if slot.axis == "length" else result.width_result
+    center = inserted_beam_center(direction, slot.after_beam_index, clear_gap)
+    centers = list(direction.beam_centers)
+    centers.insert(slot.after_beam_index + 1, center)
+    gaps = tuple(centers[index + 1] - centers[index] - direction.beam_width for index in range(len(centers) - 1))
+    updated_direction = replace(direction, support_positions=tuple(centers[1:-1]), beam_centers=tuple(centers), gaps=gaps)
+    if slot.axis == "length":
+        return build_pallet(updated_direction, result.width_result, result.upper_layer)
+    return build_pallet(result.length_result, updated_direction, result.upper_layer)
+
+
+def insert_beam_input(
+    data: DirectionInput, direction: DirectionResult, after_beam_index: int, clear_gap: float
+) -> DirectionInput:
+    """Translate a face-gap insertion into the existing support-spacing input model."""
+    center = inserted_beam_center(direction, after_beam_index, clear_gap)
+    distances = list(data.support_distances)
+    if after_beam_index == 0:
+        distances.insert(0, direction.beam_centers[1] - center)
+        # The new first support can occupy the old pallet margin. Moving that
+        # amount into the first-edge distance keeps all beam coordinates and
+        # the total pallet size unchanged.
+        return replace(data, margin_start=0.0, first_edge_to_support=center, support_distances=tuple(distances))
+    if after_beam_index == len(direction.beam_centers) - 2:
+        final_machine_edge = direction.raw_pallet_size - data.margin_end
+        distances.append(center - direction.beam_centers[after_beam_index])
+        return replace(data, support_distances=tuple(distances), last_support_to_edge=final_machine_edge - center)
+    distance_index = after_beam_index - 1
+    next_center = direction.beam_centers[after_beam_index + 1]
+    distances[distance_index:distance_index + 1] = [
+        center - direction.beam_centers[after_beam_index], next_center - center
+    ]
+    return replace(data, support_distances=tuple(distances))
 
 
 def build_pallet(length: DirectionResult, width: DirectionResult, upper_layer: LayerDirection = "width") -> PalletResult:

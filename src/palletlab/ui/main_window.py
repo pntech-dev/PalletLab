@@ -2,16 +2,35 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
-                             QMessageBox, QPushButton, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
+                             QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
-from palletlab.core.calculator import build_pallet, calculate_direction
+from palletlab.core.calculator import (build_pallet, calculate_direction, insert_beam_input, insertion_slots)
 from palletlab.core.formatting import format_mm
+from palletlab.core.models import InsertionSlot
 from palletlab.core.validation import CalculationError
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
 from palletlab.visualization.pallet_view import PalletView
+
+
+class InsertionGapSpinBox(QDoubleSpinBox):
+    """Numeric editor whose Enter/Escape semantics match the 3D insert workflow."""
+
+    confirmed = pyqtSignal()
+    cancelled = pyqtSignal()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.confirmed.emit()
+            event.accept()
+            return
+        if event.key() == Qt.Key_Escape:
+            self.cancelled.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -36,6 +55,8 @@ class MainWindow(QMainWindow):
         self.show_length_gaps.setChecked(True)
         self.show_width_gaps.setChecked(True)
         self._last_result = None
+        self._last_inputs = {}
+        self._pending_insertion: InsertionSlot | None = None
         self.scene_info = QLabel()
         self.scene_info.setObjectName("sceneInfo")
         self.scene_info.setWordWrap(True)
@@ -144,6 +165,32 @@ class MainWindow(QMainWindow):
         view_title.setToolTip("Вращайте модель мышью, колёсиком меняйте масштаб.")
         title_block.addWidget(view_title)
         view_heading.addLayout(title_block)
+        self.add_beam_button = QPushButton("＋ Добавить брус")
+        self.add_beam_button.setObjectName("addBeamButton")
+        self.add_beam_button.setCheckable(True)
+        self.add_beam_button.setToolTip("Показать места, куда можно добавить брус.")
+        self.add_beam_button.toggled.connect(self._toggle_insertion_mode)
+        view_heading.addWidget(self.add_beam_button)
+        self.insertion_editor = QFrame()
+        self.insertion_editor.setObjectName("insertionEditor")
+        insertion_layout = QHBoxLayout(self.insertion_editor)
+        insertion_layout.setContentsMargins(8, 4, 8, 4)
+        insertion_layout.setSpacing(6)
+        insertion_layout.addWidget(QLabel("Зазор:"))
+        self.insertion_gap = InsertionGapSpinBox()
+        self.insertion_gap.setRange(0, 1_000_000)
+        self.insertion_gap.setDecimals(2)
+        self.insertion_gap.setSuffix(" мм")
+        self.insertion_gap.setMinimumWidth(106)
+        self.insertion_gap.valueChanged.connect(self._update_insertion_preview)
+        self.insertion_gap.confirmed.connect(self._confirm_insertion)
+        self.insertion_gap.cancelled.connect(self._cancel_pending_insertion)
+        insertion_layout.addWidget(self.insertion_gap)
+        self.insertion_hint = QLabel("Enter — добавить · Esc — отменить")
+        self.insertion_hint.setObjectName("insertionHint")
+        insertion_layout.addWidget(self.insertion_hint)
+        self.insertion_editor.setVisible(False)
+        view_heading.addWidget(self.insertion_editor)
         view_heading.addStretch()
         unit_label = QLabel("мм")
         unit_label.setObjectName("paneHint")
@@ -171,6 +218,8 @@ class MainWindow(QMainWindow):
         self.show_length_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.show_width_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.setStyleSheet(self._stylesheet())
+        self.add_beam_button.installEventFilter(self)
+        self.view.installEventFilter(self)
 
     def _header(self) -> QFrame:
         header = QFrame()
@@ -235,6 +284,11 @@ class MainWindow(QMainWindow):
             QPushButton:checked { background: #dfece9; border: 2px solid #4b7a76; color: #1f5c58; font-weight: 650; }
             QPushButton#calculateButton { background: #255e64; border: 1px solid #255e64; color: #ffffff; font-weight: 650; }
             QPushButton#calculateButton:hover { background: #1e4e53; }
+            QPushButton#addBeamButton { border-color: #4b7a76; color: #1f5c58; font-weight: 650; }
+            QPushButton#addBeamButton:hover { background: #e7f0ed; }
+            QPushButton#addBeamButton:checked { background: #255e64; border-color: #255e64; color: #fff; }
+            QFrame#insertionEditor { background: #e7f0ed; border: 1px solid #b9d4cd; border-radius: 7px; }
+            QLabel#insertionHint { color: #55706a; font-size: 11px; }
             QComboBox#cameraCombo { min-width: 115px; }
             QPushButton#cameraButton { padding: 6px 12px; font-size: 12px; }
             QTextBrowser#resultCard { background: #f9f7f1; border: 1px solid #ece6dc; border-radius: 9px; padding: 4px 10px; }
@@ -281,6 +335,82 @@ class MainWindow(QMainWindow):
                 show_width_gaps=self.show_width_gaps.isChecked(),
             )
 
+    def _toggle_insertion_mode(self, enabled: bool) -> None:
+        if not enabled:
+            self._cancel_pending_insertion()
+            self.view.disable_insertion_mode()
+            return
+        if self._last_result is None:
+            self.add_beam_button.setChecked(False)
+            return
+        slots = insertion_slots(self._last_result, "length") + insertion_slots(self._last_result, "width")
+        if not slots:
+            self.statusBar().showMessage("Нет промежутков, в которые помещается ещё один брус.")
+            self.add_beam_button.setChecked(False)
+            return
+        self.view.enable_insertion_mode(self._last_result, slots, self._start_insertion)
+        self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
+
+    def _start_insertion(self, slot: InsertionSlot) -> None:
+        if self._last_result is None:
+            return
+        self._pending_insertion = slot
+        self.insertion_gap.blockSignals(True)
+        self.insertion_gap.setRange(0, slot.maximum_clear_gap)
+        self.insertion_gap.setValue(slot.suggested_clear_gap)
+        self.insertion_gap.blockSignals(False)
+        self.insertion_editor.setVisible(True)
+        self._update_insertion_preview()
+        self.insertion_gap.setFocus()
+        self.insertion_gap.selectAll()
+
+    def _update_insertion_preview(self) -> None:
+        if self._pending_insertion is None or self._last_result is None:
+            return
+        try:
+            self.view.show_insertion_preview(self._last_result, self._pending_insertion, self.insertion_gap.value())
+        except CalculationError:
+            self.view.clear_insertion_preview()
+
+    def _cancel_pending_insertion(self) -> None:
+        self._pending_insertion = None
+        self.insertion_editor.setVisible(False)
+        self.view.clear_insertion_preview()
+        if self.add_beam_button.isChecked():
+            self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
+        self.add_beam_button.setFocus()
+
+    def _confirm_insertion(self) -> None:
+        if self._pending_insertion is None or self._last_result is None:
+            return
+        slot = self._pending_insertion
+        data = self._last_inputs[slot.axis]
+        direction = self._last_result.length_result if slot.axis == "length" else self._last_result.width_result
+        try:
+            updated_input = insert_beam_input(data, direction, slot.after_beam_index, self.insertion_gap.value())
+        except CalculationError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+        panel = self.length_panel if slot.axis == "length" else self.width_panel
+        panel.apply_position_data(updated_input)
+        self._pending_insertion = None
+        self.insertion_editor.setVisible(False)
+        self.calculate()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape and self.add_beam_button.isChecked():
+            self.add_beam_button.setChecked(False)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def eventFilter(self, watched, event) -> bool:
+        if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
+                and self.add_beam_button.isChecked() and self._pending_insertion is None):
+            self.add_beam_button.setChecked(False)
+            return True
+        return super().eventFilter(watched, event)
+
     def _update_scene_info(self, result) -> None:
         self.scene_info.setText(
             f"Габариты поддона: длина {format_mm(result.pallet_length)} мм · "
@@ -292,16 +422,21 @@ class MainWindow(QMainWindow):
     def calculate(self) -> None:
         try:
             rounding_step = self.rounding_buttons.checkedId()
-            length = calculate_direction(self.length_panel.values(rounding_step != 0, rounding_step or 5))
-            width = calculate_direction(self.width_panel.values(rounding_step != 0, rounding_step or 5))
+            length_input = self.length_panel.values(rounding_step != 0, rounding_step or 5)
+            width_input = self.width_panel.values(rounding_step != 0, rounding_step or 5)
+            length = calculate_direction(length_input)
+            width = calculate_direction(width_input)
             result = build_pallet(length, width, self.upper_layer())
         except CalculationError as exc:
             self._set_stale(True)
             QMessageBox.warning(self, "Невозможная геометрия", str(exc))
             return
         self._last_result = result
+        self._last_inputs = {"length": length_input, "width": width_input}
         self._update_scene_info(result)
         self._refresh_dimension_annotations()
+        if self.add_beam_button.isChecked():
+            self._toggle_insertion_mode(True)
         self._set_stale(False)
 
     def reset_example(self) -> None:
