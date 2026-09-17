@@ -109,8 +109,12 @@ class MainWindow(QMainWindow):
         self.rounding_buttons.addButton(self.round_to_5, 5)
         self.rounding_buttons.addButton(self.no_rounding, 0)
         self.round_to_5.setChecked(True)
+        rounding_choices = QHBoxLayout()
+        rounding_choices.setSpacing(12)
         for button in (self.round_to_50, self.round_to_5, self.no_rounding):
-            action_layout.addWidget(button)
+            rounding_choices.addWidget(button)
+        rounding_choices.addStretch()
+        action_layout.addLayout(rounding_choices)
         buttons = QHBoxLayout()
         calculate_button = QPushButton("Рассчитать и построить")
         calculate_button.setObjectName("calculateButton")
@@ -222,9 +226,10 @@ class MainWindow(QMainWindow):
             QCheckBox::indicator:checked { background: #255e64; border-color: #255e64; image: url(:/icons/check.svg); }
             QLabel#roundingTitle { color: #203b40; font-weight: 650; }
             QRadioButton { spacing: 8px; color: #33464a; }
-            QRadioButton::indicator { width: 16px; height: 16px; border: 1px solid #bdb7ac; border-radius: 8px; background: #fff; }
+            QRadioButton::indicator { width: 18px; height: 18px; border: none; image: none; }
             QRadioButton::indicator:hover { border-color: #4b7a76; }
-            QRadioButton::indicator:checked { border: 5px solid #255e64; }
+            QRadioButton::indicator:unchecked { image: url(:/icons/radio-unchecked.svg); }
+            QRadioButton::indicator:checked { image: url(:/icons/radio-checked.svg); }
             QPushButton { background: #fffdf9; border: 1px solid #d8d3c8; border-radius: 7px; padding: 8px 11px; color: #33464a; }
             QPushButton:hover { background: #f0ece3; border-color: #bcb5a7; }
             QPushButton:checked { background: #dfece9; border: 2px solid #4b7a76; color: #1f5c58; font-weight: 650; }

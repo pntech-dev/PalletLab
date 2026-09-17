@@ -3,5 +3,7 @@
     <file alias="chevron-down.svg">assets/chevron-down.svg</file>
     <file alias="chevron-up.svg">assets/chevron-up.svg</file>
     <file alias="check.svg">assets/check.svg</file>
+    <file alias="radio-checked.svg">assets/radio-checked.svg</file>
+    <file alias="radio-unchecked.svg">assets/radio-unchecked.svg</file>
   </qresource>
 </RCC>
