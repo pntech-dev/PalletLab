@@ -88,7 +88,7 @@ class DirectionInputPanel(QGroupBox):
             self.width.setValue(dimensions[1])
         self.changed.emit()
 
-    def values(self, round_pallet_size: bool = False) -> DirectionInput:
+    def values(self, round_pallet_size: bool = False, rounding_step: int = 5) -> DirectionInput:
         raw = self.distances.text().strip().replace(",", ".")
         if not raw:
             raise CalculationError("Заполните расстояния между центрами соседних опор.")
@@ -101,6 +101,7 @@ class DirectionInputPanel(QGroupBox):
             first_edge_to_support=self.first.value(), last_support_to_edge=self.last.value(),
             margin_start=self.margin_start.value(), margin_end=self.margin_end.value(),
             round_pallet_size=round_pallet_size,
+            rounding_step=rounding_step,
         )
 
     def reset_example(self, distances: str, first: float, last: float) -> None:

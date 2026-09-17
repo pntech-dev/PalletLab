@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
-                             QMessageBox, QPushButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
+                             QMessageBox, QPushButton, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.core.calculator import build_pallet, calculate_direction
 from palletlab.core.formatting import format_mm
@@ -95,10 +95,22 @@ class MainWindow(QMainWindow):
         action_panel.setObjectName("actionPanel")
         action_layout = QVBoxLayout(action_panel)
         action_layout.setContentsMargins(14, 12, 14, 12)
-        self.rounding_checkbox = QCheckBox("Округлять габарит поддона до 5 мм")
-        self.rounding_checkbox.setChecked(True)
-        self.rounding_checkbox.setToolTip("При выключении используются точные расчётные размеры.")
-        action_layout.addWidget(self.rounding_checkbox)
+        rounding_title = QLabel("Округление габарита поддона")
+        rounding_title.setObjectName("roundingTitle")
+        action_layout.addWidget(rounding_title)
+        self.round_to_50 = QRadioButton("До 50 мм")
+        self.round_to_50.setToolTip("Остаток меньше 10 мм отбрасывается, иначе размер увеличивается до следующего 50 мм.")
+        self.round_to_5 = QRadioButton("До 5 мм")
+        self.round_to_5.setToolTip("Сохраняет текущее правило: размер увеличивается до следующего 5 мм.")
+        self.no_rounding = QRadioButton("Не округлять")
+        self.no_rounding.setToolTip("Использовать точный расчётный габарит.")
+        self.rounding_buttons = QButtonGroup(self)
+        self.rounding_buttons.addButton(self.round_to_50, 50)
+        self.rounding_buttons.addButton(self.round_to_5, 5)
+        self.rounding_buttons.addButton(self.no_rounding, 0)
+        self.round_to_5.setChecked(True)
+        for button in (self.round_to_50, self.round_to_5, self.no_rounding):
+            action_layout.addWidget(button)
         buttons = QHBoxLayout()
         calculate_button = QPushButton("Рассчитать и построить")
         calculate_button.setObjectName("calculateButton")
@@ -151,7 +163,7 @@ class MainWindow(QMainWindow):
         self.length_panel.changed.connect(lambda: self._set_stale(True))
         self.width_panel.changed.connect(lambda: self._set_stale(True))
         self.layer_buttons.buttonClicked.connect(self._layer_changed)
-        self.rounding_checkbox.toggled.connect(lambda: self._set_stale(True))
+        self.rounding_buttons.buttonClicked.connect(lambda: self._set_stale(True))
         self.show_length_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.show_width_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.setStyleSheet(self._stylesheet())
@@ -208,6 +220,11 @@ class MainWindow(QMainWindow):
             QCheckBox::indicator { width: 18px; height: 18px; border: 1px solid #bdb7ac; border-radius: 5px; background: #fff; }
             QCheckBox::indicator:hover { border-color: #4b7a76; }
             QCheckBox::indicator:checked { background: #255e64; border-color: #255e64; image: url(:/icons/check.svg); }
+            QLabel#roundingTitle { color: #203b40; font-weight: 650; }
+            QRadioButton { spacing: 8px; color: #33464a; }
+            QRadioButton::indicator { width: 16px; height: 16px; border: 1px solid #bdb7ac; border-radius: 8px; background: #fff; }
+            QRadioButton::indicator:hover { border-color: #4b7a76; }
+            QRadioButton::indicator:checked { border: 5px solid #255e64; }
             QPushButton { background: #fffdf9; border: 1px solid #d8d3c8; border-radius: 7px; padding: 8px 11px; color: #33464a; }
             QPushButton:hover { background: #f0ece3; border-color: #bcb5a7; }
             QPushButton:checked { background: #dfece9; border: 2px solid #4b7a76; color: #1f5c58; font-weight: 650; }
@@ -269,8 +286,9 @@ class MainWindow(QMainWindow):
 
     def calculate(self) -> None:
         try:
-            length = calculate_direction(self.length_panel.values(self.rounding_checkbox.isChecked()))
-            width = calculate_direction(self.width_panel.values(self.rounding_checkbox.isChecked()))
+            rounding_step = self.rounding_buttons.checkedId()
+            length = calculate_direction(self.length_panel.values(rounding_step != 0, rounding_step or 5))
+            width = calculate_direction(self.width_panel.values(rounding_step != 0, rounding_step or 5))
             result = build_pallet(length, width, self.upper_layer())
         except CalculationError as exc:
             self._set_stale(True)

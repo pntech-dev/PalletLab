@@ -50,6 +50,13 @@ def test_rounding_fractional_dimension_uses_next_five_mm():
     assert rounded.pallet_size == 1940
 
 
+@pytest.mark.parametrize(("raw_size", "rounded_size"), [(1936, 1950), (1915, 1950), (1908, 1900)])
+def test_fifty_millimetre_rounding_follows_the_production_threshold(raw_size, rounded_size):
+    rounded = calculate_direction(DirectionInput(70, 50, (100,), raw_size - 350, 100, 100, 50, True, 50))
+    assert rounded.raw_pallet_size == raw_size
+    assert rounded.pallet_size == rounded_size
+
+
 def test_custom_section_and_asymmetric_margins_are_used():
     result = calculate_direction(DirectionInput(42.5, 80.25, (300.5,), 100.25, 50.5, 20.25, 70.75))
     assert result.machine_size == pytest.approx(451.25)

@@ -21,6 +21,7 @@ class DirectionInput:
     margin_start: float
     margin_end: float
     round_pallet_size: bool = False
+    rounding_step: Literal[5, 50] = 5
 
 
 @dataclass(frozen=True)

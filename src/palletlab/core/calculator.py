@@ -16,6 +16,19 @@ def round_up_to_five(value: float) -> float:
     return math.ceil(value / 5 - EPSILON) * 5
 
 
+def round_to_fifty(value: float) -> float:
+    """Round to 50 mm, dropping only a remainder smaller than 10 mm.
+
+    This follows the production convention: 1908 -> 1900, while 1915 and
+    1936 both become 1950.
+    """
+    lower = math.floor(value / 50) * 50
+    remainder = value - lower
+    if math.isclose(remainder, 0, abs_tol=EPSILON) or remainder < 10:
+        return lower
+    return lower + 50
+
+
 def _validate_measurements(values: Iterable[tuple[str, float]], *, allow_empty: bool = False) -> None:
     for name, value in values:
         if not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -50,7 +63,10 @@ def calculate_direction(data: DirectionInput) -> DirectionResult:
 
     machine_size = data.first_edge_to_support + sum(data.support_distances) + data.last_support_to_edge
     raw_pallet_size = data.margin_start + machine_size + data.margin_end
-    pallet_size = round_up_to_five(raw_pallet_size) if data.round_pallet_size else raw_pallet_size
+    if data.round_pallet_size:
+        pallet_size = round_to_fifty(raw_pallet_size) if data.rounding_step == 50 else round_up_to_five(raw_pallet_size)
+    else:
+        pallet_size = raw_pallet_size
     support_positions = [data.margin_start + data.first_edge_to_support]
     for distance in data.support_distances:
         support_positions.append(support_positions[-1] + distance)
