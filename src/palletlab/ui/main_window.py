@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, Q
                              QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.core.calculator import (build_pallet, calculate_direction, delete_beams_input, insert_beam_input,
-                                       insertion_slots)
+                                       insertion_slots, set_beam_face_distance_input)
 from palletlab.core.formatting import format_mm
 from palletlab.core.models import InsertionSlot, PalletAxis
 from palletlab.core.validation import CalculationError
@@ -51,22 +51,23 @@ class MainWindow(QMainWindow):
             self.layer_buttons.addButton(button)
         self.width_upper.setChecked(True)
         self.view = PalletView(self)
-        self.show_length_gaps = QCheckBox("Зазоры X")
-        self.show_width_gaps = QCheckBox("Зазоры Y")
+        self.show_length_gaps = QCheckBox("Расстояния по длине")
+        self.show_width_gaps = QCheckBox("Расстояния по ширине")
         self.show_length_gaps.setChecked(True)
         self.show_width_gaps.setChecked(True)
         self._last_result = None
         self._last_inputs = {}
         self._pending_insertion: InsertionSlot | None = None
+        self._pending_distance: tuple[PalletAxis, int] | None = None
         self._selected_for_deletion: dict[PalletAxis, set[int]] = {"length": set(), "width": set()}
         self.scene_info = QLabel()
         self.scene_info.setObjectName("sceneInfo")
         self.scene_info.setWordWrap(True)
         self.camera_combo = QComboBox()
-        self.camera_combo.addItem("Изометрия", "isometric")
         self.camera_combo.addItem("Сверху", "top")
         self.camera_combo.addItem("Спереди", "front")
         self.camera_combo.addItem("Сбоку", "side")
+        self.camera_combo.addItem("Изометрия", "isometric")
         self._build_ui()
         self._set_stale(False)
         self.calculate()
@@ -131,7 +132,7 @@ class MainWindow(QMainWindow):
         self.rounding_buttons.addButton(self.round_to_50, 50)
         self.rounding_buttons.addButton(self.round_to_5, 5)
         self.rounding_buttons.addButton(self.no_rounding, 0)
-        self.round_to_5.setChecked(True)
+        self.round_to_50.setChecked(True)
         rounding_choices = QHBoxLayout()
         rounding_choices.setSpacing(12)
         for button in (self.round_to_50, self.round_to_5, self.no_rounding):
@@ -179,6 +180,12 @@ class MainWindow(QMainWindow):
         self.delete_beam_button.setToolTip("Выбрать один или несколько внутренних брусьев для удаления.")
         self.delete_beam_button.toggled.connect(self._toggle_deletion_mode)
         view_heading.addWidget(self.delete_beam_button)
+        self.edit_distance_button = QPushButton("↔ Изменить расстояние")
+        self.edit_distance_button.setObjectName("editDistanceButton")
+        self.edit_distance_button.setCheckable(True)
+        self.edit_distance_button.setToolTip("Выбрать размерную линию и изменить расстояние либо общий габарит.")
+        self.edit_distance_button.toggled.connect(self._toggle_distance_editing)
+        view_heading.addWidget(self.edit_distance_button)
         self.insertion_editor = QFrame()
         self.insertion_editor.setObjectName("insertionEditor")
         insertion_layout = QHBoxLayout(self.insertion_editor)
@@ -213,10 +220,26 @@ class MainWindow(QMainWindow):
         deletion_layout.addWidget(self.confirm_deletion_button)
         self.deletion_editor.setVisible(False)
         view_heading.addWidget(self.deletion_editor)
+        self.distance_editor = QFrame()
+        self.distance_editor.setObjectName("distanceEditor")
+        distance_layout = QHBoxLayout(self.distance_editor)
+        distance_layout.setContentsMargins(8, 4, 8, 4)
+        distance_layout.setSpacing(6)
+        distance_layout.addWidget(QLabel("Новое расстояние:"))
+        self.distance_value = InsertionGapSpinBox()
+        self.distance_value.setRange(0, 1_000_000)
+        self.distance_value.setDecimals(2)
+        self.distance_value.setSuffix(" мм")
+        self.distance_value.setMinimumWidth(120)
+        self.distance_value.confirmed.connect(self._confirm_distance_edit)
+        self.distance_value.cancelled.connect(self._cancel_pending_distance_edit)
+        distance_layout.addWidget(self.distance_value)
+        self.distance_hint = QLabel("Enter — применить · Esc — отменить")
+        self.distance_hint.setObjectName("distanceHint")
+        distance_layout.addWidget(self.distance_hint)
+        self.distance_editor.setVisible(False)
+        view_heading.addWidget(self.distance_editor)
         view_heading.addStretch()
-        unit_label = QLabel("мм")
-        unit_label.setObjectName("paneHint")
-        view_heading.addWidget(unit_label)
         view_heading.addWidget(self.show_length_gaps)
         view_heading.addWidget(self.show_width_gaps)
         self.camera_combo.setObjectName("cameraCombo")
@@ -242,6 +265,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(self._stylesheet())
         self.add_beam_button.installEventFilter(self)
         self.delete_beam_button.installEventFilter(self)
+        self.edit_distance_button.installEventFilter(self)
         self.view.installEventFilter(self)
 
     def _header(self) -> QFrame:
@@ -313,12 +337,17 @@ class MainWindow(QMainWindow):
             QPushButton#deleteBeamButton { border-color: #b84a43; color: #9a322c; font-weight: 650; }
             QPushButton#deleteBeamButton:hover { background: #f9e5e2; }
             QPushButton#deleteBeamButton:checked { background: #a53b35; border-color: #a53b35; color: #fff; }
+            QPushButton#editDistanceButton { border-color: #b47a22; color: #8a5b14; font-weight: 650; }
+            QPushButton#editDistanceButton:hover { background: #fbf0da; }
+            QPushButton#editDistanceButton:checked { background: #9a681b; border-color: #9a681b; color: #fff; }
             QFrame#insertionEditor { background: #e7f0ed; border: 1px solid #b9d4cd; border-radius: 7px; }
             QLabel#insertionHint { color: #55706a; font-size: 11px; }
             QFrame#deletionEditor { background: #fbe9e7; border: 1px solid #edb7b1; border-radius: 7px; }
             QLabel#deletionHint { color: #81332e; font-size: 11px; }
             QPushButton#confirmDeletionButton { background: #b83e37; border-color: #b83e37; color: #fff; font-weight: 650; padding: 6px 9px; }
             QPushButton#confirmDeletionButton:disabled { background: #e3b9b5; border-color: #e3b9b5; color: #fff; }
+            QFrame#distanceEditor { background: #fbf0da; border: 1px solid #e7c782; border-radius: 7px; }
+            QLabel#distanceHint { color: #7d5a20; font-size: 11px; }
             QComboBox#cameraCombo { min-width: 115px; }
             QPushButton#cameraButton { padding: 6px 12px; font-size: 12px; }
             QTextBrowser#resultCard { background: #f9f7f1; border: 1px solid #ece6dc; border-radius: 9px; padding: 4px 10px; }
@@ -372,6 +401,8 @@ class MainWindow(QMainWindow):
             return
         if self.delete_beam_button.isChecked():
             self.delete_beam_button.setChecked(False)
+        if self.edit_distance_button.isChecked():
+            self.edit_distance_button.setChecked(False)
         if self._last_result is None:
             self.add_beam_button.setChecked(False)
             return
@@ -391,6 +422,8 @@ class MainWindow(QMainWindow):
             return
         if self.add_beam_button.isChecked():
             self.add_beam_button.setChecked(False)
+        if self.edit_distance_button.isChecked():
+            self.edit_distance_button.setChecked(False)
         if self._last_result is None:
             self.delete_beam_button.setChecked(False)
             return
@@ -399,6 +432,55 @@ class MainWindow(QMainWindow):
         self._update_deletion_editor()
         self.view.enable_deletion_mode(self._selection_changed)
         self.statusBar().showMessage("Нажмите на внутренние брусья для выбора. Крайние брусья удалить нельзя.")
+
+    def _toggle_distance_editing(self, enabled: bool) -> None:
+        if not enabled:
+            self._cancel_pending_distance_edit()
+            self.view.disable_distance_editing()
+            return
+        if self.add_beam_button.isChecked():
+            self.add_beam_button.setChecked(False)
+        if self.delete_beam_button.isChecked():
+            self.delete_beam_button.setChecked(False)
+        if self._last_result is None:
+            self.edit_distance_button.setChecked(False)
+            return
+        self.view.enable_distance_editing(self._last_result, self._start_distance_edit)
+        self.statusBar().showMessage("Наведите курсор на размерную линию и нажмите: внутренний брус или общий габарит.")
+
+    def _start_distance_edit(self, axis: PalletAxis, beam_index: int, value: float) -> None:
+        self._pending_distance = (axis, beam_index)
+        self.distance_value.blockSignals(True)
+        self.distance_value.setValue(value)
+        self.distance_value.blockSignals(False)
+        self.distance_editor.setVisible(True)
+        self.distance_value.setFocus()
+        self.distance_value.selectAll()
+
+    def _cancel_pending_distance_edit(self) -> None:
+        self._pending_distance = None
+        self.distance_editor.setVisible(False)
+        if self.edit_distance_button.isChecked():
+            self.statusBar().showMessage("Наведите курсор на размерную линию и нажмите: внутренний брус или общий габарит.")
+        self.edit_distance_button.setFocus()
+
+    def _confirm_distance_edit(self) -> None:
+        if self._pending_distance is None or self._last_result is None:
+            return
+        axis, beam_index = self._pending_distance
+        data = self._last_inputs[axis]
+        direction = self._last_result.length_result if axis == "length" else self._last_result.width_result
+        try:
+            updated_input = set_beam_face_distance_input(data, direction, beam_index, self.distance_value.value())
+        except CalculationError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+        panel = self.length_panel if axis == "length" else self.width_panel
+        panel.apply_position_data(updated_input)
+        self._pending_distance = None
+        self.distance_editor.setVisible(False)
+        self.calculate()
+        self.statusBar().showMessage("Расстояние обновлено. Выберите следующую размерную линию.")
 
     def _selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
         selected_indices = self._selected_for_deletion[axis]
@@ -457,6 +539,7 @@ class MainWindow(QMainWindow):
     def _cancel_pending_insertion(self) -> None:
         self._pending_insertion = None
         self.insertion_editor.setVisible(False)
+        self.view.clear_insertion_selection()
         self.view.clear_insertion_preview()
         if self.add_beam_button.isChecked():
             self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
@@ -480,11 +563,14 @@ class MainWindow(QMainWindow):
         self.calculate()
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key_Escape and (self.add_beam_button.isChecked() or self.delete_beam_button.isChecked()):
+        if event.key() == Qt.Key_Escape and (self.add_beam_button.isChecked() or self.delete_beam_button.isChecked()
+                                               or self.edit_distance_button.isChecked()):
             if self.add_beam_button.isChecked():
                 self.add_beam_button.setChecked(False)
-            else:
+            elif self.delete_beam_button.isChecked():
                 self.delete_beam_button.setChecked(False)
+            else:
+                self.edit_distance_button.setChecked(False)
             event.accept()
             return
         super().keyPressEvent(event)
@@ -496,6 +582,9 @@ class MainWindow(QMainWindow):
             return True
         if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape and self.delete_beam_button.isChecked():
             self.delete_beam_button.setChecked(False)
+            return True
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape and self.edit_distance_button.isChecked():
+            self.edit_distance_button.setChecked(False)
             return True
         return super().eventFilter(watched, event)
 
@@ -527,6 +616,8 @@ class MainWindow(QMainWindow):
             self._toggle_insertion_mode(True)
         elif self.delete_beam_button.isChecked():
             self._toggle_deletion_mode(True)
+        elif self.edit_distance_button.isChecked():
+            self._toggle_distance_editing(True)
         self._set_stale(False)
 
     def reset_example(self) -> None:
@@ -549,5 +640,5 @@ def run() -> int:
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("PalletLab")
     window = MainWindow()
-    window.show()
+    window.showMaximized()
     return app.exec_()

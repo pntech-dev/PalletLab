@@ -24,6 +24,13 @@ class NoWheelDoubleSpinBox(QDoubleSpinBox):
         event.ignore()
 
 
+class NoWheelComboBox(QComboBox):
+    """Prevent accidental section changes while scrolling the parameters pane."""
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
 class DirectionInputPanel(QGroupBox):
     changed = pyqtSignal()
 
@@ -31,7 +38,7 @@ class DirectionInputPanel(QGroupBox):
                  parent: QWidget | None = None):
         super().__init__(title, parent)
         self.setObjectName("directionCard")
-        self.section = QComboBox()
+        self.section = NoWheelComboBox()
         self.section.setObjectName("sectionCombo")
         self.section.addItems(SECTIONS)
         self.height = self._spin(70.0)

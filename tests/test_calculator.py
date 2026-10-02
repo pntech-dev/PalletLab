@@ -5,6 +5,7 @@ import pytest
 
 from palletlab.core.calculator import (build_pallet, calculate_direction, delete_beams_input, insert_beam, insert_beam_input,
                                        insertion_slots, pallet_bounds)
+from palletlab.core.calculator import set_beam_face_distance_input
 from palletlab.core.models import DirectionInput
 from palletlab.core.validation import CalculationError
 from palletlab.visualization.pallet_view import PalletView
@@ -172,6 +173,29 @@ def test_interactive_deletion_rejects_edge_beams(beam_indices):
     direction = calculate_direction(LENGTH_EXAMPLE)
     with pytest.raises(CalculationError, match="Крайние"):
         delete_beams_input(LENGTH_EXAMPLE, direction, beam_indices)
+
+
+def test_editing_a_displayed_distance_moves_its_internal_beam_and_updates_input_data():
+    direction = calculate_direction(LENGTH_EXAMPLE)
+    updated_input = set_beam_face_distance_input(LENGTH_EXAMPLE, direction, 2, 1500)
+
+    recalculated = calculate_direction(updated_input)
+    assert recalculated.beam_centers[2] == pytest.approx(1525)
+    assert updated_input.support_distances == pytest.approx((1302, 228, 1528, 499))
+
+
+def test_editing_the_first_edge_dimension_is_rejected():
+    direction = calculate_direction(LENGTH_EXAMPLE)
+    with pytest.raises(CalculationError, match="первого края"):
+        set_beam_face_distance_input(LENGTH_EXAMPLE, direction, 0, 100)
+
+
+def test_editing_the_final_dimension_changes_the_pallet_size():
+    direction = calculate_direction(LENGTH_EXAMPLE)
+    updated_input = set_beam_face_distance_input(LENGTH_EXAMPLE, direction, direction.beam_count - 1, 4300)
+
+    assert updated_input.margin_end == pytest.approx(196)
+    assert calculate_direction(updated_input).pallet_size == pytest.approx(4300)
 
 
 class _DimensionRecorder:

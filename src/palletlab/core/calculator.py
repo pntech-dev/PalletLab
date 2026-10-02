@@ -203,6 +203,28 @@ def delete_beams_input(
     return _input_with_support_positions(data, direction, remaining[1:-1])
 
 
+def set_beam_face_distance_input(
+    data: DirectionInput, direction: DirectionResult, beam_index: int, face_distance: float
+) -> DirectionInput:
+    """Persist a displayed cumulative dimension to an internal beam or pallet edge.
+
+    Dimension annotations are measured from the outer face of the first edge
+    beam.  Moving an internal dimension changes that support beam centre;
+    moving the final dimension changes the pallet's end margin.
+    """
+    last_index = len(direction.beam_centers) - 1
+    if not 0 < beam_index <= last_index:
+        raise CalculationError("Изменять можно только размер от первого края поддона.")
+    _validate_measurements((("Новое расстояние", face_distance),))
+    if beam_index == last_index:
+        margin_end = data.margin_end + face_distance - direction.raw_pallet_size
+        _validate_measurements((("Отступ поддона с конца", margin_end),), allow_empty=True)
+        return replace(data, margin_end=margin_end)
+    positions = list(direction.beam_centers[1:-1])
+    positions[beam_index - 1] = face_distance + direction.beam_width / 2
+    return _input_with_support_positions(data, direction, positions)
+
+
 def build_pallet(length: DirectionResult, width: DirectionResult, upper_layer: LayerDirection = "width") -> PalletResult:
     """Turn two already-calculated directions into real 3D beam boxes.
 

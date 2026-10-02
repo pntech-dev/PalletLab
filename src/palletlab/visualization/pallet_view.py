@@ -25,16 +25,28 @@ class PalletView(QtInteractor):
         self._insertion_callback: Callable[[InsertionSlot], None] | None = None
         self._insertion_mode = False
         self._hovered_insertion_actor = None
+        self._insertion_result: PalletResult | None = None
+        self._active_insertion_slot: InsertionSlot | None = None
         self._beam_actors: dict[object, tuple[PalletAxis, int]] = {}
         self._deletion_callback: Callable[[PalletAxis, int, bool], None] | None = None
         self._deletion_mode = False
         self._selected_deletion_actors: set[object] = set()
+        self._hovered_deletion_actor = None
+        self._distance_actors: dict[object, tuple[PalletAxis, int, float]] = {}
+        self._distance_callback: Callable[[PalletAxis, int, float], None] | None = None
+        self._distance_editing_mode = False
+        self._selected_distance_actor = None
+        self._hovered_distance_actor = None
         self.iren.add_observer("MouseMoveEvent", self._update_insertion_hover)
+        self.iren.add_observer("MouseMoveEvent", self._update_deletion_hover)
+        self.iren.add_observer("MouseMoveEvent", self._update_distance_hover)
+        self.iren.add_observer("LeftButtonPressEvent", self._click_distance)
 
     def show_pallet(self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True) -> None:
         camera_position = self.camera_position if self._has_model else None
         self.clear()
         self._beam_actors.clear()
+        self._distance_actors.clear()
         length_count = len(result.length_result.beam_centers)
         for beam_index, beam in enumerate(result.beams_3d):
             cube = pv.Cube(center=(beam.x, self._display_y(result, beam.y), beam.z), x_length=beam.size_x,
@@ -64,6 +76,8 @@ class PalletView(QtInteractor):
         self.disable_insertion_mode()
         self._insertion_mode = True
         self._insertion_callback = callback
+        self._insertion_result = result
+        self._active_insertion_slot = None
         marker_size = max(24.0, min(result.pallet_length, result.pallet_width) * 0.06)
         for slot in slots:
             direction = result.length_result if slot.axis == "length" else result.width_result
@@ -91,6 +105,8 @@ class PalletView(QtInteractor):
         self._insertion_callback = None
         self._insertion_mode = False
         self._hovered_insertion_actor = None
+        self._insertion_result = None
+        self._active_insertion_slot = None
         self.clear_insertion_preview()
         self.render()
 
@@ -100,6 +116,7 @@ class PalletView(QtInteractor):
         self._deletion_mode = True
         self._deletion_callback = callback
         self._selected_deletion_actors.clear()
+        self._hovered_deletion_actor = None
         self.enable_mesh_picking(callback=self._select_deletion_beam, show=False, left_clicking=True,
                                  use_actor=True, show_message=False)
         self.render()
@@ -110,9 +127,12 @@ class PalletView(QtInteractor):
         self.disable_picking()
         for actor in tuple(self._selected_deletion_actors):
             self._set_deletion_color(actor, selected=False)
+        if self._hovered_deletion_actor and self._hovered_deletion_actor not in self._selected_deletion_actors:
+            self._set_deletion_color(self._hovered_deletion_actor, selected=False)
         self._selected_deletion_actors.clear()
         self._deletion_callback = None
         self._deletion_mode = False
+        self._hovered_deletion_actor = None
         self.render()
 
     def _select_deletion_beam(self, actor) -> None:
@@ -128,6 +148,8 @@ class PalletView(QtInteractor):
         else:
             self._selected_deletion_actors.remove(actor)
         self._set_deletion_color(actor, selected)
+        if not selected and actor == self._hovered_deletion_actor:
+            self._set_deletion_hover_color(actor)
         if self._deletion_callback:
             self._deletion_callback(axis, index, selected)
         self.render()
@@ -138,6 +160,136 @@ class PalletView(QtInteractor):
         edge_color = "#7a1717" if selected else "#4a2c12"
         actor.GetProperty().SetColor(*pv.Color(color).float_rgb)
         actor.GetProperty().SetEdgeColor(*pv.Color(edge_color).float_rgb)
+
+    def _set_deletion_hover_color(self, actor) -> None:
+        actor.GetProperty().SetColor(*pv.Color("#e0a12b").float_rgb)
+        actor.GetProperty().SetEdgeColor(*pv.Color("#805518").float_rgb)
+
+    def _update_deletion_hover(self, *_args) -> None:
+        if not self._deletion_mode:
+            return
+        picker = pv._vtk.vtkPropPicker()
+        x, y = self.iren.get_event_position()
+        picker.Pick(x, y, 0, self.renderer)
+        hovered = picker.GetActor()
+        if not self._is_removable_beam_actor(hovered):
+            hovered = None
+        if hovered == self._hovered_deletion_actor:
+            return
+        previous = self._hovered_deletion_actor
+        self._hovered_deletion_actor = hovered
+        if previous and previous not in self._selected_deletion_actors:
+            self._set_deletion_color(previous, selected=False)
+        if hovered and hovered not in self._selected_deletion_actors:
+            self._set_deletion_hover_color(hovered)
+        self.render()
+
+    def _is_removable_beam_actor(self, actor) -> bool:
+        if actor not in self._beam_actors:
+            return False
+        axis, index = self._beam_actors[actor]
+        beam_count = sum(1 for candidate_axis, _ in self._beam_actors.values() if candidate_axis == axis)
+        return 0 < index < beam_count - 1
+
+    def enable_distance_editing(
+        self, result: PalletResult, callback: Callable[[PalletAxis, int, float], None]
+    ) -> None:
+        """Overlay pickable internal dimension lines above the annotations."""
+        self.disable_insertion_mode()
+        self.disable_distance_editing()
+        self._distance_editing_mode = True
+        self._distance_callback = callback
+        self._selected_distance_actor = None
+        self._hovered_distance_actor = None
+        self._add_editable_length_dimensions(result)
+        self._add_editable_width_dimensions(result)
+        self.render()
+
+    def disable_distance_editing(self) -> None:
+        if not self._distance_editing_mode and not self._distance_actors:
+            return
+        self.disable_picking()
+        for actor in self._distance_actors:
+            self.remove_actor(actor, render=False)
+        self._distance_actors.clear()
+        self._distance_callback = None
+        self._distance_editing_mode = False
+        self._selected_distance_actor = None
+        self._hovered_distance_actor = None
+        self.render()
+
+    def _add_editable_length_dimensions(self, result: PalletResult) -> None:
+        direction = result.length_result
+        offset = max(50.0, result.pallet_width * 0.055)
+        base, z = direction.beam_centers[0] - direction.beam_width / 2, result.pallet_height + 2
+        for index, center in enumerate(direction.beam_centers[1:], start=1):
+            end = center + direction.beam_width / 2 if index == len(direction.beam_centers) - 1 else center - direction.beam_width / 2
+            display_y = self._display_y(result, -offset * index)
+            actor = self.add_mesh(pv.Line((base, display_y, z), (end, display_y, z)), color="#d28326",
+                                  line_width=14, opacity=0.01, pickable=True,
+                                  name=f"editable-length-dimension-{index}")
+            self._distance_actors[actor] = ("length", index, end - base)
+
+    def _add_editable_width_dimensions(self, result: PalletResult) -> None:
+        direction = result.width_result
+        offset = max(50.0, result.pallet_length * 0.035)
+        base, z = direction.beam_centers[0] - direction.beam_width / 2, result.pallet_height + 2
+        for index, center in enumerate(direction.beam_centers[1:], start=1):
+            end = center + direction.beam_width / 2 if index == len(direction.beam_centers) - 1 else center - direction.beam_width / 2
+            x = -offset * index
+            actor = self.add_mesh(pv.Line((x, self._display_y(result, base), z),
+                                          (x, self._display_y(result, end), z)), color="#d28326",
+                                  line_width=14, opacity=0.01, pickable=True,
+                                  name=f"editable-width-dimension-{index}")
+            self._distance_actors[actor] = ("width", index, end - base)
+
+    def _select_distance(self, actor) -> None:
+        if not self._distance_editing_mode or actor not in self._distance_actors:
+            return
+        if self._selected_distance_actor and self._selected_distance_actor != actor:
+            self._set_distance_color(self._selected_distance_actor, selected=False)
+        self._selected_distance_actor = actor
+        self._set_distance_color(actor, selected=True)
+        axis, index, value = self._distance_actors[actor]
+        if self._distance_callback:
+            self._distance_callback(axis, index, value)
+        self.render()
+
+    def _click_distance(self, *_args) -> None:
+        """Pick dimensions directly; PyVista mesh-picking ignores line actors on some VTK backends."""
+        if not self._distance_editing_mode:
+            return
+        picker = pv._vtk.vtkPropPicker()
+        x, y = self.iren.get_event_position()
+        picker.Pick(x, y, 0, self.renderer)
+        actor = picker.GetActor()
+        if actor in self._distance_actors:
+            self._select_distance(actor)
+
+    def _update_distance_hover(self, *_args) -> None:
+        if not self._distance_editing_mode or not self._distance_actors:
+            return
+        picker = pv._vtk.vtkPropPicker()
+        x, y = self.iren.get_event_position()
+        picker.Pick(x, y, 0, self.renderer)
+        hovered = picker.GetActor()
+        if hovered not in self._distance_actors:
+            hovered = None
+        if hovered == self._hovered_distance_actor:
+            return
+        previous = self._hovered_distance_actor
+        self._hovered_distance_actor = hovered
+        if previous and previous != self._selected_distance_actor:
+            self._set_distance_color(previous, selected=False)
+        if hovered and hovered != self._selected_distance_actor:
+            hovered.GetProperty().SetColor(*pv.Color("#d28326").float_rgb)
+            hovered.GetProperty().SetOpacity(0.95)
+        self.render()
+
+    @staticmethod
+    def _set_distance_color(actor, selected: bool) -> None:
+        actor.GetProperty().SetColor(*pv.Color("#c23832" if selected else "#d28326").float_rgb)
+        actor.GetProperty().SetOpacity(0.95 if selected else 0.01)
 
     def show_insertion_preview(self, result: PalletResult, slot: InsertionSlot, clear_gap: float) -> None:
         """Draw a translucent candidate beam without committing it to the model."""
@@ -159,25 +311,37 @@ class PalletView(QtInteractor):
     def clear_insertion_preview(self) -> None:
         self.remove_actor("insertion-preview", render=False)
 
+    def clear_insertion_selection(self) -> None:
+        """Return insertion mode to hovering slots after an editor is closed."""
+        self._active_insertion_slot = None
+
     def _select_insertion_slot(self, actor) -> None:
         for marker, slot in self._insertion_slots.items():
             if marker == actor:
+                self._active_insertion_slot = slot
                 if self._insertion_callback:
                     self._insertion_callback(slot)
                 return
 
     def _update_insertion_hover(self, *_args) -> None:
-        if not self._insertion_mode or not self._insertion_slots:
+        if not self._insertion_mode or not self._insertion_slots or self._active_insertion_slot is not None:
             return
         picker = pv._vtk.vtkPropPicker()
         x, y = self.iren.get_event_position()
         picker.Pick(x, y, 0, self.renderer)
         hovered = picker.GetActor()
+        if hovered not in self._insertion_slots:
+            hovered = None
         if hovered == self._hovered_insertion_actor:
             return
         self._hovered_insertion_actor = hovered
         for actor in self._insertion_slots:
-            actor.GetProperty().SetOpacity(0.9 if actor == hovered else 0.35)
+            actor.GetProperty().SetOpacity(0.6 if actor == hovered else 0.35)
+        if hovered and self._insertion_result:
+            self.show_insertion_preview(self._insertion_result, self._insertion_slots[hovered],
+                                        self._insertion_slots[hovered].suggested_clear_gap)
+        else:
+            self.clear_insertion_preview()
         self.render()
 
     @staticmethod
@@ -254,7 +418,9 @@ class PalletView(QtInteractor):
                               fill_shape=True, always_visible=True)
 
     def camera_isometric(self) -> None:
-        self.view_isometric()
+        # View from the front-left keeps X dimension lines above the pallet
+        # and Y dimension lines to its left, matching the top-view layout.
+        self.view_vector((1, -1, 1), viewup=(0, 0, 1))
         self.reset_camera()
 
     def camera_top(self) -> None:
