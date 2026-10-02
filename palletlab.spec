@@ -16,16 +16,14 @@ HIDDEN_IMPORTS = [
     "vtkmodules.qt.QVTKRenderWindowInteractor",
 ]
 
-# PalletLab does not use notebooks, web rendering, example data, test helpers,
-# or alternative GUI backends. Excluding them keeps optional dependency trees
-# out of the distributable.
+# PalletLab does not use example data, test helpers, or alternative GUI
+# backends. PyVista's base package imports ``pyvista.jupyter`` and Matplotlib
+# even in desktop mode, so those must remain available.
 EXCLUDES = [
     "IPython",
     "PIL.ImageQt",
-    "matplotlib",
     "pytest",
     "pyvista.examples",
-    "pyvista.jupyter",
     "pyvista.trame",
     "tkinter",
     "trame",
