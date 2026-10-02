@@ -1,31 +1,71 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Maintained Windows build configuration. Run manually: pyinstaller palletlab.spec."""
+"""Lean, fast-starting Windows build configuration for PalletLab.
 
-from PyInstaller.utils.hooks import collect_all
+Build manually with ``pyinstaller palletlab.spec``. The ``onedir`` layout is
+intentional: VTK's native libraries stay beside the executable instead of
+being unpacked into a temporary directory at every application start.
+"""
 
+APP_NAME = "PalletLab"
 
-def collected(package):
-    datas, binaries, hiddenimports = collect_all(package)
-    return datas, binaries, hiddenimports
+# These modules are imported dynamically by PyVista/VTK's Qt integration and
+# cannot always be discovered from the application's direct imports.
+HIDDEN_IMPORTS = [
+    "pyvista.plotting._vtk",
+    "pyvista.plotting._vtk_gl",
+    "vtkmodules.qt.QVTKRenderWindowInteractor",
+]
 
-
-datas, binaries, hiddenimports = [], [], []
-for package_name in ("pyvista", "pyvistaqt", "vtkmodules", "PyQt5"):
-    package_datas, package_binaries, package_hiddenimports = collected(package_name)
-    datas += package_datas
-    binaries += package_binaries
-    hiddenimports += package_hiddenimports
+# PalletLab does not use notebooks, web rendering, example data, test helpers,
+# or alternative GUI backends. Excluding them keeps optional dependency trees
+# out of the distributable.
+EXCLUDES = [
+    "IPython",
+    "PIL.ImageQt",
+    "matplotlib",
+    "pytest",
+    "pyvista.examples",
+    "pyvista.jupyter",
+    "pyvista.trame",
+    "tkinter",
+    "trame",
+    "trame_client",
+    "trame_server",
+    "trame_vtk",
+    "vtkmodules.gtk",
+    "vtkmodules.test",
+    "vtkmodules.tk",
+]
 
 a = Analysis(
     ["src/main.py"],
     pathex=["src"],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
+    binaries=[],
+    datas=[],
+    hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=EXCLUDES,
     noarchive=False,
+    optimize=2,
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, a.binaries, a.zipfiles, a.datas, [], name="PalletLab", console=False)
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name=APP_NAME,
+    console=False,
+    icon="icon.ico",
+    upx=False,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    name=APP_NAME,
+)

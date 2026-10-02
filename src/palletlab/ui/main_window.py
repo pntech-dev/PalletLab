@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
@@ -60,14 +60,18 @@ class MainWindow(QMainWindow):
         self._pending_insertion: InsertionSlot | None = None
         self._pending_distance: tuple[PalletAxis, int] | None = None
         self._selected_for_deletion: dict[PalletAxis, set[int]] = {"length": set(), "width": set()}
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.setInterval(300)
+        self._rebuild_timer.timeout.connect(self._calculate_automatically)
         self.scene_info = QLabel()
         self.scene_info.setObjectName("sceneInfo")
         self.scene_info.setWordWrap(True)
         self.camera_combo = QComboBox()
+        self.camera_combo.addItem("Изометрия", "isometric")
         self.camera_combo.addItem("Сверху", "top")
         self.camera_combo.addItem("Спереди", "front")
         self.camera_combo.addItem("Сбоку", "side")
-        self.camera_combo.addItem("Изометрия", "isometric")
         self._build_ui()
         self._set_stale(False)
         self.calculate()
@@ -139,17 +143,14 @@ class MainWindow(QMainWindow):
             rounding_choices.addWidget(button)
         rounding_choices.addStretch()
         action_layout.addLayout(rounding_choices)
-        buttons = QHBoxLayout()
-        calculate_button = QPushButton("Рассчитать и построить")
-        calculate_button.setObjectName("calculateButton")
-        calculate_button.clicked.connect(self.calculate)
-        calculate_button.setMinimumHeight(42)
+        auto_calculate_hint = QLabel("Модель перестраивается автоматически после изменения параметров.")
+        auto_calculate_hint.setObjectName("sectionHint")
+        auto_calculate_hint.setWordWrap(True)
+        action_layout.addWidget(auto_calculate_hint)
         reset_button = QPushButton("Сбросить пример")
         reset_button.clicked.connect(self.reset_example)
         reset_button.setMinimumHeight(42)
-        buttons.addWidget(calculate_button, 1)
-        buttons.addWidget(reset_button)
-        action_layout.addLayout(buttons)
+        action_layout.addWidget(reset_button)
         sidebar = QWidget()
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
@@ -256,10 +257,10 @@ class MainWindow(QMainWindow):
         splitter.setSizes([420, 980])
         root_layout.addWidget(splitter, 1)
         self.setCentralWidget(root)
-        self.length_panel.changed.connect(lambda: self._set_stale(True))
-        self.width_panel.changed.connect(lambda: self._set_stale(True))
+        self.length_panel.changed.connect(self._schedule_recalculation)
+        self.width_panel.changed.connect(self._schedule_recalculation)
         self.layer_buttons.buttonClicked.connect(self._layer_changed)
-        self.rounding_buttons.buttonClicked.connect(lambda: self._set_stale(True))
+        self.rounding_buttons.buttonClicked.connect(self._schedule_recalculation)
         self.show_length_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.show_width_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.setStyleSheet(self._stylesheet())
@@ -329,8 +330,6 @@ class MainWindow(QMainWindow):
             QPushButton { background: #fffdf9; border: 1px solid #d8d3c8; border-radius: 7px; padding: 8px 11px; color: #33464a; }
             QPushButton:hover { background: #f0ece3; border-color: #bcb5a7; }
             QPushButton:checked { background: #dfece9; border: 2px solid #4b7a76; color: #1f5c58; font-weight: 650; }
-            QPushButton#calculateButton { background: #255e64; border: 1px solid #255e64; color: #ffffff; font-weight: 650; }
-            QPushButton#calculateButton:hover { background: #1e4e53; }
             QPushButton#addBeamButton { border-color: #4b7a76; color: #1f5c58; font-weight: 650; }
             QPushButton#addBeamButton:hover { background: #e7f0ed; }
             QPushButton#addBeamButton:checked { background: #255e64; border-color: #255e64; color: #fff; }
@@ -373,9 +372,17 @@ class MainWindow(QMainWindow):
             self.status_badge.setStyleSheet("")
             self.statusBar().showMessage("Расчёт актуален.")
 
-    def _layer_changed(self, *_args) -> None:
-        # Layer change is an input change; rebuild only after a successful calculation.
+    def _schedule_recalculation(self, *_args) -> None:
+        """Queue one rebuild after the user pauses editing a parameter."""
         self._set_stale(True)
+        self._rebuild_timer.start()
+
+    def _calculate_automatically(self) -> None:
+        """Keep temporary incomplete input non-blocking while it is being typed."""
+        self.calculate(show_error=False)
+
+    def _layer_changed(self, *_args) -> None:
+        self._schedule_recalculation()
 
     def _set_camera(self, index: int) -> None:
         handlers = {
@@ -388,7 +395,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_dimension_annotations(self) -> None:
         if self._last_result is not None:
-            self.view.show_pallet(
+            self.view.update_dimension_annotations(
                 self._last_result,
                 show_length_gaps=self.show_length_gaps.isChecked(),
                 show_width_gaps=self.show_width_gaps.isChecked(),
@@ -596,7 +603,8 @@ class MainWindow(QMainWindow):
             f"продольные {format_mm(result.pallet_length)} мм"
         )
 
-    def calculate(self) -> None:
+    def calculate(self, *, show_error: bool = True) -> None:
+        self._rebuild_timer.stop()
         try:
             rounding_step = self.rounding_buttons.checkedId()
             length_input = self.length_panel.values(rounding_step != 0, rounding_step or 5)
@@ -606,12 +614,21 @@ class MainWindow(QMainWindow):
             result = build_pallet(length, width, self.upper_layer())
         except CalculationError as exc:
             self._set_stale(True)
-            QMessageBox.warning(self, "Невозможная геометрия", str(exc))
+            self.statusBar().showMessage(str(exc))
+            if show_error:
+                QMessageBox.warning(self, "Невозможная геометрия", str(exc))
             return
         self._last_result = result
         self._last_inputs = {"length": length_input, "width": width_input}
         self._update_scene_info(result)
-        self._refresh_dimension_annotations()
+        # A calculation can change every beam position and pallet dimension,
+        # so it must rebuild the geometry.  The lightweight annotation-only
+        # path is reserved for the two dimension visibility checkboxes.
+        self.view.show_pallet(
+            result,
+            show_length_gaps=self.show_length_gaps.isChecked(),
+            show_width_gaps=self.show_width_gaps.isChecked(),
+        )
         if self.add_beam_button.isChecked():
             self._toggle_insertion_mode(True)
         elif self.delete_beam_button.isChecked():

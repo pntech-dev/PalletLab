@@ -18,9 +18,9 @@ class PalletView(QtInteractor):
         self.setContentsMargins(0, 0, 0, 0)
         self.setStyleSheet("border: 0px; margin: 0px; padding: 0px;")
         self.set_background("#f5f7fa")
-        self.add_axes()
-        self.show_grid(color="#b8c2cc")
         self._has_model = False
+        self._annotation_actors: list[object] = []
+        self._annotation_segments: list[pv.PolyData] | None = None
         self._insertion_slots: dict[object, InsertionSlot] = {}
         self._insertion_callback: Callable[[InsertionSlot], None] | None = None
         self._insertion_mode = False
@@ -28,6 +28,7 @@ class PalletView(QtInteractor):
         self._insertion_result: PalletResult | None = None
         self._active_insertion_slot: InsertionSlot | None = None
         self._beam_actors: dict[object, tuple[PalletAxis, int]] = {}
+        self._beam_counts: dict[PalletAxis, int] = {"length": 0, "width": 0}
         self._deletion_callback: Callable[[PalletAxis, int, bool], None] | None = None
         self._deletion_mode = False
         self._selected_deletion_actors: set[object] = set()
@@ -37,6 +38,20 @@ class PalletView(QtInteractor):
         self._distance_editing_mode = False
         self._selected_distance_actor = None
         self._hovered_distance_actor = None
+        # Picking is used on every mouse move in interactive modes.  Reusing
+        # VTK's picker avoids repeated native-object allocation.
+        self._prop_picker = pv._vtk.vtkPropPicker()
+        self._interaction_colors = {
+            "selected": pv.Color("#d83a3a").float_rgb,
+            "selected_edge": pv.Color("#7a1717").float_rgb,
+            "length_beam": pv.Color("#b7791f").float_rgb,
+            "width_beam": pv.Color("#8b5a2b").float_rgb,
+            "default_edge": pv.Color("#4a2c12").float_rgb,
+            "beam_hover": pv.Color("#e0a12b").float_rgb,
+            "beam_hover_edge": pv.Color("#805518").float_rgb,
+            "distance": pv.Color("#d28326").float_rgb,
+            "distance_selected": pv.Color("#c23832").float_rgb,
+        }
         self.iren.add_observer("MouseMoveEvent", self._update_insertion_hover)
         self.iren.add_observer("MouseMoveEvent", self._update_deletion_hover)
         self.iren.add_observer("MouseMoveEvent", self._update_distance_hover)
@@ -44,36 +59,78 @@ class PalletView(QtInteractor):
 
     def show_pallet(self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True) -> None:
         camera_position = self.camera_position if self._has_model else None
+        # Geometry is rebuilt through the same per-beam actor path used by
+        # the interactive deletion tool.  This is intentionally not merged:
+        # on the deployed VTK backend the alternative scene layer could leave
+        # the dimension annotations visible while hiding all beam meshes.
         self.clear()
+        self._annotation_actors.clear()
         self._beam_actors.clear()
         self._distance_actors.clear()
         length_count = len(result.length_result.beam_centers)
+        self._beam_counts = {
+            "length": length_count,
+            "width": len(result.width_result.beam_centers),
+        }
         for beam_index, beam in enumerate(result.beams_3d):
-            cube = pv.Cube(center=(beam.x, self._display_y(result, beam.y), beam.z), x_length=beam.size_x,
-                           y_length=beam.size_y, z_length=beam.size_z)
+            cube = self._beam_cube(result, beam)
             color = "#b7791f" if beam.orientation == "length" else "#8b5a2b"
-            actor = self.add_mesh(cube, color=color, show_edges=True, edge_color="#4a2c12", smooth_shading=False,
-                                  pickable=True, name=f"pallet-beam-{beam_index}")
+            actor = self.add_mesh(
+                cube,
+                color=color,
+                show_edges=True,
+                edge_color="#4a2c12",
+                smooth_shading=False,
+                pickable=True,
+                name=f"pallet-beam-{beam_index}",
+            )
             axis = "length" if beam_index < length_count else "width"
             index = beam_index if axis == "length" else beam_index - length_count
             self._beam_actors[actor] = (axis, index)
-        if show_length_gaps:
-            self._add_length_gap_dimensions(result)
-        if show_width_gaps:
-            self._add_width_gap_dimensions(result)
-        self.add_axes()
+        self.update_dimension_annotations(result, show_length_gaps, show_width_gaps, render=False)
+        # ``clear`` also removes VTK's orientation widget.  Add back only the
+        # compact corner marker; unlike ``show_grid`` it adds no scene grid.
+        self.add_axes(line_width=1, xlabel="X", ylabel="Y", zlabel="Z", viewport=(0, 0, 0.13, 0.13))
         if camera_position is None:
-            self.camera_top()
+            self.camera_isometric()
         else:
             self.camera_position = camera_position
             self.render()
         self._has_model = True
 
+    def update_dimension_annotations(
+        self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True, *, render: bool = True
+    ) -> None:
+        """Refresh only the distance annotations, leaving beam geometry intact."""
+        self._remove_actors(self._annotation_actors)
+        # ``add_point_labels`` owns an additional ``<name>-points`` actor.
+        # It is not returned to us, so remove it by name when hiding or
+        # replacing dimensions created by older renders.
+        self.remove_actor("length-dimension-labels-points", render=False)
+        self.remove_actor("width-dimension-labels-points", render=False)
+        if show_length_gaps:
+            self._add_length_gap_dimensions(result)
+        if show_width_gaps:
+            self._add_width_gap_dimensions(result)
+        if render:
+            self.render()
+
+    def _remove_actors(self, actors: list[object]) -> None:
+        """Remove one dynamic actor group without resetting the whole renderer."""
+        for actor in actors:
+            self.remove_actor(actor, render=False)
+        actors.clear()
+
+    @staticmethod
+    def _beam_cube(result: PalletResult, beam) -> pv.PolyData:
+        return pv.Cube(center=(beam.x, PalletView._display_y(result, beam.y), beam.z), x_length=beam.size_x,
+                       y_length=beam.size_y, z_length=beam.size_z)
+
     def enable_insertion_mode(
         self, result: PalletResult, slots: tuple[InsertionSlot, ...], callback: Callable[[InsertionSlot], None]
     ) -> None:
         """Show pickable plus markers in every gap that can fit one more beam."""
-        self.disable_insertion_mode()
+        self.disable_insertion_mode(render=False)
         self._insertion_mode = True
         self._insertion_callback = callback
         self._insertion_result = result
@@ -96,7 +153,7 @@ class PalletView(QtInteractor):
                                  use_actor=True, show_message=False)
         self.render()
 
-    def disable_insertion_mode(self) -> None:
+    def disable_insertion_mode(self, *, render: bool = True) -> None:
         """Remove insertion affordances while preserving the currently displayed pallet."""
         self.disable_picking()
         for actor in self._insertion_slots:
@@ -108,11 +165,12 @@ class PalletView(QtInteractor):
         self._insertion_result = None
         self._active_insertion_slot = None
         self.clear_insertion_preview()
-        self.render()
+        if render:
+            self.render()
 
     def enable_deletion_mode(self, callback: Callable[[PalletAxis, int, bool], None]) -> None:
         """Make only internal beams clickable and show selected ones in red."""
-        self.disable_insertion_mode()
+        self.disable_insertion_mode(render=False)
         self._deletion_mode = True
         self._deletion_callback = callback
         self._selected_deletion_actors.clear()
@@ -139,7 +197,7 @@ class PalletView(QtInteractor):
         if not self._deletion_mode or actor not in self._beam_actors:
             return
         axis, index = self._beam_actors[actor]
-        beam_count = sum(1 for candidate_axis, _ in self._beam_actors.values() if candidate_axis == axis)
+        beam_count = self._beam_counts[axis]
         if index in (0, beam_count - 1):
             return
         selected = actor not in self._selected_deletion_actors
@@ -156,22 +214,22 @@ class PalletView(QtInteractor):
 
     def _set_deletion_color(self, actor, selected: bool) -> None:
         axis, _ = self._beam_actors[actor]
-        color = "#d83a3a" if selected else ("#b7791f" if axis == "width" else "#8b5a2b")
-        edge_color = "#7a1717" if selected else "#4a2c12"
-        actor.GetProperty().SetColor(*pv.Color(color).float_rgb)
-        actor.GetProperty().SetEdgeColor(*pv.Color(edge_color).float_rgb)
+        colors = self._interaction_colors
+        color = colors["selected"] if selected else (colors["length_beam"] if axis == "width" else colors["width_beam"])
+        edge_color = colors["selected_edge"] if selected else colors["default_edge"]
+        actor.GetProperty().SetColor(*color)
+        actor.GetProperty().SetEdgeColor(*edge_color)
 
     def _set_deletion_hover_color(self, actor) -> None:
-        actor.GetProperty().SetColor(*pv.Color("#e0a12b").float_rgb)
-        actor.GetProperty().SetEdgeColor(*pv.Color("#805518").float_rgb)
+        actor.GetProperty().SetColor(*self._interaction_colors["beam_hover"])
+        actor.GetProperty().SetEdgeColor(*self._interaction_colors["beam_hover_edge"])
 
     def _update_deletion_hover(self, *_args) -> None:
         if not self._deletion_mode:
             return
-        picker = pv._vtk.vtkPropPicker()
         x, y = self.iren.get_event_position()
-        picker.Pick(x, y, 0, self.renderer)
-        hovered = picker.GetActor()
+        self._prop_picker.Pick(x, y, 0, self.renderer)
+        hovered = self._prop_picker.GetActor()
         if not self._is_removable_beam_actor(hovered):
             hovered = None
         if hovered == self._hovered_deletion_actor:
@@ -188,15 +246,15 @@ class PalletView(QtInteractor):
         if actor not in self._beam_actors:
             return False
         axis, index = self._beam_actors[actor]
-        beam_count = sum(1 for candidate_axis, _ in self._beam_actors.values() if candidate_axis == axis)
+        beam_count = self._beam_counts[axis]
         return 0 < index < beam_count - 1
 
     def enable_distance_editing(
         self, result: PalletResult, callback: Callable[[PalletAxis, int, float], None]
     ) -> None:
         """Overlay pickable internal dimension lines above the annotations."""
-        self.disable_insertion_mode()
-        self.disable_distance_editing()
+        self.disable_insertion_mode(render=False)
+        self.disable_distance_editing(render=False)
         self._distance_editing_mode = True
         self._distance_callback = callback
         self._selected_distance_actor = None
@@ -205,7 +263,7 @@ class PalletView(QtInteractor):
         self._add_editable_width_dimensions(result)
         self.render()
 
-    def disable_distance_editing(self) -> None:
+    def disable_distance_editing(self, *, render: bool = True) -> None:
         if not self._distance_editing_mode and not self._distance_actors:
             return
         self.disable_picking()
@@ -216,14 +274,16 @@ class PalletView(QtInteractor):
         self._distance_editing_mode = False
         self._selected_distance_actor = None
         self._hovered_distance_actor = None
-        self.render()
+        if render:
+            self.render()
 
     def _add_editable_length_dimensions(self, result: PalletResult) -> None:
         direction = result.length_result
         offset = max(50.0, result.pallet_width * 0.055)
         base, z = direction.beam_centers[0] - direction.beam_width / 2, result.pallet_height + 2
+        last_index = len(direction.beam_centers) - 1
         for index, center in enumerate(direction.beam_centers[1:], start=1):
-            end = center + direction.beam_width / 2 if index == len(direction.beam_centers) - 1 else center - direction.beam_width / 2
+            end = center + direction.beam_width / 2 if index == last_index else center - direction.beam_width / 2
             display_y = self._display_y(result, -offset * index)
             actor = self.add_mesh(pv.Line((base, display_y, z), (end, display_y, z)), color="#d28326",
                                   line_width=14, opacity=0.01, pickable=True,
@@ -234,8 +294,9 @@ class PalletView(QtInteractor):
         direction = result.width_result
         offset = max(50.0, result.pallet_length * 0.035)
         base, z = direction.beam_centers[0] - direction.beam_width / 2, result.pallet_height + 2
+        last_index = len(direction.beam_centers) - 1
         for index, center in enumerate(direction.beam_centers[1:], start=1):
-            end = center + direction.beam_width / 2 if index == len(direction.beam_centers) - 1 else center - direction.beam_width / 2
+            end = center + direction.beam_width / 2 if index == last_index else center - direction.beam_width / 2
             x = -offset * index
             actor = self.add_mesh(pv.Line((x, self._display_y(result, base), z),
                                           (x, self._display_y(result, end), z)), color="#d28326",
@@ -259,20 +320,18 @@ class PalletView(QtInteractor):
         """Pick dimensions directly; PyVista mesh-picking ignores line actors on some VTK backends."""
         if not self._distance_editing_mode:
             return
-        picker = pv._vtk.vtkPropPicker()
         x, y = self.iren.get_event_position()
-        picker.Pick(x, y, 0, self.renderer)
-        actor = picker.GetActor()
+        self._prop_picker.Pick(x, y, 0, self.renderer)
+        actor = self._prop_picker.GetActor()
         if actor in self._distance_actors:
             self._select_distance(actor)
 
     def _update_distance_hover(self, *_args) -> None:
         if not self._distance_editing_mode or not self._distance_actors:
             return
-        picker = pv._vtk.vtkPropPicker()
         x, y = self.iren.get_event_position()
-        picker.Pick(x, y, 0, self.renderer)
-        hovered = picker.GetActor()
+        self._prop_picker.Pick(x, y, 0, self.renderer)
+        hovered = self._prop_picker.GetActor()
         if hovered not in self._distance_actors:
             hovered = None
         if hovered == self._hovered_distance_actor:
@@ -282,13 +341,13 @@ class PalletView(QtInteractor):
         if previous and previous != self._selected_distance_actor:
             self._set_distance_color(previous, selected=False)
         if hovered and hovered != self._selected_distance_actor:
-            hovered.GetProperty().SetColor(*pv.Color("#d28326").float_rgb)
+            hovered.GetProperty().SetColor(*self._interaction_colors["distance"])
             hovered.GetProperty().SetOpacity(0.95)
         self.render()
 
-    @staticmethod
-    def _set_distance_color(actor, selected: bool) -> None:
-        actor.GetProperty().SetColor(*pv.Color("#c23832" if selected else "#d28326").float_rgb)
+    def _set_distance_color(self, actor, selected: bool) -> None:
+        color = self._interaction_colors["distance_selected" if selected else "distance"]
+        actor.GetProperty().SetColor(*color)
         actor.GetProperty().SetOpacity(0.95 if selected else 0.01)
 
     def show_insertion_preview(self, result: PalletResult, slot: InsertionSlot, clear_gap: float) -> None:
@@ -326,10 +385,9 @@ class PalletView(QtInteractor):
     def _update_insertion_hover(self, *_args) -> None:
         if not self._insertion_mode or not self._insertion_slots or self._active_insertion_slot is not None:
             return
-        picker = pv._vtk.vtkPropPicker()
         x, y = self.iren.get_event_position()
-        picker.Pick(x, y, 0, self.renderer)
-        hovered = picker.GetActor()
+        self._prop_picker.Pick(x, y, 0, self.renderer)
+        hovered = self._prop_picker.GetActor()
         if hovered not in self._insertion_slots:
             hovered = None
         if hovered == self._hovered_insertion_actor:
@@ -353,7 +411,22 @@ class PalletView(QtInteractor):
         self, start: tuple[float, float, float], end: tuple[float, float, float], name: str
     ) -> None:
         """Draw one independent gap line; never form a continuous outer rail."""
-        self.add_mesh(pv.Line(start, end), color="#3d8582", line_width=2, name=name)
+        if self._annotation_segments is not None:
+            self._annotation_segments.append(pv.Line(start, end))
+            return
+        actor = self.add_mesh(pv.Line(start, end), color="#3d8582", line_width=2, name=name)
+        self._annotation_actors.append(actor)
+
+    def _begin_annotation_batch(self) -> None:
+        self._annotation_segments = []
+
+    def _flush_annotation_batch(self, name: str) -> None:
+        segments = self._annotation_segments
+        self._annotation_segments = None
+        if not segments:
+            return
+        actor = self.add_mesh(pv.merge(segments, merge_points=False), color="#3d8582", line_width=2, name=name)
+        self._annotation_actors.append(actor)
 
     def _add_t_end(self, point: tuple[float, float, float], perpendicular: str, size: float, name: str) -> None:
         """Add a short perpendicular end mark, like a technical drawing dimension."""
@@ -366,6 +439,9 @@ class PalletView(QtInteractor):
 
     def _add_length_gap_dimensions(self, result: PalletResult) -> None:
         """Place stepped X dimensions: inner faces, then the final outer face."""
+        batching = isinstance(self, PalletView)
+        if batching:
+            self._begin_annotation_batch()
         direction = result.length_result
         offset = max(50.0, result.pallet_width * 0.055)
         tick = max(14.0, offset * 0.18)
@@ -373,8 +449,9 @@ class PalletView(QtInteractor):
         model_edge_y, z = 0.0, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
+        last_index = len(direction.beam_centers) - 1
         for index, center in enumerate(direction.beam_centers[1:], start=1):
-            is_last_beam = index == len(direction.beam_centers) - 1
+            is_last_beam = index == last_index
             end = center + direction.beam_width / 2 if is_last_beam else center - direction.beam_width / 2
             display_y = self._display_y(result, -offset * index)
             display_model_y = self._display_y(result, model_edge_y)
@@ -385,12 +462,19 @@ class PalletView(QtInteractor):
             self._add_t_end((end, display_y, z), "y", tick, f"length-end-tick-{index}")
             points.append(((base + end) / 2, display_y, z))
             labels.append(f"{format_mm(end - base)} mm")
-        self.add_point_labels(points, labels, name="length-dimension-labels", point_size=0, font_size=12,
-                              text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
-                              fill_shape=True, always_visible=True)
+        if batching:
+            self._flush_annotation_batch("length-dimension-lines")
+        actor = self.add_point_labels(points, labels, name="length-dimension-labels", show_points=False, font_size=12,
+                                      text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
+                                      fill_shape=True, always_visible=True)
+        if hasattr(self, "_annotation_actors"):
+            self._annotation_actors.append(actor)
 
     def _add_width_gap_dimensions(self, result: PalletResult) -> None:
         """Place stepped Y dimensions: inner faces, then the final outer face."""
+        batching = isinstance(self, PalletView)
+        if batching:
+            self._begin_annotation_batch()
         direction = result.width_result
         offset = max(50.0, result.pallet_length * 0.035)
         tick = max(14.0, offset * 0.18)
@@ -398,8 +482,9 @@ class PalletView(QtInteractor):
         model_edge_x, z = 0.0, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
+        last_index = len(direction.beam_centers) - 1
         for index, center in enumerate(direction.beam_centers[1:], start=1):
-            is_last_beam = index == len(direction.beam_centers) - 1
+            is_last_beam = index == last_index
             end = center + direction.beam_width / 2 if is_last_beam else center - direction.beam_width / 2
             x = -offset * index
             display_start = self._display_y(result, base)
@@ -413,14 +498,18 @@ class PalletView(QtInteractor):
             self._add_t_end((x, display_end, z), "x", tick, f"width-end-tick-{index}")
             points.append((x, self._display_y(result, (base + end) / 2), z))
             labels.append(f"{format_mm(end - base)} mm")
-        self.add_point_labels(points, labels, name="width-dimension-labels", point_size=0, font_size=12,
-                              text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
-                              fill_shape=True, always_visible=True)
+        if batching:
+            self._flush_annotation_batch("width-dimension-lines")
+        actor = self.add_point_labels(points, labels, name="width-dimension-labels", show_points=False, font_size=12,
+                                      text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
+                                      fill_shape=True, always_visible=True)
+        if hasattr(self, "_annotation_actors"):
+            self._annotation_actors.append(actor)
 
     def camera_isometric(self) -> None:
-        # View from the front-left keeps X dimension lines above the pallet
-        # and Y dimension lines to its left, matching the top-view layout.
-        self.view_vector((1, -1, 1), viewup=(0, 0, 1))
+        # Turn the prior isometric view clockwise by one quarter turn: length
+        # dimensions are above the pallet and width dimensions are to its left.
+        self.view_vector((-1, -1, 1), viewup=(0, 0, 1))
         self.reset_camera()
 
     def camera_top(self) -> None:

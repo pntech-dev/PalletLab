@@ -256,11 +256,19 @@ def build_pallet(length: DirectionResult, width: DirectionResult, upper_layer: L
 
 def pallet_bounds(beams: Iterable[Beam3D]) -> tuple[float, float, float, float, float, float]:
     """Return xmin, xmax, ymin, ymax, zmin, zmax for physical beam boxes."""
-    boxes = list(beams)
-    if not boxes:
+    iterator = iter(beams)
+    try:
+        first = next(iterator)
+    except StopIteration:
         raise CalculationError("Невозможно определить габариты пустой модели.")
-    return (
-        min(beam.x - beam.size_x / 2 for beam in boxes), max(beam.x + beam.size_x / 2 for beam in boxes),
-        min(beam.y - beam.size_y / 2 for beam in boxes), max(beam.y + beam.size_y / 2 for beam in boxes),
-        min(beam.z - beam.size_z / 2 for beam in boxes), max(beam.z + beam.size_z / 2 for beam in boxes),
-    )
+    xmin, xmax = first.x - first.size_x / 2, first.x + first.size_x / 2
+    ymin, ymax = first.y - first.size_y / 2, first.y + first.size_y / 2
+    zmin, zmax = first.z - first.size_z / 2, first.z + first.size_z / 2
+    for beam in iterator:
+        xmin = min(xmin, beam.x - beam.size_x / 2)
+        xmax = max(xmax, beam.x + beam.size_x / 2)
+        ymin = min(ymin, beam.y - beam.size_y / 2)
+        ymax = max(ymax, beam.y + beam.size_y / 2)
+        zmin = min(zmin, beam.z - beam.size_z / 2)
+        zmax = max(zmax, beam.z + beam.size_z / 2)
+    return xmin, xmax, ymin, ymax, zmin, zmax
