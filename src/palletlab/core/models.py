@@ -23,6 +23,10 @@ class DirectionInput:
     margin_end: float
     round_pallet_size: bool = False
     rounding_step: Literal[5, 50] = 5
+    # Interactive deletion can leave no support beams between the two edge
+    # beams.  In that case distances alone are not enough to encode the
+    # layout, so the UI keeps the exact remaining support centres here.
+    support_positions: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)

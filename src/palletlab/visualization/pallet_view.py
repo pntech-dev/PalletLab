@@ -9,7 +9,7 @@ from pyvistaqt import QtInteractor
 
 from palletlab.core.calculator import inserted_beam_center
 from palletlab.core.formatting import format_mm
-from palletlab.core.models import InsertionSlot, PalletResult
+from palletlab.core.models import InsertionSlot, PalletAxis, PalletResult
 
 
 class PalletView(QtInteractor):
@@ -25,16 +25,26 @@ class PalletView(QtInteractor):
         self._insertion_callback: Callable[[InsertionSlot], None] | None = None
         self._insertion_mode = False
         self._hovered_insertion_actor = None
+        self._beam_actors: dict[object, tuple[PalletAxis, int]] = {}
+        self._deletion_callback: Callable[[PalletAxis, int, bool], None] | None = None
+        self._deletion_mode = False
+        self._selected_deletion_actors: set[object] = set()
         self.iren.add_observer("MouseMoveEvent", self._update_insertion_hover)
 
     def show_pallet(self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True) -> None:
         camera_position = self.camera_position if self._has_model else None
         self.clear()
-        for beam in result.beams_3d:
+        self._beam_actors.clear()
+        length_count = len(result.length_result.beam_centers)
+        for beam_index, beam in enumerate(result.beams_3d):
             cube = pv.Cube(center=(beam.x, self._display_y(result, beam.y), beam.z), x_length=beam.size_x,
                            y_length=beam.size_y, z_length=beam.size_z)
             color = "#b7791f" if beam.orientation == "length" else "#8b5a2b"
-            self.add_mesh(cube, color=color, show_edges=True, edge_color="#4a2c12", smooth_shading=False)
+            actor = self.add_mesh(cube, color=color, show_edges=True, edge_color="#4a2c12", smooth_shading=False,
+                                  pickable=True, name=f"pallet-beam-{beam_index}")
+            axis = "length" if beam_index < length_count else "width"
+            index = beam_index if axis == "length" else beam_index - length_count
+            self._beam_actors[actor] = (axis, index)
         if show_length_gaps:
             self._add_length_gap_dimensions(result)
         if show_width_gaps:
@@ -83,6 +93,51 @@ class PalletView(QtInteractor):
         self._hovered_insertion_actor = None
         self.clear_insertion_preview()
         self.render()
+
+    def enable_deletion_mode(self, callback: Callable[[PalletAxis, int, bool], None]) -> None:
+        """Make only internal beams clickable and show selected ones in red."""
+        self.disable_insertion_mode()
+        self._deletion_mode = True
+        self._deletion_callback = callback
+        self._selected_deletion_actors.clear()
+        self.enable_mesh_picking(callback=self._select_deletion_beam, show=False, left_clicking=True,
+                                 use_actor=True, show_message=False)
+        self.render()
+
+    def disable_deletion_mode(self) -> None:
+        if not self._deletion_mode and not self._selected_deletion_actors:
+            return
+        self.disable_picking()
+        for actor in tuple(self._selected_deletion_actors):
+            self._set_deletion_color(actor, selected=False)
+        self._selected_deletion_actors.clear()
+        self._deletion_callback = None
+        self._deletion_mode = False
+        self.render()
+
+    def _select_deletion_beam(self, actor) -> None:
+        if not self._deletion_mode or actor not in self._beam_actors:
+            return
+        axis, index = self._beam_actors[actor]
+        beam_count = sum(1 for candidate_axis, _ in self._beam_actors.values() if candidate_axis == axis)
+        if index in (0, beam_count - 1):
+            return
+        selected = actor not in self._selected_deletion_actors
+        if selected:
+            self._selected_deletion_actors.add(actor)
+        else:
+            self._selected_deletion_actors.remove(actor)
+        self._set_deletion_color(actor, selected)
+        if self._deletion_callback:
+            self._deletion_callback(axis, index, selected)
+        self.render()
+
+    def _set_deletion_color(self, actor, selected: bool) -> None:
+        axis, _ = self._beam_actors[actor]
+        color = "#d83a3a" if selected else ("#b7791f" if axis == "width" else "#8b5a2b")
+        edge_color = "#7a1717" if selected else "#4a2c12"
+        actor.GetProperty().SetColor(*pv.Color(color).float_rgb)
+        actor.GetProperty().SetEdgeColor(*pv.Color(edge_color).float_rgb)
 
     def show_insertion_preview(self, result: PalletResult, slot: InsertionSlot, clear_gap: float) -> None:
         """Draw a translucent candidate beam without committing it to the model."""

@@ -1,8 +1,9 @@
 import math
+from dataclasses import replace
 
 import pytest
 
-from palletlab.core.calculator import (build_pallet, calculate_direction, insert_beam, insert_beam_input,
+from palletlab.core.calculator import (build_pallet, calculate_direction, delete_beams_input, insert_beam, insert_beam_input,
                                        insertion_slots, pallet_bounds)
 from palletlab.core.models import DirectionInput
 from palletlab.core.validation import CalculationError
@@ -136,6 +137,41 @@ def test_interactive_insertion_persists_at_the_first_and_last_available_gaps(aft
     updated_input = insert_beam_input(LENGTH_EXAMPLE, length, slot.after_beam_index, min(20, slot.maximum_clear_gap))
 
     assert calculate_direction(updated_input).beam_centers == pytest.approx(inserted.length_result.beam_centers)
+
+
+def test_interactive_deletion_preserves_remaining_beams_and_allows_multiple_selection():
+    direction = calculate_direction(LENGTH_EXAMPLE)
+    updated_input = delete_beams_input(LENGTH_EXAMPLE, direction, (1, 3))
+
+    recalculated = calculate_direction(updated_input)
+    assert recalculated.beam_centers == pytest.approx((25, 1293, 3053, 4179))
+    assert updated_input.support_positions is None
+    assert updated_input.support_distances == pytest.approx((1760,))
+    assert updated_input.first_edge_to_support == pytest.approx(1193)
+    assert updated_input.last_support_to_edge == pytest.approx(1051)
+    assert calculate_direction(replace(updated_input, first_edge_to_support=1200)).beam_centers[1] == pytest.approx(1300)
+
+
+def test_interactive_deletion_can_leave_only_the_edge_beams():
+    direction = calculate_direction(WIDTH_EXAMPLE)
+    updated_input = delete_beams_input(WIDTH_EXAMPLE, direction, range(1, direction.beam_count - 1))
+
+    recalculated = calculate_direction(updated_input)
+    assert recalculated.beam_centers == pytest.approx((25, 1911.55))
+    assert updated_input.support_positions == ()
+
+
+def test_empty_support_data_with_zero_edge_distances_means_only_edge_beams():
+    result = calculate_direction(DirectionInput(70, 50, (), 0, 0, 100, 100, support_positions=()))
+
+    assert result.beam_centers == pytest.approx((25, 175))
+
+
+@pytest.mark.parametrize("beam_indices", [(0,), (-1,), (6,)])
+def test_interactive_deletion_rejects_edge_beams(beam_indices):
+    direction = calculate_direction(LENGTH_EXAMPLE)
+    with pytest.raises(CalculationError, match="Крайние"):
+        delete_beams_input(LENGTH_EXAMPLE, direction, beam_indices)
 
 
 class _DimensionRecorder:

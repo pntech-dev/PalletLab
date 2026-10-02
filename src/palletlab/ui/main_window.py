@@ -6,9 +6,10 @@ from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
-from palletlab.core.calculator import (build_pallet, calculate_direction, insert_beam_input, insertion_slots)
+from palletlab.core.calculator import (build_pallet, calculate_direction, delete_beams_input, insert_beam_input,
+                                       insertion_slots)
 from palletlab.core.formatting import format_mm
-from palletlab.core.models import InsertionSlot
+from palletlab.core.models import InsertionSlot, PalletAxis
 from palletlab.core.validation import CalculationError
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         self._last_result = None
         self._last_inputs = {}
         self._pending_insertion: InsertionSlot | None = None
+        self._selected_for_deletion: dict[PalletAxis, set[int]] = {"length": set(), "width": set()}
         self.scene_info = QLabel()
         self.scene_info.setObjectName("sceneInfo")
         self.scene_info.setWordWrap(True)
@@ -171,6 +173,12 @@ class MainWindow(QMainWindow):
         self.add_beam_button.setToolTip("Показать места, куда можно добавить брус.")
         self.add_beam_button.toggled.connect(self._toggle_insertion_mode)
         view_heading.addWidget(self.add_beam_button)
+        self.delete_beam_button = QPushButton("− Удалить брусья")
+        self.delete_beam_button.setObjectName("deleteBeamButton")
+        self.delete_beam_button.setCheckable(True)
+        self.delete_beam_button.setToolTip("Выбрать один или несколько внутренних брусьев для удаления.")
+        self.delete_beam_button.toggled.connect(self._toggle_deletion_mode)
+        view_heading.addWidget(self.delete_beam_button)
         self.insertion_editor = QFrame()
         self.insertion_editor.setObjectName("insertionEditor")
         insertion_layout = QHBoxLayout(self.insertion_editor)
@@ -191,6 +199,20 @@ class MainWindow(QMainWindow):
         insertion_layout.addWidget(self.insertion_hint)
         self.insertion_editor.setVisible(False)
         view_heading.addWidget(self.insertion_editor)
+        self.deletion_editor = QFrame()
+        self.deletion_editor.setObjectName("deletionEditor")
+        deletion_layout = QHBoxLayout(self.deletion_editor)
+        deletion_layout.setContentsMargins(8, 4, 8, 4)
+        deletion_layout.setSpacing(6)
+        self.deletion_hint = QLabel()
+        self.deletion_hint.setObjectName("deletionHint")
+        deletion_layout.addWidget(self.deletion_hint)
+        self.confirm_deletion_button = QPushButton()
+        self.confirm_deletion_button.setObjectName("confirmDeletionButton")
+        self.confirm_deletion_button.clicked.connect(self._confirm_deletion)
+        deletion_layout.addWidget(self.confirm_deletion_button)
+        self.deletion_editor.setVisible(False)
+        view_heading.addWidget(self.deletion_editor)
         view_heading.addStretch()
         unit_label = QLabel("мм")
         unit_label.setObjectName("paneHint")
@@ -219,6 +241,7 @@ class MainWindow(QMainWindow):
         self.show_width_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.setStyleSheet(self._stylesheet())
         self.add_beam_button.installEventFilter(self)
+        self.delete_beam_button.installEventFilter(self)
         self.view.installEventFilter(self)
 
     def _header(self) -> QFrame:
@@ -287,8 +310,15 @@ class MainWindow(QMainWindow):
             QPushButton#addBeamButton { border-color: #4b7a76; color: #1f5c58; font-weight: 650; }
             QPushButton#addBeamButton:hover { background: #e7f0ed; }
             QPushButton#addBeamButton:checked { background: #255e64; border-color: #255e64; color: #fff; }
+            QPushButton#deleteBeamButton { border-color: #b84a43; color: #9a322c; font-weight: 650; }
+            QPushButton#deleteBeamButton:hover { background: #f9e5e2; }
+            QPushButton#deleteBeamButton:checked { background: #a53b35; border-color: #a53b35; color: #fff; }
             QFrame#insertionEditor { background: #e7f0ed; border: 1px solid #b9d4cd; border-radius: 7px; }
             QLabel#insertionHint { color: #55706a; font-size: 11px; }
+            QFrame#deletionEditor { background: #fbe9e7; border: 1px solid #edb7b1; border-radius: 7px; }
+            QLabel#deletionHint { color: #81332e; font-size: 11px; }
+            QPushButton#confirmDeletionButton { background: #b83e37; border-color: #b83e37; color: #fff; font-weight: 650; padding: 6px 9px; }
+            QPushButton#confirmDeletionButton:disabled { background: #e3b9b5; border-color: #e3b9b5; color: #fff; }
             QComboBox#cameraCombo { min-width: 115px; }
             QPushButton#cameraButton { padding: 6px 12px; font-size: 12px; }
             QTextBrowser#resultCard { background: #f9f7f1; border: 1px solid #ece6dc; border-radius: 9px; padding: 4px 10px; }
@@ -340,6 +370,8 @@ class MainWindow(QMainWindow):
             self._cancel_pending_insertion()
             self.view.disable_insertion_mode()
             return
+        if self.delete_beam_button.isChecked():
+            self.delete_beam_button.setChecked(False)
         if self._last_result is None:
             self.add_beam_button.setChecked(False)
             return
@@ -350,6 +382,56 @@ class MainWindow(QMainWindow):
             return
         self.view.enable_insertion_mode(self._last_result, slots, self._start_insertion)
         self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
+
+    def _toggle_deletion_mode(self, enabled: bool) -> None:
+        if not enabled:
+            self._selected_for_deletion = {"length": set(), "width": set()}
+            self.deletion_editor.setVisible(False)
+            self.view.disable_deletion_mode()
+            return
+        if self.add_beam_button.isChecked():
+            self.add_beam_button.setChecked(False)
+        if self._last_result is None:
+            self.delete_beam_button.setChecked(False)
+            return
+        self._selected_for_deletion = {"length": set(), "width": set()}
+        self.deletion_editor.setVisible(True)
+        self._update_deletion_editor()
+        self.view.enable_deletion_mode(self._selection_changed)
+        self.statusBar().showMessage("Нажмите на внутренние брусья для выбора. Крайние брусья удалить нельзя.")
+
+    def _selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
+        selected_indices = self._selected_for_deletion[axis]
+        if selected:
+            selected_indices.add(index)
+        else:
+            selected_indices.discard(index)
+        self._update_deletion_editor()
+
+    def _update_deletion_editor(self) -> None:
+        count = sum(len(indices) for indices in self._selected_for_deletion.values())
+        self.deletion_hint.setText("Выделено: " + (f"{count}. Красные брусья будут удалены." if count else "0. Выберите брусья в модели."))
+        self.confirm_deletion_button.setText(f"Удалить выбранные ({count})")
+        self.confirm_deletion_button.setEnabled(count > 0)
+
+    def _confirm_deletion(self) -> None:
+        if self._last_result is None:
+            return
+        try:
+            for axis, indices in self._selected_for_deletion.items():
+                if not indices:
+                    continue
+                direction = self._last_result.length_result if axis == "length" else self._last_result.width_result
+                updated_input = delete_beams_input(self._last_inputs[axis], direction, indices)
+                panel = self.length_panel if axis == "length" else self.width_panel
+                panel.apply_position_data(updated_input)
+        except CalculationError as exc:
+            self.statusBar().showMessage(str(exc))
+            return
+        deleted = sum(len(indices) for indices in self._selected_for_deletion.values())
+        self.delete_beam_button.setChecked(False)
+        self.calculate()
+        self.statusBar().showMessage(f"Удалено брусьев: {deleted}.")
 
     def _start_insertion(self, slot: InsertionSlot) -> None:
         if self._last_result is None:
@@ -398,8 +480,11 @@ class MainWindow(QMainWindow):
         self.calculate()
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key_Escape and self.add_beam_button.isChecked():
-            self.add_beam_button.setChecked(False)
+        if event.key() == Qt.Key_Escape and (self.add_beam_button.isChecked() or self.delete_beam_button.isChecked()):
+            if self.add_beam_button.isChecked():
+                self.add_beam_button.setChecked(False)
+            else:
+                self.delete_beam_button.setChecked(False)
             event.accept()
             return
         super().keyPressEvent(event)
@@ -408,6 +493,9 @@ class MainWindow(QMainWindow):
         if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
                 and self.add_beam_button.isChecked() and self._pending_insertion is None):
             self.add_beam_button.setChecked(False)
+            return True
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape and self.delete_beam_button.isChecked():
+            self.delete_beam_button.setChecked(False)
             return True
         return super().eventFilter(watched, event)
 
@@ -437,6 +525,8 @@ class MainWindow(QMainWindow):
         self._refresh_dimension_annotations()
         if self.add_beam_button.isChecked():
             self._toggle_insertion_mode(True)
+        elif self.delete_beam_button.isChecked():
+            self._toggle_deletion_mode(True)
         self._set_stale(False)
 
     def reset_example(self) -> None:

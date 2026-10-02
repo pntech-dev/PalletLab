@@ -47,8 +47,6 @@ def calculate_direction(data: DirectionInput) -> DirectionResult:
     _validate_measurements(
         (("Высота бруса", data.beam_height), ("Ширина бруса", data.beam_width))
     )
-    if not data.support_distances:
-        raise CalculationError("Укажите хотя бы одно расстояние между центрами соседних опор.")
     _validate_measurements(
         (("Расстояние между опорами", value) for value in data.support_distances)
     )
@@ -68,9 +66,13 @@ def calculate_direction(data: DirectionInput) -> DirectionResult:
         pallet_size = round_to_fifty(raw_pallet_size) if data.rounding_step == 50 else round_up_to_five(raw_pallet_size)
     else:
         pallet_size = raw_pallet_size
-    support_positions = [data.margin_start + data.first_edge_to_support]
-    for distance in data.support_distances:
-        support_positions.append(support_positions[-1] + distance)
+    if data.support_positions is None:
+        support_positions = [data.margin_start + data.first_edge_to_support]
+        for distance in data.support_distances:
+            support_positions.append(support_positions[-1] + distance)
+    else:
+        _validate_measurements((("Позиция опоры", value) for value in data.support_positions))
+        support_positions = list(data.support_positions)
     centers = [data.beam_width / 2, *support_positions, pallet_size - data.beam_width / 2]
 
     for index, center in enumerate(centers):
@@ -142,6 +144,10 @@ def insert_beam_input(
 ) -> DirectionInput:
     """Translate a face-gap insertion into the existing support-spacing input model."""
     center = inserted_beam_center(direction, after_beam_index, clear_gap)
+    if data.support_positions is not None:
+        positions = list(data.support_positions)
+        positions.insert(after_beam_index, center)
+        return _input_with_support_positions(data, direction, positions)
     distances = list(data.support_distances)
     if after_beam_index == 0:
         distances.insert(0, direction.beam_centers[1] - center)
@@ -159,6 +165,42 @@ def insert_beam_input(
         center - direction.beam_centers[after_beam_index], next_center - center
     ]
     return replace(data, support_distances=tuple(distances))
+
+
+def _input_with_support_positions(
+    data: DirectionInput, direction: DirectionResult, positions: Iterable[float]
+) -> DirectionInput:
+    """Encode support centres in editable form fields whenever possible."""
+    centres = tuple(positions)
+    if not centres:
+        # A blank distances field normally represents one support; retaining
+        # this explicit empty tuple is the only unambiguous zero-support case.
+        return replace(data, support_distances=(), support_positions=())
+    return replace(
+        data,
+        support_distances=tuple(right - left for left, right in zip(centres, centres[1:])),
+        first_edge_to_support=centres[0] - data.margin_start,
+        last_support_to_edge=direction.raw_pallet_size - data.margin_end - centres[-1],
+        support_positions=None,
+    )
+
+
+def delete_beams_input(
+    data: DirectionInput, direction: DirectionResult, beam_indices: Iterable[int]
+) -> DirectionInput:
+    """Persist removal of one or more non-edge beams from a direction.
+
+    Beam indices refer to ``direction.beam_centers``.  The two outer beams are
+    structural pallet edges and deliberately cannot be removed.
+    """
+    selected = set(beam_indices)
+    if not selected:
+        return data
+    last_index = len(direction.beam_centers) - 1
+    if any(not 0 < index < last_index for index in selected):
+        raise CalculationError("Крайние брусья удалять нельзя.")
+    remaining = tuple(center for index, center in enumerate(direction.beam_centers) if index not in selected)
+    return _input_with_support_positions(data, direction, remaining[1:-1])
 
 
 def build_pallet(length: DirectionResult, width: DirectionResult, upper_layer: LayerDirection = "width") -> PalletResult:

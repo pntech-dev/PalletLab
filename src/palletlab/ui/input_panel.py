@@ -42,6 +42,7 @@ class DirectionInputPanel(QGroupBox):
         self.last = self._spin(float(last))
         self.margin_start = self._spin(100.0)
         self.margin_end = self._spin(100.0)
+        self._support_positions_override: tuple[float, ...] | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 20, 16, 16)
         layout.setSpacing(10)
@@ -64,8 +65,8 @@ class DirectionInputPanel(QGroupBox):
         layout.addLayout(form)
         self.section.currentTextChanged.connect(self._section_changed)
         for field in (self.height, self.width, self.first, self.last, self.margin_start, self.margin_end):
-            field.valueChanged.connect(self.changed)
-        self.distances.textChanged.connect(self.changed)
+            field.valueChanged.connect(self._position_data_changed)
+        self.distances.textChanged.connect(self._position_data_changed)
         self._section_changed(self.section.currentText())
 
     @staticmethod
@@ -88,31 +89,49 @@ class DirectionInputPanel(QGroupBox):
             self.width.setValue(dimensions[1])
         self.changed.emit()
 
+    def _position_data_changed(self, *_args) -> None:
+        """Manual edits resume the normal distances-based calculation."""
+        self._support_positions_override = None
+        self.changed.emit()
+
     def values(self, round_pallet_size: bool = False, rounding_step: int = 5) -> DirectionInput:
         raw = self.distances.text().strip().replace(",", ".")
-        if not raw:
-            raise CalculationError("Заполните расстояния между центрами соседних опор.")
         try:
-            distances = tuple(float(token) for token in raw.split())
+            distances = tuple(float(token) for token in raw.split()) if raw else ()
         except ValueError as exc:
             raise CalculationError("Расстояния между опорами должны быть числами через пробел.") from exc
+        support_positions = self._support_positions_override
+        # With no inter-support distances, zero values on both sides mean the
+        # user intentionally removed every internal support.  Keep only the
+        # two structural edge beams instead of inventing a central one.
+        if support_positions is None and not distances and self.first.value() == 0 and self.last.value() == 0:
+            support_positions = ()
         return DirectionInput(
             beam_height=self.height.value(), beam_width=self.width.value(), support_distances=distances,
             first_edge_to_support=self.first.value(), last_support_to_edge=self.last.value(),
             margin_start=self.margin_start.value(), margin_end=self.margin_end.value(),
             round_pallet_size=round_pallet_size,
             rounding_step=rounding_step,
+            support_positions=support_positions,
         )
 
     def apply_position_data(self, data: DirectionInput) -> None:
         """Update only the position fields after an interactive 3D insertion."""
+        fields = (self.distances, self.first, self.last, self.margin_start, self.margin_end)
+        for field in fields:
+            field.blockSignals(True)
         self.distances.setText(" ".join(f"{value:g}" for value in data.support_distances))
         self.first.setValue(data.first_edge_to_support)
         self.last.setValue(data.last_support_to_edge)
         self.margin_start.setValue(data.margin_start)
         self.margin_end.setValue(data.margin_end)
+        for field in fields:
+            field.blockSignals(False)
+        self._support_positions_override = data.support_positions
+        self.changed.emit()
 
     def reset_example(self, distances: str, first: float, last: float) -> None:
+        self._support_positions_override = None
         self.section.setCurrentText("70 × 50 мм")
         self.distances.setText(distances)
         self.first.setValue(first)
