@@ -10,6 +10,7 @@ from palletlab.core.calculator import (build_pallet, calculate_direction, delete
                                        insertion_slots, set_beam_face_distance_input)
 from palletlab.core.formatting import format_mm
 from palletlab.core.models import InsertionSlot, PalletAxis
+from palletlab.core.project_state import ProjectState
 from palletlab.core.validation import CalculationError
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
@@ -35,8 +36,56 @@ class InsertionGapSpinBox(QDoubleSpinBox):
 
 
 class MainWindow(QMainWindow):
+    # Transitional aliases keep the existing event handlers stable while their
+    # data is now owned by ProjectState. They will disappear with the
+    # controller extraction in the next MVC steps.
+    @property
+    def _last_result(self):
+        return self.state.result
+
+    @_last_result.setter
+    def _last_result(self, value) -> None:
+        self.state.result = value
+
+    @property
+    def _last_inputs(self) -> dict[PalletAxis, object]:
+        return {
+            "length": self.state.length_input,
+            "width": self.state.width_input,
+        }
+
+    @_last_inputs.setter
+    def _last_inputs(self, values) -> None:
+        self.state.length_input = values["length"]
+        self.state.width_input = values["width"]
+
+    @property
+    def _pending_insertion(self) -> InsertionSlot | None:
+        return self.state.pending_insertion
+
+    @_pending_insertion.setter
+    def _pending_insertion(self, value: InsertionSlot | None) -> None:
+        self.state.pending_insertion = value
+
+    @property
+    def _pending_distance(self) -> tuple[PalletAxis, int] | None:
+        return self.state.pending_distance
+
+    @_pending_distance.setter
+    def _pending_distance(self, value: tuple[PalletAxis, int] | None) -> None:
+        self.state.pending_distance = value
+
+    @property
+    def _selected_for_deletion(self) -> dict[PalletAxis, set[int]]:
+        return self.state.selected_for_deletion
+
+    @_selected_for_deletion.setter
+    def _selected_for_deletion(self, value: dict[PalletAxis, set[int]]) -> None:
+        self.state.selected_for_deletion = value
+
     def __init__(self) -> None:
         super().__init__()
+        self.state = ProjectState()
         self.setWindowTitle("PalletLab — расчёт поддонов")
         screen = QApplication.primaryScreen().availableGeometry()
         self.resize(min(1400, int(screen.width() * 0.92)), min(900, int(screen.height() * 0.90)))
@@ -55,11 +104,6 @@ class MainWindow(QMainWindow):
         self.show_width_gaps = QCheckBox("Расстояния по ширине")
         self.show_length_gaps.setChecked(True)
         self.show_width_gaps.setChecked(True)
-        self._last_result = None
-        self._last_inputs = {}
-        self._pending_insertion: InsertionSlot | None = None
-        self._pending_distance: tuple[PalletAxis, int] | None = None
-        self._selected_for_deletion: dict[PalletAxis, set[int]] = {"length": set(), "width": set()}
         self._rebuild_timer = QTimer(self)
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(300)
@@ -260,7 +304,7 @@ class MainWindow(QMainWindow):
         self.length_panel.changed.connect(self._schedule_recalculation)
         self.width_panel.changed.connect(self._schedule_recalculation)
         self.layer_buttons.buttonClicked.connect(self._layer_changed)
-        self.rounding_buttons.buttonClicked.connect(self._schedule_recalculation)
+        self.rounding_buttons.buttonClicked.connect(self._rounding_changed)
         self.show_length_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.show_width_gaps.toggled.connect(self._refresh_dimension_annotations)
         self.setStyleSheet(self._stylesheet())
@@ -382,6 +426,11 @@ class MainWindow(QMainWindow):
         self.calculate(show_error=False)
 
     def _layer_changed(self, *_args) -> None:
+        self.state.upper_layer = self.upper_layer()
+        self._schedule_recalculation()
+
+    def _rounding_changed(self, *_args) -> None:
+        self.state.rounding_step = self.rounding_buttons.checkedId()
         self._schedule_recalculation()
 
     def _set_camera(self, index: int) -> None:
@@ -391,18 +440,23 @@ class MainWindow(QMainWindow):
             "front": self.view.camera_front,
             "side": self.view.camera_side,
         }
-        handlers[self.camera_combo.itemData(index)]()
+        camera = self.camera_combo.itemData(index)
+        self.state.camera = camera
+        handlers[camera]()
 
     def _refresh_dimension_annotations(self) -> None:
+        self.state.show_length_dimensions = self.show_length_gaps.isChecked()
+        self.state.show_width_dimensions = self.show_width_gaps.isChecked()
         if self._last_result is not None:
             self.view.update_dimension_annotations(
                 self._last_result,
-                show_length_gaps=self.show_length_gaps.isChecked(),
-                show_width_gaps=self.show_width_gaps.isChecked(),
+                show_length_gaps=self.state.show_length_dimensions,
+                show_width_gaps=self.state.show_width_dimensions,
             )
 
     def _toggle_insertion_mode(self, enabled: bool) -> None:
         if not enabled:
+            self.state.active_tool = "none"
             self._cancel_pending_insertion()
             self.view.disable_insertion_mode()
             return
@@ -419,10 +473,12 @@ class MainWindow(QMainWindow):
             self.add_beam_button.setChecked(False)
             return
         self.view.enable_insertion_mode(self._last_result, slots, self._start_insertion)
+        self.state.active_tool = "insertion"
         self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
 
     def _toggle_deletion_mode(self, enabled: bool) -> None:
         if not enabled:
+            self.state.active_tool = "none"
             self._selected_for_deletion = {"length": set(), "width": set()}
             self.deletion_editor.setVisible(False)
             self.view.disable_deletion_mode()
@@ -438,10 +494,12 @@ class MainWindow(QMainWindow):
         self.deletion_editor.setVisible(True)
         self._update_deletion_editor()
         self.view.enable_deletion_mode(self._selection_changed)
+        self.state.active_tool = "deletion"
         self.statusBar().showMessage("Нажмите на внутренние брусья для выбора. Крайние брусья удалить нельзя.")
 
     def _toggle_distance_editing(self, enabled: bool) -> None:
         if not enabled:
+            self.state.active_tool = "none"
             self._cancel_pending_distance_edit()
             self.view.disable_distance_editing()
             return
@@ -453,6 +511,7 @@ class MainWindow(QMainWindow):
             self.edit_distance_button.setChecked(False)
             return
         self.view.enable_distance_editing(self._last_result, self._start_distance_edit)
+        self.state.active_tool = "distance_editing"
         self.statusBar().showMessage("Наведите курсор на размерную линию и нажмите: внутренний брус или общий габарит.")
 
     def _start_distance_edit(self, axis: PalletAxis, beam_index: int, value: float) -> None:
@@ -607,11 +666,13 @@ class MainWindow(QMainWindow):
         self._rebuild_timer.stop()
         try:
             rounding_step = self.rounding_buttons.checkedId()
+            self.state.rounding_step = rounding_step
+            self.state.upper_layer = self.upper_layer()
             length_input = self.length_panel.values(rounding_step != 0, rounding_step or 5)
             width_input = self.width_panel.values(rounding_step != 0, rounding_step or 5)
             length = calculate_direction(length_input)
             width = calculate_direction(width_input)
-            result = build_pallet(length, width, self.upper_layer())
+            result = build_pallet(length, width, self.state.upper_layer)
         except CalculationError as exc:
             self._set_stale(True)
             self.statusBar().showMessage(str(exc))
@@ -626,8 +687,8 @@ class MainWindow(QMainWindow):
         # path is reserved for the two dimension visibility checkboxes.
         self.view.show_pallet(
             result,
-            show_length_gaps=self.show_length_gaps.isChecked(),
-            show_width_gaps=self.show_width_gaps.isChecked(),
+            show_length_gaps=self.state.show_length_dimensions,
+            show_width_gaps=self.state.show_width_dimensions,
         )
         if self.add_beam_button.isChecked():
             self._toggle_insertion_mode(True)

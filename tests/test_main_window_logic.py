@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from palletlab.core.calculator import build_pallet, calculate_direction, insertion_slots
 from palletlab.core.models import DirectionInput
+from palletlab.core.project_state import ProjectState
 from palletlab.ui.main_window import MainWindow
 
 
@@ -101,6 +102,7 @@ def test_calculate_rebuilds_model_from_current_panels():
     stale_values = []
     window = SimpleNamespace(
         _rebuild_timer=timer,
+        state=ProjectState(),
         rounding_buttons=SimpleNamespace(checkedId=lambda: 50),
         length_panel=_Panel(LENGTH_INPUT),
         width_panel=_Panel(WIDTH_INPUT),
