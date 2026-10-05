@@ -14,6 +14,7 @@ from palletlab.core.calculator import (
     set_beam_face_distance_input,
 )
 from palletlab.core.models import DirectionInput, InsertionSlot, LayerDirection, PalletAxis, PalletResult
+from palletlab.core.persistence import ProjectPersistenceError, load_project, save_project
 from palletlab.core.project_state import ProjectState, ToolMode
 from palletlab.core.validation import CalculationError
 from palletlab.controllers.viewport_geometry import editable_dimensions, insertion_markers, insertion_preview
@@ -31,6 +32,7 @@ class PalletController:
         on_error: Callable[[CalculationError, bool], None],
         on_stale_changed: Callable[[bool], None],
         input_provider: Callable[[], tuple[DirectionInput, DirectionInput, LayerDirection]] | None = None,
+        on_project_loaded: Callable[[ProjectState], None] | None = None,
         parent=None,
         timer=None,
     ) -> None:
@@ -40,6 +42,7 @@ class PalletController:
         self._on_error = on_error
         self._on_stale_changed = on_stale_changed
         self._input_provider = input_provider
+        self._on_project_loaded = on_project_loaded
         self._rebuild_timer = timer or QTimer(parent)
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(300)
@@ -113,6 +116,27 @@ class PalletController:
 
     def set_rounding_step(self, rounding_step: int) -> None:
         self.state.rounding_step = rounding_step
+
+    def save_project(self, path: str) -> bool:
+        """Persist the stable project configuration for a future Save command."""
+        try:
+            save_project(path, self.state)
+        except (OSError, ProjectPersistenceError) as exc:
+            self._on_error(CalculationError(str(exc)), False)
+            return False
+        return True
+
+    def open_project(self, path: str) -> PalletResult | None:
+        """Load a saved configuration, synchronise the view and rebuild it."""
+        try:
+            loaded = load_project(path)
+        except ProjectPersistenceError as exc:
+            self._on_error(CalculationError(str(exc)), False)
+            return None
+        self.state.__dict__.update(loaded.__dict__)
+        if self._on_project_loaded is not None:
+            self._on_project_loaded(self.state)
+        return self.recalculate_from_state()
 
     def activate_tool(self, tool: ToolMode) -> None:
         self.state.active_tool = tool

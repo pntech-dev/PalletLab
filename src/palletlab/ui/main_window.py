@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QSignalBlocker, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
             on_error=self._handle_calculation_error,
             on_stale_changed=self._set_stale,
             input_provider=self._read_calculation_inputs,
+            on_project_loaded=self._apply_loaded_project,
             parent=self,
         )
         self.show_length_gaps = QCheckBox("Расстояния по длине")
@@ -661,6 +662,27 @@ class MainWindow(QMainWindow):
             self.width_panel.values(rounding_step != 0, rounding_step or 5),
             self.state.upper_layer,
         )
+
+    def _apply_loaded_project(self, state: ProjectState) -> None:
+        """Reflect an opened configuration in form controls without queuing rebuilds."""
+        if state.length_input is None or state.width_input is None:
+            return
+        blockers = [QSignalBlocker(widget) for widget in (
+            self.length_panel, self.width_panel, self.width_upper, self.length_upper,
+            self.round_to_50, self.round_to_5, self.no_rounding, self.show_length_gaps,
+            self.show_width_gaps, self.camera_combo,
+        )]
+        self.length_panel.apply_position_data(state.length_input)
+        self.width_panel.apply_position_data(state.width_input)
+        self.length_upper.setChecked(state.upper_layer == "length")
+        self.width_upper.setChecked(state.upper_layer == "width")
+        {50: self.round_to_50, 5: self.round_to_5, 0: self.no_rounding}[state.rounding_step].setChecked(True)
+        self.show_length_gaps.setChecked(state.show_length_dimensions)
+        self.show_width_gaps.setChecked(state.show_width_dimensions)
+        camera_index = self.camera_combo.findData(state.camera)
+        self.camera_combo.setCurrentIndex(camera_index)
+        del blockers
+        self._set_camera(camera_index)
 
     def reset_example(self) -> None:
         self.length_panel.reset_example("1070 460 1300 499", 123, 552)

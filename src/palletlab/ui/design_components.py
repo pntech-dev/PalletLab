@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPixmap, QTransform
-from PyQt5.QtSvg import QSvgRenderer
+from PyQt5.QtSvg import QSvgRenderer, QSvgWidget
 from PyQt5.QtWidgets import (QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                              QSizePolicy, QVBoxLayout, QWidget)
 
@@ -336,6 +336,393 @@ class DesignInputField(QFrame):
         )
         self.caption.setStyleSheet("color: #404040; font-family: 'Segoe UI'; font-size: 14px;")
         self.error_label.setVisible(error)
+
+
+class _TextButton(QPushButton):
+    """Base class for the three text button visual variants."""
+
+    def __init__(self, text: str, qss: str, parent=None) -> None:
+        super().__init__(text, parent)
+        self.setFixedHeight(36)
+        self.setFocusPolicy(Qt.TabFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet(qss)
+
+
+class PrimaryButton(_TextButton):
+    QSS = """
+        PrimaryButton { padding: 6px 16px; color: #ffffff; background: #2b7fff;
+                        border: none; border-radius: 8px; font-family: 'Segoe UI'; font-size: 16px; }
+        PrimaryButton:hover { background: #51a2ff; }
+        PrimaryButton:pressed { background: #155dfc; }
+        PrimaryButton:focus { border: 1px solid #2b7fff; border-radius: 8px; }
+        PrimaryButton:disabled { color: #ffffff; background: #dbeafe; }
+    """
+
+    def __init__(self, text: str, parent=None) -> None:
+        super().__init__(text, self.QSS, parent)
+        self.setMinimumWidth(142)
+
+
+class SecondaryButton(_TextButton):
+    QSS = """
+        SecondaryButton { padding: 6px 16px; color: #404040; background: #ffffff;
+                          border: 1px solid #d4d4d4; border-radius: 8px; font-family: 'Segoe UI'; font-size: 16px; }
+        SecondaryButton:hover { color: #0a0a0a; background: #f5f5f5; border-color: #737373; }
+        SecondaryButton:pressed { color: #0a0a0a; background: #e5e5e5; border-color: #737373; }
+        SecondaryButton:focus { border: 2px solid #2b7fff; border-radius: 8px; }
+        SecondaryButton:disabled { color: #e5e5e5; background: #ffffff; border-color: #f5f5f5; }
+    """
+
+    def __init__(self, text: str, parent=None) -> None:
+        super().__init__(text, self.QSS, parent)
+        self.setMinimumWidth(144)
+
+
+class TertiaryButton(_TextButton):
+    QSS = """
+        TertiaryButton { padding: 6px 16px; color: #2b7fff; background: #ffffff;
+                         border: none; border-radius: 8px; font-family: 'Segoe UI'; font-size: 16px; }
+        TertiaryButton:hover { background: #f5f5f5; }
+        TertiaryButton:pressed { background: #e5e5e5; }
+        TertiaryButton:focus { border: 1px solid #2b7fff; border-radius: 8px; }
+        TertiaryButton:disabled { color: #e5e5e5; background: #ffffff; }
+    """
+
+    def __init__(self, text: str, parent=None) -> None:
+        super().__init__(text, self.QSS, parent)
+        self.setMinimumWidth(142)
+
+
+class _TintedSvgIcon(QLabel):
+    """A local SVG tinted at run time, so button states do not need duplicate assets."""
+
+    def __init__(self, asset_name: str, *, size: int = 20, parent=None) -> None:
+        super().__init__(parent)
+        self._path = Path(__file__).parent / "assets" / "icons" / asset_name
+        self._size = size
+        self.setFixedSize(size, size)
+        self.setAlignment(Qt.AlignCenter)
+
+    def set_color(self, color: str) -> None:
+        source = QPixmap(self._size, self._size)
+        source.fill(Qt.transparent)
+        renderer = QSvgRenderer(str(self._path))
+        painter = QPainter(source)
+        renderer.render(painter)
+        painter.end()
+        result = QPixmap(self._size, self._size)
+        result.fill(Qt.transparent)
+        painter = QPainter(result)
+        painter.drawPixmap(0, 0, source)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(result.rect(), QColor(color))
+        painter.end()
+        self.setPixmap(result)
+
+
+class _BaseIconButton(QFrame):
+    clicked = pyqtSignal()
+
+    def __init__(self, icon_name: str, text: str | None, parent=None) -> None:
+        super().__init__(parent)
+        self._hovered = False
+        self._pressed = False
+        self.setAttribute(Qt.WA_Hover)
+        self.setFocusPolicy(Qt.TabFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(36)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+        self.icon = _TintedSvgIcon(icon_name)
+        layout.addWidget(self.icon)
+        self.label = None
+        if text is not None:
+            self.label = QLabel(text)
+            layout.addWidget(self.label)
+        self._refresh_state()
+
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self._refresh_state()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self._refresh_state()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if self.isEnabled() and event.button() == Qt.LeftButton:
+            self._pressed = True
+            self._refresh_state()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        was_pressed = self._pressed
+        self._pressed = False
+        self._refresh_state()
+        if was_pressed and self.rect().contains(event.pos()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+    def focusInEvent(self, event) -> None:
+        self._refresh_state()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:
+        self._refresh_state()
+        super().focusOutEvent(event)
+
+    def setEnabled(self, enabled: bool) -> None:  # noqa: N802
+        super().setEnabled(enabled)
+        self.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
+        self._refresh_state()
+
+    def _refresh_state(self) -> None:
+        background, icon_color, text_color = self._state_colors()
+        focus_border = "1px solid #2b7fff" if self.hasFocus() and self.isEnabled() else "none"
+        self.setStyleSheet(f"QFrame {{ background: {background}; border: {focus_border}; border-radius: 8px; }}")
+        self.icon.set_color(icon_color)
+        if self.label is not None:
+            self.label.setStyleSheet(f"color: {text_color}; font-family: 'Segoe UI'; font-size: 16px;")
+
+    def _state_colors(self) -> tuple[str, str, str]:
+        raise NotImplementedError
+
+
+class IconButton(_BaseIconButton):
+    """Icon + optional text action button from the Figma icon_button component."""
+
+    def __init__(self, text: str = "Добавить", *, icon_name: str = "plus.svg", parent=None) -> None:
+        super().__init__(icon_name, text, parent)
+
+    def _state_colors(self) -> tuple[str, str, str]:
+        if not self.isEnabled():
+            return "#ffffff", "#d4d4d4", "#d4d4d4"
+        if self._pressed:
+            return "#f5f5f5", "#0a0a0a", "#0a0a0a"
+        if self._hovered:
+            return "#fafafa", "#404040", "#404040"
+        return "#ffffff", "#737373", "#737373"
+
+
+class CloseButton(_BaseIconButton):
+    """Standalone close action; its icon palette intentionally differs from IconButton."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__("cross.svg", None, parent)
+
+    def _state_colors(self) -> tuple[str, str, str]:
+        if not self.isEnabled():
+            return "#ffffff", "#e5e5e5", "#e5e5e5"
+        if self._pressed:
+            return "#e5e5e5", "#0a0a0a", "#0a0a0a"
+        if self._hovered:
+            return "#f5f5f5", "#0a0a0a", "#0a0a0a"
+        return "#ffffff", "#404040", "#404040"
+
+
+class _MessageBox(QFrame):
+    """Shared layout for information and warning callouts."""
+
+    def __init__(self, title: str, text: str, *, icon_name: str, background: str, border: str, foreground: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("messageBox")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+        self.icon = _TintedSvgIcon(icon_name, size=24)
+        self.icon.set_color(foreground)
+        layout.addWidget(self.icon, alignment=Qt.AlignTop)
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(8)
+        self.title_label = QLabel(title)
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet(f"color: {foreground}; font-family: 'Segoe UI'; font-size: 18px; font-weight: 700;")
+        self.text_label = QLabel(text)
+        self.text_label.setWordWrap(True)
+        self.text_label.setStyleSheet(f"color: {foreground}; font-family: 'Segoe UI'; font-size: 16px;")
+        text_layout.addWidget(self.title_label)
+        text_layout.addWidget(self.text_label)
+        layout.addLayout(text_layout, 1)
+        self.setStyleSheet(
+            f"QFrame#messageBox {{ background: {background}; border: 1px solid {border}; border-radius: 16px; }}"
+        )
+
+
+class WarningBox(_MessageBox):
+    """Orange warning callout requiring a title and explanatory text."""
+
+    def __init__(self, title: str, text: str, parent=None) -> None:
+        super().__init__(
+            title, text,
+            icon_name="warning.svg", background="#fff7ed", border="#ffb86a", foreground="#894b00", parent=parent,
+        )
+
+
+class InfoBox(_MessageBox):
+    """Blue informational callout requiring a title and explanatory text."""
+
+    def __init__(self, title: str, text: str, parent=None) -> None:
+        super().__init__(
+            title, text,
+            icon_name="info.svg", background="#eff6ff", border="#8ec5ff", foreground="#193cb8", parent=parent,
+        )
+
+
+class NumberIndicator(QFrame):
+    """A compact numbered marker used to annotate controls and instructions."""
+
+    def __init__(self, number: int | str = 1, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("numberIndicator")
+        self.setFixedSize(28, 28)
+        self.setStyleSheet(
+            "QFrame#numberIndicator { background: #2b7fff; border: none; border-radius: 14px; }"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        self.number_label = QLabel(str(number))
+        self.number_label.setAlignment(Qt.AlignCenter)
+        self.number_label.setStyleSheet(
+            "color: #ffffff; background: transparent; border: none; "
+            "font-family: 'Segoe UI'; font-size: 18px; font-weight: 700;"
+        )
+        layout.addWidget(self.number_label)
+
+    def set_number(self, number: int | str) -> None:
+        """Change the visible marker number without recreating the component."""
+        self.number_label.setText(str(number))
+
+
+class InfoHint(QWidget):
+    """Inline help text paired with a caller-supplied SVG icon."""
+
+    def __init__(self, icon_name: str, text: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("infoHint")
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.icon = _TintedSvgIcon(icon_name, size=20)
+        self.icon.set_color("#737373")
+        layout.addWidget(self.icon)
+        self.text_label = QLabel(text)
+        self.text_label.setStyleSheet(
+            "color: #737373; font-family: 'Segoe UI'; font-size: 14px; "
+            "background: transparent; border: none;"
+        )
+        layout.addWidget(self.text_label)
+
+
+class PalletSizeProperty(QWidget):
+    """A pallet dimension display whose axis selects its own icon and label."""
+
+    _AXES = {
+        "x": ("size-X.svg", "Длина"),
+        "y": ("size-y.svg", "Ширина"),
+        "z": ("size-Z.svg", "Высота"),
+    }
+
+    def __init__(self, axis: str, size: int | float | str, parent=None) -> None:
+        super().__init__(parent)
+        axis_key = axis.lower()
+        if axis_key not in self._AXES:
+            raise ValueError("axis must be one of: 'x', 'y', 'z'")
+
+        icon_name, label = self._AXES[axis_key]
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        self.setMinimumHeight(40)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+
+        icon_surface = QFrame()
+        icon_surface.setObjectName("sizePropertyIconSurface")
+        icon_surface.setFixedSize(40, 40)
+        icon_surface.setStyleSheet(
+            "QFrame#sizePropertyIconSurface { background: #f5f5f5; border: none; border-radius: 8px; }"
+        )
+        icon_layout = QVBoxLayout(icon_surface)
+        icon_layout.setContentsMargins(8, 8, 8, 8)
+        self.icon = _TintedSvgIcon(icon_name, size=24)
+        self.icon.set_color("#737373")
+        icon_layout.addWidget(self.icon)
+        layout.addWidget(icon_surface)
+
+        content = QVBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(4)
+        self.label = QLabel(label)
+        self.label.setStyleSheet(
+            "color: #404040; font-family: 'Segoe UI'; font-size: 16px; "
+            "font-weight: 400; background: transparent; border: none;"
+        )
+        self.value = QLabel(self._format_size(size))
+        self.value.setStyleSheet(
+            "color: #0a0a0a; font-family: 'Segoe UI'; font-size: 16px; "
+            "font-weight: 700; background: transparent; border: none;"
+        )
+        content.addWidget(self.label)
+        content.addWidget(self.value)
+        layout.addLayout(content)
+
+    @staticmethod
+    def _format_size(size: int | float | str) -> str:
+        value = str(size)
+        return value if value.lower().endswith("мм") else f"{value} мм"
+
+    def set_size(self, size: int | float | str) -> None:
+        """Update the displayed dimension while preserving its unit formatting."""
+        self.value.setText(self._format_size(size))
+
+
+class MaterialProperty(QWidget):
+    """A timber material preview composed from a local beam SVG and its data."""
+
+    BEAM_SVG_PATH = Path(__file__).parent / "assets" / "illustrations" / "material-beam.svg"
+
+    def __init__(self, section: str, size: int | float | str, quantity: int, parent=None) -> None:
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+
+        self.preview = QFrame()
+        self.preview.setObjectName("materialPreview")
+        self.preview.setFixedSize(78, 62)
+        self.preview.setStyleSheet(
+            "QFrame#materialPreview { background: #f5f5f5; border: none; border-radius: 16px; }"
+        )
+        preview_layout = QHBoxLayout(self.preview)
+        preview_layout.setContentsMargins(8, 8, 8, 8)
+        self.beam = QSvgWidget(str(self.BEAM_SVG_PATH)) if self.BEAM_SVG_PATH.exists() else QSvgWidget()
+        self.beam.setObjectName("materialBeam")
+        self.beam.setFixedSize(46, 46)
+        preview_layout.addWidget(self.beam, alignment=Qt.AlignCenter)
+        layout.addWidget(self.preview, alignment=Qt.AlignTop)
+
+        content = QVBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(4)
+        self.name_label = QLabel(f"Брус {section}x{size}")
+        self.name_label.setStyleSheet(
+            "color: #0a0a0a; font-family: 'Segoe UI'; font-size: 16px; "
+            "font-weight: 700; background: transparent; border: none;"
+        )
+        self.quantity_label = QLabel(f"Кол-во: {quantity} шт.")
+        self.quantity_label.setStyleSheet(
+            "color: #404040; font-family: 'Segoe UI'; font-size: 16px; "
+            "font-weight: 400; background: transparent; border: none;"
+        )
+        content.addWidget(self.name_label)
+        content.addWidget(self.quantity_label)
+        layout.addLayout(content)
 
 
 class DesignSegmentedControl(QFrame):
