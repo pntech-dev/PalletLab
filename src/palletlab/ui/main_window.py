@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
-from palletlab.core.calculator import (build_pallet, calculate_direction, delete_beams_input, insert_beam_input,
-                                       insertion_slots, set_beam_face_distance_input)
+from palletlab.controllers.pallet_controller import PalletController
+from palletlab.core.calculator import insertion_slots
 from palletlab.core.formatting import format_mm
 from palletlab.core.models import InsertionSlot, PalletAxis
 from palletlab.core.project_state import ProjectState
@@ -100,14 +100,18 @@ class MainWindow(QMainWindow):
             self.layer_buttons.addButton(button)
         self.width_upper.setChecked(True)
         self.view = PalletView(self)
+        self.controller = PalletController(
+            self.state,
+            self.view,
+            on_calculated=self._update_scene_info,
+            on_error=self._handle_calculation_error,
+            on_stale_changed=self._set_stale,
+            parent=self,
+        )
         self.show_length_gaps = QCheckBox("Расстояния по длине")
         self.show_width_gaps = QCheckBox("Расстояния по ширине")
         self.show_length_gaps.setChecked(True)
         self.show_width_gaps.setChecked(True)
-        self._rebuild_timer = QTimer(self)
-        self._rebuild_timer.setSingleShot(True)
-        self._rebuild_timer.setInterval(300)
-        self._rebuild_timer.timeout.connect(self._calculate_automatically)
         self.scene_info = QLabel()
         self.scene_info.setObjectName("sceneInfo")
         self.scene_info.setWordWrap(True)
@@ -418,8 +422,7 @@ class MainWindow(QMainWindow):
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
-        self._set_stale(True)
-        self._rebuild_timer.start()
+        self.controller.schedule_recalculation(self._calculate_automatically)
 
     def _calculate_automatically(self) -> None:
         """Keep temporary incomplete input non-blocking while it is being typed."""
@@ -445,18 +448,14 @@ class MainWindow(QMainWindow):
         handlers[camera]()
 
     def _refresh_dimension_annotations(self) -> None:
-        self.state.show_length_dimensions = self.show_length_gaps.isChecked()
-        self.state.show_width_dimensions = self.show_width_gaps.isChecked()
-        if self._last_result is not None:
-            self.view.update_dimension_annotations(
-                self._last_result,
-                show_length_gaps=self.state.show_length_dimensions,
-                show_width_gaps=self.state.show_width_dimensions,
-            )
+        self.controller.refresh_dimension_annotations(
+            show_length=self.show_length_gaps.isChecked(),
+            show_width=self.show_width_gaps.isChecked(),
+        )
 
     def _toggle_insertion_mode(self, enabled: bool) -> None:
         if not enabled:
-            self.state.active_tool = "none"
+            self.controller.deactivate_tool()
             self._cancel_pending_insertion()
             self.view.disable_insertion_mode()
             return
@@ -473,13 +472,13 @@ class MainWindow(QMainWindow):
             self.add_beam_button.setChecked(False)
             return
         self.view.enable_insertion_mode(self._last_result, slots, self._start_insertion)
-        self.state.active_tool = "insertion"
+        self.controller.activate_tool("insertion")
         self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
 
     def _toggle_deletion_mode(self, enabled: bool) -> None:
         if not enabled:
-            self.state.active_tool = "none"
-            self._selected_for_deletion = {"length": set(), "width": set()}
+            self.controller.deactivate_tool()
+            self.controller.clear_deletion_selection()
             self.deletion_editor.setVisible(False)
             self.view.disable_deletion_mode()
             return
@@ -490,16 +489,16 @@ class MainWindow(QMainWindow):
         if self._last_result is None:
             self.delete_beam_button.setChecked(False)
             return
-        self._selected_for_deletion = {"length": set(), "width": set()}
+        self.controller.clear_deletion_selection()
         self.deletion_editor.setVisible(True)
         self._update_deletion_editor()
         self.view.enable_deletion_mode(self._selection_changed)
-        self.state.active_tool = "deletion"
+        self.controller.activate_tool("deletion")
         self.statusBar().showMessage("Нажмите на внутренние брусья для выбора. Крайние брусья удалить нельзя.")
 
     def _toggle_distance_editing(self, enabled: bool) -> None:
         if not enabled:
-            self.state.active_tool = "none"
+            self.controller.deactivate_tool()
             self._cancel_pending_distance_edit()
             self.view.disable_distance_editing()
             return
@@ -511,11 +510,11 @@ class MainWindow(QMainWindow):
             self.edit_distance_button.setChecked(False)
             return
         self.view.enable_distance_editing(self._last_result, self._start_distance_edit)
-        self.state.active_tool = "distance_editing"
+        self.controller.activate_tool("distance_editing")
         self.statusBar().showMessage("Наведите курсор на размерную линию и нажмите: внутренний брус или общий габарит.")
 
     def _start_distance_edit(self, axis: PalletAxis, beam_index: int, value: float) -> None:
-        self._pending_distance = (axis, beam_index)
+        self.controller.begin_distance_edit(axis, beam_index)
         self.distance_value.blockSignals(True)
         self.distance_value.setValue(value)
         self.distance_value.blockSignals(False)
@@ -524,36 +523,25 @@ class MainWindow(QMainWindow):
         self.distance_value.selectAll()
 
     def _cancel_pending_distance_edit(self) -> None:
-        self._pending_distance = None
+        self.controller.cancel_distance_edit()
         self.distance_editor.setVisible(False)
         if self.edit_distance_button.isChecked():
             self.statusBar().showMessage("Наведите курсор на размерную линию и нажмите: внутренний брус или общий габарит.")
         self.edit_distance_button.setFocus()
 
     def _confirm_distance_edit(self) -> None:
-        if self._pending_distance is None or self._last_result is None:
+        update = self.controller.confirm_distance_edit(self.distance_value.value())
+        if update is None:
             return
-        axis, beam_index = self._pending_distance
-        data = self._last_inputs[axis]
-        direction = self._last_result.length_result if axis == "length" else self._last_result.width_result
-        try:
-            updated_input = set_beam_face_distance_input(data, direction, beam_index, self.distance_value.value())
-        except CalculationError as exc:
-            self.statusBar().showMessage(str(exc))
-            return
+        axis, updated_input = update
         panel = self.length_panel if axis == "length" else self.width_panel
         panel.apply_position_data(updated_input)
-        self._pending_distance = None
         self.distance_editor.setVisible(False)
-        self.calculate()
+        self.controller.recalculate_from_state()
         self.statusBar().showMessage("Расстояние обновлено. Выберите следующую размерную линию.")
 
     def _selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
-        selected_indices = self._selected_for_deletion[axis]
-        if selected:
-            selected_indices.add(index)
-        else:
-            selected_indices.discard(index)
+        self.controller.set_deletion_selection(axis, index, selected)
         self._update_deletion_editor()
 
     def _update_deletion_editor(self) -> None:
@@ -563,28 +551,20 @@ class MainWindow(QMainWindow):
         self.confirm_deletion_button.setEnabled(count > 0)
 
     def _confirm_deletion(self) -> None:
-        if self._last_result is None:
-            return
-        try:
-            for axis, indices in self._selected_for_deletion.items():
-                if not indices:
-                    continue
-                direction = self._last_result.length_result if axis == "length" else self._last_result.width_result
-                updated_input = delete_beams_input(self._last_inputs[axis], direction, indices)
-                panel = self.length_panel if axis == "length" else self.width_panel
-                panel.apply_position_data(updated_input)
-        except CalculationError as exc:
-            self.statusBar().showMessage(str(exc))
+        updated_inputs = self.controller.confirm_deletion()
+        if updated_inputs is None:
             return
         deleted = sum(len(indices) for indices in self._selected_for_deletion.values())
+        for axis, updated_input in updated_inputs.items():
+            panel = self.length_panel if axis == "length" else self.width_panel
+            panel.apply_position_data(updated_input)
         self.delete_beam_button.setChecked(False)
-        self.calculate()
+        self.controller.recalculate_from_state()
         self.statusBar().showMessage(f"Удалено брусьев: {deleted}.")
 
     def _start_insertion(self, slot: InsertionSlot) -> None:
-        if self._last_result is None:
+        if not self.controller.begin_insertion(slot):
             return
-        self._pending_insertion = slot
         self.insertion_gap.blockSignals(True)
         self.insertion_gap.setRange(0, slot.maximum_clear_gap)
         self.insertion_gap.setValue(slot.suggested_clear_gap)
@@ -595,38 +575,24 @@ class MainWindow(QMainWindow):
         self.insertion_gap.selectAll()
 
     def _update_insertion_preview(self) -> None:
-        if self._pending_insertion is None or self._last_result is None:
-            return
-        try:
-            self.view.show_insertion_preview(self._last_result, self._pending_insertion, self.insertion_gap.value())
-        except CalculationError:
-            self.view.clear_insertion_preview()
+        self.controller.preview_insertion(self.insertion_gap.value())
 
     def _cancel_pending_insertion(self) -> None:
-        self._pending_insertion = None
+        self.controller.cancel_insertion()
         self.insertion_editor.setVisible(False)
-        self.view.clear_insertion_selection()
-        self.view.clear_insertion_preview()
         if self.add_beam_button.isChecked():
             self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
         self.add_beam_button.setFocus()
 
     def _confirm_insertion(self) -> None:
-        if self._pending_insertion is None or self._last_result is None:
+        update = self.controller.confirm_insertion(self.insertion_gap.value())
+        if update is None:
             return
-        slot = self._pending_insertion
-        data = self._last_inputs[slot.axis]
-        direction = self._last_result.length_result if slot.axis == "length" else self._last_result.width_result
-        try:
-            updated_input = insert_beam_input(data, direction, slot.after_beam_index, self.insertion_gap.value())
-        except CalculationError as exc:
-            self.statusBar().showMessage(str(exc))
-            return
-        panel = self.length_panel if slot.axis == "length" else self.width_panel
+        axis, updated_input = update
+        panel = self.length_panel if axis == "length" else self.width_panel
         panel.apply_position_data(updated_input)
-        self._pending_insertion = None
         self.insertion_editor.setVisible(False)
-        self.calculate()
+        self.controller.recalculate_from_state()
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape and (self.add_beam_button.isChecked() or self.delete_beam_button.isChecked()
@@ -662,41 +628,36 @@ class MainWindow(QMainWindow):
             f"продольные {format_mm(result.pallet_length)} мм"
         )
 
+    def _handle_calculation_error(self, error: CalculationError, show_error: bool) -> None:
+        self.statusBar().showMessage(str(error))
+        if show_error:
+            QMessageBox.warning(self, "Невозможная геометрия", str(error))
+
     def calculate(self, *, show_error: bool = True) -> None:
-        self._rebuild_timer.stop()
         try:
             rounding_step = self.rounding_buttons.checkedId()
             self.state.rounding_step = rounding_step
             self.state.upper_layer = self.upper_layer()
             length_input = self.length_panel.values(rounding_step != 0, rounding_step or 5)
             width_input = self.width_panel.values(rounding_step != 0, rounding_step or 5)
-            length = calculate_direction(length_input)
-            width = calculate_direction(width_input)
-            result = build_pallet(length, width, self.state.upper_layer)
         except CalculationError as exc:
             self._set_stale(True)
-            self.statusBar().showMessage(str(exc))
-            if show_error:
-                QMessageBox.warning(self, "Невозможная геометрия", str(exc))
+            self._handle_calculation_error(exc, show_error)
             return
-        self._last_result = result
-        self._last_inputs = {"length": length_input, "width": width_input}
-        self._update_scene_info(result)
-        # A calculation can change every beam position and pallet dimension,
-        # so it must rebuild the geometry.  The lightweight annotation-only
-        # path is reserved for the two dimension visibility checkboxes.
-        self.view.show_pallet(
-            result,
-            show_length_gaps=self.state.show_length_dimensions,
-            show_width_gaps=self.state.show_width_dimensions,
+        result = self.controller.calculate(
+            length_input,
+            width_input,
+            self.state.upper_layer,
+            show_error=show_error,
         )
+        if result is None:
+            return
         if self.add_beam_button.isChecked():
             self._toggle_insertion_mode(True)
         elif self.delete_beam_button.isChecked():
             self._toggle_deletion_mode(True)
         elif self.edit_distance_button.isChecked():
             self._toggle_distance_editing(True)
-        self._set_stale(False)
 
     def reset_example(self) -> None:
         self.length_panel.reset_example("1070 460 1300 499", 123, 552)

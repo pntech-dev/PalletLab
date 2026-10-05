@@ -1,8 +1,8 @@
-"""Controller-like behaviour of the current main window.
+"""Thin-view behaviour of the current main window.
 
 These tests deliberately call the window methods with small test doubles.
-They lock down the workflow before the UI is moved behind an MVC controller,
-without creating a Qt window or a VTK render surface.
+They verify delegation to the MVC controller without creating a Qt window or a
+VTK render surface.
 """
 
 from __future__ import annotations
@@ -18,18 +18,6 @@ from palletlab.ui.main_window import MainWindow
 
 LENGTH_INPUT = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100)
 WIDTH_INPUT = DirectionInput(70, 50, (560, 720), 277, 179, 100, 100)
-
-
-class _Timer:
-    def __init__(self) -> None:
-        self.starts = 0
-        self.stops = 0
-
-    def start(self) -> None:
-        self.starts += 1
-
-    def stop(self) -> None:
-        self.stops += 1
 
 
 class _Panel:
@@ -77,12 +65,11 @@ def _pallet_result():
 
 
 def test_auto_recalculation_is_debounced_and_suppresses_modal_errors():
-    timer = _Timer()
-    stale_values: list[bool] = []
+    scheduled = []
     calculate_calls: list[dict[str, bool]] = []
     window = SimpleNamespace(
-        _rebuild_timer=timer,
-        _set_stale=stale_values.append,
+        controller=SimpleNamespace(schedule_recalculation=scheduled.append),
+        _calculate_automatically=lambda: None,
         calculate=lambda **kwargs: calculate_calls.append(kwargs),
     )
 
@@ -90,41 +77,32 @@ def test_auto_recalculation_is_debounced_and_suppresses_modal_errors():
     MainWindow._schedule_recalculation(window)
     MainWindow._calculate_automatically(window)
 
-    assert stale_values == [True, True]
-    assert timer.starts == 2
+    assert scheduled == [window._calculate_automatically, window._calculate_automatically]
     assert calculate_calls == [{"show_error": False}]
 
 
 def test_calculate_rebuilds_model_from_current_panels():
-    timer = _Timer()
-    scene_results = []
-    rendered = []
-    stale_values = []
+    result = _pallet_result()
+    calculation_calls = []
     window = SimpleNamespace(
-        _rebuild_timer=timer,
         state=ProjectState(),
         rounding_buttons=SimpleNamespace(checkedId=lambda: 50),
         length_panel=_Panel(LENGTH_INPUT),
         width_panel=_Panel(WIDTH_INPUT),
         upper_layer=lambda: "width",
-        _update_scene_info=scene_results.append,
-        view=SimpleNamespace(show_pallet=lambda result, **kwargs: rendered.append((result, kwargs))),
-        show_length_gaps=SimpleNamespace(isChecked=lambda: True),
-        show_width_gaps=SimpleNamespace(isChecked=lambda: True),
+        controller=SimpleNamespace(calculate=lambda *args, **kwargs: calculation_calls.append((args, kwargs)) or result),
         add_beam_button=_Toggle(),
         delete_beam_button=_Toggle(),
         edit_distance_button=_Toggle(),
-        _set_stale=stale_values.append,
     )
 
     MainWindow.calculate(window, show_error=False)
 
-    assert timer.stops == 1
-    assert window._last_result is scene_results[0]
-    assert rendered[0][0] is window._last_result
-    assert rendered[0][1] == {"show_length_gaps": True, "show_width_gaps": True}
-    assert window._last_inputs["length"].rounding_step == 50
-    assert stale_values == [False]
+    args, kwargs = calculation_calls[0]
+    assert args[0].rounding_step == 50
+    assert args[1].rounding_step == 50
+    assert args[2] == "width"
+    assert kwargs == {"show_error": False}
 
 
 def test_confirm_insertion_updates_the_input_panel_then_recalculates():
@@ -133,21 +111,20 @@ def test_confirm_insertion_updates_the_input_panel_then_recalculates():
     length_panel = _Panel()
     recalculated: list[bool] = []
     window = SimpleNamespace(
-        _pending_insertion=slot,
-        _last_result=result,
-        _last_inputs={"length": LENGTH_INPUT, "width": WIDTH_INPUT},
+        controller=SimpleNamespace(
+            confirm_insertion=lambda _gap: ("length", LENGTH_INPUT),
+            recalculate_from_state=lambda: recalculated.append(True),
+        ),
         insertion_gap=SimpleNamespace(value=lambda: 100.0),
         length_panel=length_panel,
         width_panel=_Panel(),
         insertion_editor=_Visibility(),
-        calculate=lambda: recalculated.append(True),
     )
 
     MainWindow._confirm_insertion(window)
 
     assert length_panel.applied_data is not None
-    assert calculate_direction(length_panel.applied_data).beam_count == result.length_result.beam_count + 1
-    assert window._pending_insertion is None
+    assert length_panel.applied_data is LENGTH_INPUT
     assert window.insertion_editor.visible is False
     assert recalculated == [True]
 
@@ -158,20 +135,21 @@ def test_confirm_deletion_updates_selected_axes_then_recalculates():
     recalculated: list[bool] = []
     status_bar = _StatusBar()
     window = SimpleNamespace(
-        _last_result=result,
-        _last_inputs={"length": LENGTH_INPUT, "width": WIDTH_INPUT},
+        controller=SimpleNamespace(
+            confirm_deletion=lambda: {"length": LENGTH_INPUT},
+            recalculate_from_state=lambda: recalculated.append(True),
+        ),
         _selected_for_deletion={"length": {1, 3}, "width": set()},
         length_panel=length_panel,
         width_panel=width_panel,
         delete_beam_button=_Toggle(True),
-        calculate=lambda: recalculated.append(True),
         statusBar=lambda: status_bar,
     )
 
     MainWindow._confirm_deletion(window)
 
     assert length_panel.applied_data is not None
-    assert calculate_direction(length_panel.applied_data).beam_count == result.length_result.beam_count - 2
+    assert length_panel.applied_data is LENGTH_INPUT
     assert window.delete_beam_button.checked is False
     assert recalculated == [True]
     assert status_bar.messages[-1] == "Удалено брусьев: 2."
@@ -182,21 +160,20 @@ def test_confirm_distance_edit_updates_input_panel_then_recalculates():
     length_panel = _Panel()
     recalculated: list[bool] = []
     window = SimpleNamespace(
-        _pending_distance=("length", 2),
-        _last_result=result,
-        _last_inputs={"length": LENGTH_INPUT, "width": WIDTH_INPUT},
+        controller=SimpleNamespace(
+            confirm_distance_edit=lambda _value: ("length", LENGTH_INPUT),
+            recalculate_from_state=lambda: recalculated.append(True),
+        ),
         distance_value=SimpleNamespace(value=lambda: 1500.0),
         length_panel=length_panel,
         width_panel=_Panel(),
         distance_editor=_Visibility(),
-        calculate=lambda: recalculated.append(True),
         statusBar=lambda: _StatusBar(),
     )
 
     MainWindow._confirm_distance_edit(window)
 
     assert length_panel.applied_data is not None
-    assert calculate_direction(length_panel.applied_data).beam_centers[2] == 1525.0
-    assert window._pending_distance is None
+    assert length_panel.applied_data is LENGTH_INPUT
     assert window.distance_editor.visible is False
     assert recalculated == [True]
