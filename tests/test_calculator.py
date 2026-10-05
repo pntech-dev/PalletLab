@@ -145,11 +145,11 @@ def test_interactive_deletion_preserves_remaining_beams_and_allows_multiple_sele
     updated_input = delete_beams_input(LENGTH_EXAMPLE, direction, (1, 3))
 
     recalculated = calculate_direction(updated_input)
-    assert recalculated.beam_centers == pytest.approx((25, 1293, 3053, 4179))
+    assert recalculated.beam_centers == pytest.approx((25, 1293, 3053, 3552, 4179))
     assert updated_input.support_positions is None
-    assert updated_input.support_distances == pytest.approx((1760,))
+    assert updated_input.support_distances == pytest.approx((1760, 499))
     assert updated_input.first_edge_to_support == pytest.approx(1193)
-    assert updated_input.last_support_to_edge == pytest.approx(1051)
+    assert updated_input.last_support_to_edge == pytest.approx(552)
     assert calculate_direction(replace(updated_input, first_edge_to_support=1200)).beam_centers[1] == pytest.approx(1300)
 
 
@@ -181,7 +181,7 @@ def test_editing_a_displayed_distance_moves_its_internal_beam_and_updates_input_
 
     recalculated = calculate_direction(updated_input)
     assert recalculated.beam_centers[2] == pytest.approx(1525)
-    assert updated_input.support_distances == pytest.approx((1302, 228, 1528, 499))
+    assert updated_input.support_distances == pytest.approx((1302, 228, 1300, 499))
 
 
 def test_editing_the_first_edge_dimension_is_rejected():

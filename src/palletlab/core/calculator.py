@@ -175,7 +175,15 @@ def _input_with_support_positions(
     if not centres:
         # A blank distances field normally represents one support; retaining
         # this explicit empty tuple is the only unambiguous zero-support case.
-        return replace(data, support_distances=(), support_positions=())
+        # Keep the original pallet span: the two edge beams must not collapse
+        # merely because every internal support was removed.
+        return replace(
+            data,
+            support_distances=(),
+            first_edge_to_support=0.0,
+            last_support_to_edge=direction.machine_size,
+            support_positions=(),
+        )
     return replace(
         data,
         support_distances=tuple(right - left for left, right in zip(centres, centres[1:])),
