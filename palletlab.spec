@@ -39,7 +39,10 @@ a = Analysis(
     ["src/main.py"],
     pathex=["src"],
     binaries=[],
-    datas=[],
+    datas=[
+        ("src/palletlab/ui/assets/brand", "palletlab/ui/assets/brand"),
+        ("src/palletlab/ui/assets/icons", "palletlab/ui/assets/icons"),
+    ],
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     runtime_hooks=[],
