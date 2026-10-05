@@ -64,21 +64,16 @@ def _pallet_result():
     return build_pallet(calculate_direction(LENGTH_INPUT), calculate_direction(WIDTH_INPUT))
 
 
-def test_auto_recalculation_is_debounced_and_suppresses_modal_errors():
+def test_auto_recalculation_is_delegated_to_the_controller():
     scheduled = []
-    calculate_calls: list[dict[str, bool]] = []
     window = SimpleNamespace(
-        controller=SimpleNamespace(schedule_recalculation=scheduled.append),
-        _calculate_automatically=lambda: None,
-        calculate=lambda **kwargs: calculate_calls.append(kwargs),
+        controller=SimpleNamespace(schedule_recalculation=lambda: scheduled.append(True)),
     )
 
     MainWindow._schedule_recalculation(window)
     MainWindow._schedule_recalculation(window)
-    MainWindow._calculate_automatically(window)
 
-    assert scheduled == [window._calculate_automatically, window._calculate_automatically]
-    assert calculate_calls == [{"show_error": False}]
+    assert scheduled == [True, True]
 
 
 def test_calculate_rebuilds_model_from_current_panels():
@@ -90,6 +85,8 @@ def test_calculate_rebuilds_model_from_current_panels():
         length_panel=_Panel(LENGTH_INPUT),
         width_panel=_Panel(WIDTH_INPUT),
         upper_layer=lambda: "width",
+        _read_calculation_inputs=lambda: (replace(LENGTH_INPUT, round_pallet_size=True, rounding_step=50),
+                                          replace(WIDTH_INPUT, round_pallet_size=True, rounding_step=50), "width"),
         controller=SimpleNamespace(calculate=lambda *args, **kwargs: calculation_calls.append((args, kwargs)) or result),
         add_beam_button=_Toggle(),
         delete_beam_button=_Toggle(),

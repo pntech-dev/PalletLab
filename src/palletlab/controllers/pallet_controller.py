@@ -30,6 +30,7 @@ class PalletController:
         on_calculated: Callable[[PalletResult], None],
         on_error: Callable[[CalculationError, bool], None],
         on_stale_changed: Callable[[bool], None],
+        input_provider: Callable[[], tuple[DirectionInput, DirectionInput, LayerDirection]] | None = None,
         parent=None,
         timer=None,
     ) -> None:
@@ -38,15 +39,14 @@ class PalletController:
         self._on_calculated = on_calculated
         self._on_error = on_error
         self._on_stale_changed = on_stale_changed
-        self._automatic_rebuild: Callable[[], None] | None = None
+        self._input_provider = input_provider
         self._rebuild_timer = timer or QTimer(parent)
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(300)
         self._rebuild_timer.timeout.connect(self._run_automatic_rebuild)
 
-    def schedule_recalculation(self, rebuild: Callable[[], None]) -> None:
+    def schedule_recalculation(self) -> None:
         """Debounce an automatic rebuild requested by a changing form field."""
-        self._automatic_rebuild = rebuild
         self._on_stale_changed(True)
         self._rebuild_timer.start()
 
@@ -107,6 +107,12 @@ class PalletController:
                 show_length_gaps=show_length,
                 show_width_gaps=show_width,
             )
+
+    def set_upper_layer(self, upper_layer: LayerDirection) -> None:
+        self.state.upper_layer = upper_layer
+
+    def set_rounding_step(self, rounding_step: int) -> None:
+        self.state.rounding_step = rounding_step
 
     def activate_tool(self, tool: ToolMode) -> None:
         self.state.active_tool = tool
@@ -214,5 +220,12 @@ class PalletController:
         return updated_inputs
 
     def _run_automatic_rebuild(self) -> None:
-        if self._automatic_rebuild is not None:
-            self._automatic_rebuild()
+        if self._input_provider is None:
+            return
+        try:
+            length_input, width_input, upper_layer = self._input_provider()
+        except CalculationError as exc:
+            self._on_stale_changed(True)
+            self._on_error(exc, False)
+            return
+        self.calculate(length_input, width_input, upper_layer, show_error=False)

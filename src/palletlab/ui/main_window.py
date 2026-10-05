@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
             on_calculated=self._update_scene_info,
             on_error=self._handle_calculation_error,
             on_stale_changed=self._set_stale,
+            input_provider=self._read_calculation_inputs,
             parent=self,
         )
         self.show_length_gaps = QCheckBox("Расстояния по длине")
@@ -422,18 +423,14 @@ class MainWindow(QMainWindow):
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
-        self.controller.schedule_recalculation(self._calculate_automatically)
-
-    def _calculate_automatically(self) -> None:
-        """Keep temporary incomplete input non-blocking while it is being typed."""
-        self.calculate(show_error=False)
+        self.controller.schedule_recalculation()
 
     def _layer_changed(self, *_args) -> None:
-        self.state.upper_layer = self.upper_layer()
+        self.controller.set_upper_layer(self.upper_layer())
         self._schedule_recalculation()
 
     def _rounding_changed(self, *_args) -> None:
-        self.state.rounding_step = self.rounding_buttons.checkedId()
+        self.controller.set_rounding_step(self.rounding_buttons.checkedId())
         self._schedule_recalculation()
 
     def _set_camera(self, index: int) -> None:
@@ -635,11 +632,7 @@ class MainWindow(QMainWindow):
 
     def calculate(self, *, show_error: bool = True) -> None:
         try:
-            rounding_step = self.rounding_buttons.checkedId()
-            self.state.rounding_step = rounding_step
-            self.state.upper_layer = self.upper_layer()
-            length_input = self.length_panel.values(rounding_step != 0, rounding_step or 5)
-            width_input = self.width_panel.values(rounding_step != 0, rounding_step or 5)
+            length_input, width_input, upper_layer = self._read_calculation_inputs()
         except CalculationError as exc:
             self._set_stale(True)
             self._handle_calculation_error(exc, show_error)
@@ -647,7 +640,7 @@ class MainWindow(QMainWindow):
         result = self.controller.calculate(
             length_input,
             width_input,
-            self.state.upper_layer,
+            upper_layer,
             show_error=show_error,
         )
         if result is None:
@@ -658,6 +651,16 @@ class MainWindow(QMainWindow):
             self._toggle_deletion_mode(True)
         elif self.edit_distance_button.isChecked():
             self._toggle_distance_editing(True)
+
+    def _read_calculation_inputs(self):
+        rounding_step = self.rounding_buttons.checkedId()
+        self.controller.set_rounding_step(rounding_step)
+        self.controller.set_upper_layer(self.upper_layer())
+        return (
+            self.length_panel.values(rounding_step != 0, rounding_step or 5),
+            self.width_panel.values(rounding_step != 0, rounding_step or 5),
+            self.state.upper_layer,
+        )
 
     def reset_example(self) -> None:
         self.length_panel.reset_example("1070 460 1300 499", 123, 552)

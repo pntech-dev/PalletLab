@@ -70,7 +70,7 @@ class _View:
         self.preview_cleared += 1
 
 
-def _controller():
+def _controller(*, input_provider=None):
     state = ProjectState()
     view = _View()
     timer = _Timer()
@@ -83,6 +83,7 @@ def _controller():
         on_calculated=calculated.append,
         on_error=lambda error, show_error: errors.append((str(error), show_error)),
         on_stale_changed=stale.append,
+        input_provider=input_provider,
         timer=timer,
     )
     return controller, state, view, timer, calculated, errors, stale
@@ -104,16 +105,16 @@ def test_controller_calculates_updates_state_and_renders_the_view():
 
 
 def test_controller_debounces_automatic_recalculation():
-    controller, _state, _view, timer, _calculated, _errors, stale = _controller()
-    rebuilds = []
+    requests = [(LENGTH_INPUT, WIDTH_INPUT, "width")]
+    controller, state, _view, timer, _calculated, _errors, stale = _controller(input_provider=lambda: requests.pop())
 
-    controller.schedule_recalculation(lambda: rebuilds.append(True))
-    controller.schedule_recalculation(lambda: rebuilds.append(True))
+    controller.schedule_recalculation()
+    controller.schedule_recalculation()
     timer.timeout.callback()
 
     assert timer.starts == 2
-    assert stale == [True, True]
-    assert rebuilds == [True]
+    assert stale == [True, True, False]
+    assert state.result is not None
 
 
 def test_controller_handles_insert_delete_and_distance_edits_through_project_state():
