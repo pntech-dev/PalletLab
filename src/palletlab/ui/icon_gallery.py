@@ -12,9 +12,10 @@ if __package__ in (None, ""):
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtSvg import QSvgRenderer, QSvgWidget
-from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QScrollArea, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QScrollArea, QVBoxLayout, QWidget
 
-from palletlab.ui.design_components import DesignCheckBox, DesignComboBox
+from palletlab.ui.design_components import (DesignCheckBox, DesignComboBox, DesignInputField, DesignRadioButton,
+                                            DesignSegmentedControl)
 
 ICON_NAMES = (
     "check",
@@ -74,8 +75,8 @@ class IconGalleryWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("PalletLab — иконки нового интерфейса")
-        self.setMinimumSize(720, 680)
-        self.resize(960, 760)
+        self.setMinimumSize(720, 960)
+        self.resize(960, 1040)
 
         root = QWidget()
         root.setObjectName("iconGalleryRoot")
@@ -135,9 +136,11 @@ class IconGalleryWindow(QMainWindow):
     def _components_card() -> QFrame:
         card = QFrame()
         card.setObjectName("componentsCard")
-        layout = QHBoxLayout(card)
+        layout = QVBoxLayout(card)
         layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(48)
+        layout.setSpacing(24)
+        top_row = QHBoxLayout()
+        top_row.setSpacing(48)
 
         checkbox_column = QVBoxLayout()
         checkbox_column.setSpacing(12)
@@ -154,7 +157,7 @@ class IconGalleryWindow(QMainWindow):
         disabled_checked_checkbox.setChecked(True)
         disabled_checked_checkbox.setEnabled(False)
         checkbox_column.addWidget(disabled_checked_checkbox)
-        layout.addLayout(checkbox_column)
+        top_row.addLayout(checkbox_column)
 
         combo_column = QVBoxLayout()
         combo_column.setSpacing(12)
@@ -163,8 +166,56 @@ class IconGalleryWindow(QMainWindow):
         disabled_combo = DesignComboBox("Размер", ("70×50 мм",))
         disabled_combo.setEnabled(False)
         combo_column.addWidget(disabled_combo)
-        layout.addLayout(combo_column)
-        layout.addStretch()
+        top_row.addLayout(combo_column)
+        top_row.addStretch()
+        layout.addLayout(top_row)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(48)
+        radio_column = QVBoxLayout()
+        radio_column.setSpacing(12)
+        radio_column.addWidget(IconGalleryWindow._section_title("Radio button"))
+        radio_default = DesignRadioButton("Не округлять")
+        radio_column.addWidget(radio_default)
+        radio_selected = DesignRadioButton("До 50 мм")
+        radio_selected.setChecked(True)
+        radio_column.addWidget(radio_selected)
+        radio_disabled = DesignRadioButton("Недоступно")
+        radio_disabled.setEnabled(False)
+        radio_column.addWidget(radio_disabled)
+        radio_selected_disabled = DesignRadioButton("Выбрано и недоступно")
+        radio_selected_disabled.setChecked(True)
+        radio_selected_disabled.setEnabled(False)
+        radio_column.addWidget(radio_selected_disabled)
+        bottom_row.addLayout(radio_column)
+
+        segments_column = QVBoxLayout()
+        segments_column.setSpacing(12)
+        segments_column.addWidget(IconGalleryWindow._section_title("Segmented control"))
+        segments_column.addWidget(
+            DesignSegmentedControl(("Вариант 1", "Вариант 2", "Недоступно"), disabled_indices=(2,))
+        )
+        bottom_row.addLayout(segments_column)
+        bottom_row.addStretch()
+        layout.addLayout(bottom_row)
+
+        inputs_column = QVBoxLayout()
+        inputs_column.setSpacing(12)
+        inputs_column.addWidget(IconGalleryWindow._section_title("Input field"))
+        inputs_grid = QGridLayout()
+        inputs_grid.setHorizontalSpacing(24)
+        inputs_grid.setVerticalSpacing(16)
+        interactive_input = DesignInputField("Размер")
+        interactive_input.setToolTip("Введите 1234, чтобы увидеть состояние Error.")
+        inputs_grid.addWidget(interactive_input, 0, 0)
+        disabled_empty_input = DesignInputField("Размер")
+        disabled_empty_input.setEnabled(False)
+        inputs_grid.addWidget(disabled_empty_input, 0, 1)
+        disabled_filled_input = DesignInputField("Размер", value="70×50 мм")
+        disabled_filled_input.setEnabled(False)
+        inputs_grid.addWidget(disabled_filled_input, 1, 0)
+        inputs_column.addLayout(inputs_grid)
+        layout.addLayout(inputs_column)
         return card
 
     @staticmethod
