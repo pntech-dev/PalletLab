@@ -16,6 +16,7 @@ from palletlab.core.calculator import (
 from palletlab.core.models import DirectionInput, InsertionSlot, LayerDirection, PalletAxis, PalletResult
 from palletlab.core.project_state import ProjectState, ToolMode
 from palletlab.core.validation import CalculationError
+from palletlab.controllers.viewport_geometry import editable_dimensions, insertion_markers, insertion_preview
 
 
 class PalletController:
@@ -119,11 +120,15 @@ class PalletController:
         self.state.pending_insertion = slot
         return True
 
+    def enable_insertion_mode(self, slots: tuple[InsertionSlot, ...], callback) -> None:
+        if self.state.result is not None:
+            self.view.enable_insertion_mode(insertion_markers(self.state.result, slots), callback)
+
     def preview_insertion(self, clear_gap: float) -> None:
         if self.state.pending_insertion is None or self.state.result is None:
             return
         try:
-            self.view.show_insertion_preview(self.state.result, self.state.pending_insertion, clear_gap)
+            self.view.show_insertion_preview(insertion_preview(self.state.result, self.state.pending_insertion, clear_gap))
         except CalculationError:
             self.view.clear_insertion_preview()
 
@@ -150,6 +155,10 @@ class PalletController:
 
     def begin_distance_edit(self, axis: PalletAxis, beam_index: int) -> None:
         self.state.pending_distance = (axis, beam_index)
+
+    def enable_distance_editing(self, callback) -> None:
+        if self.state.result is not None:
+            self.view.enable_distance_editing(editable_dimensions(self.state.result), callback)
 
     def cancel_distance_edit(self) -> None:
         self.state.pending_distance = None

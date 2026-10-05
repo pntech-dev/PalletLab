@@ -471,7 +471,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Нет промежутков, в которые помещается ещё один брус.")
             self.add_beam_button.setChecked(False)
             return
-        self.view.enable_insertion_mode(self._last_result, slots, self._start_insertion)
+        self.controller.enable_insertion_mode(slots, self._start_insertion)
         self.controller.activate_tool("insertion")
         self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
 
@@ -509,7 +509,7 @@ class MainWindow(QMainWindow):
         if self._last_result is None:
             self.edit_distance_button.setChecked(False)
             return
-        self.view.enable_distance_editing(self._last_result, self._start_distance_edit)
+        self.controller.enable_distance_editing(self._start_distance_edit)
         self.controller.activate_tool("distance_editing")
         self.statusBar().showMessage("Наведите курсор на размерную линию и нажмите: внутренний брус или общий габарит.")
 

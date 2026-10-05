@@ -7,9 +7,9 @@ from collections.abc import Callable
 import pyvista as pv
 from pyvistaqt import QtInteractor
 
-from palletlab.core.calculator import inserted_beam_center
 from palletlab.core.formatting import format_mm
-from palletlab.core.models import InsertionSlot, PalletAxis, PalletResult
+from palletlab.core.models import PalletAxis, PalletResult
+from palletlab.controllers.viewport_geometry import EditableDimension, InsertionMarker, PreviewBox
 
 
 class PalletView(QtInteractor):
@@ -21,11 +21,10 @@ class PalletView(QtInteractor):
         self._has_model = False
         self._annotation_actors: list[object] = []
         self._annotation_segments: list[pv.PolyData] | None = None
-        self._insertion_slots: dict[object, InsertionSlot] = {}
-        self._insertion_callback: Callable[[InsertionSlot], None] | None = None
+        self._insertion_slots: dict[object, InsertionMarker] = {}
+        self._insertion_callback: Callable[[object], None] | None = None
         self._insertion_mode = False
         self._hovered_insertion_actor = None
-        self._insertion_result: PalletResult | None = None
         self._active_insertion_slot: InsertionSlot | None = None
         self._beam_actors: dict[object, tuple[PalletAxis, int]] = {}
         self._beam_counts: dict[PalletAxis, int] = {"length": 0, "width": 0}
@@ -126,29 +125,17 @@ class PalletView(QtInteractor):
         return pv.Cube(center=(beam.x, PalletView._display_y(result, beam.y), beam.z), x_length=beam.size_x,
                        y_length=beam.size_y, z_length=beam.size_z)
 
-    def enable_insertion_mode(
-        self, result: PalletResult, slots: tuple[InsertionSlot, ...], callback: Callable[[InsertionSlot], None]
-    ) -> None:
+    def enable_insertion_mode(self, markers: tuple[InsertionMarker, ...], callback: Callable[[object], None]) -> None:
         """Show pickable plus markers in every gap that can fit one more beam."""
         self.disable_insertion_mode(render=False)
         self._insertion_mode = True
         self._insertion_callback = callback
-        self._insertion_result = result
         self._active_insertion_slot = None
-        marker_size = max(24.0, min(result.pallet_length, result.pallet_width) * 0.06)
-        for slot in slots:
-            direction = result.length_result if slot.axis == "length" else result.width_result
-            gap_start = direction.beam_centers[slot.after_beam_index] + direction.beam_width / 2
-            gap_end = direction.beam_centers[slot.after_beam_index + 1] - direction.beam_width / 2
-            position = (gap_start + gap_end) / 2
-            if slot.axis == "length":
-                center = (position, self._display_y(result, result.pallet_width / 2), result.pallet_height + 5)
-            else:
-                center = (result.pallet_length / 2, self._display_y(result, position), result.pallet_height + 5)
-            marker = pv.Text3D("+", height=marker_size, depth=1, center=center)
+        for item in markers:
+            marker = pv.Text3D("+", height=item.size, depth=1, center=item.center)
             actor = self.add_mesh(marker, color="#1f7775", opacity=0.35, pickable=True,
-                                  name=f"insert-slot-{slot.axis}-{slot.after_beam_index}")
-            self._insertion_slots[actor] = slot
+                                  name=f"insert-slot-{item.slot.axis}-{item.slot.after_beam_index}")
+            self._insertion_slots[actor] = item
         self.enable_mesh_picking(callback=self._select_insertion_slot, show=False, left_clicking=True,
                                  use_actor=True, show_message=False)
         self.render()
@@ -162,7 +149,6 @@ class PalletView(QtInteractor):
         self._insertion_callback = None
         self._insertion_mode = False
         self._hovered_insertion_actor = None
-        self._insertion_result = None
         self._active_insertion_slot = None
         self.clear_insertion_preview()
         if render:
@@ -249,9 +235,7 @@ class PalletView(QtInteractor):
         beam_count = self._beam_counts[axis]
         return 0 < index < beam_count - 1
 
-    def enable_distance_editing(
-        self, result: PalletResult, callback: Callable[[PalletAxis, int, float], None]
-    ) -> None:
+    def enable_distance_editing(self, dimensions: tuple[EditableDimension, ...], callback: Callable[[PalletAxis, int, float], None]) -> None:
         """Overlay pickable internal dimension lines above the annotations."""
         self.disable_insertion_mode(render=False)
         self.disable_distance_editing(render=False)
@@ -259,8 +243,10 @@ class PalletView(QtInteractor):
         self._distance_callback = callback
         self._selected_distance_actor = None
         self._hovered_distance_actor = None
-        self._add_editable_length_dimensions(result)
-        self._add_editable_width_dimensions(result)
+        for dimension in dimensions:
+            actor = self.add_mesh(pv.Line(dimension.start, dimension.end), color="#d28326", line_width=14,
+                                  opacity=0.01, pickable=True, name=f"editable-{dimension.axis}-dimension-{dimension.index}")
+            self._distance_actors[actor] = (dimension.axis, dimension.index, dimension.value)
         self.render()
 
     def disable_distance_editing(self, *, render: bool = True) -> None:
@@ -276,33 +262,6 @@ class PalletView(QtInteractor):
         self._hovered_distance_actor = None
         if render:
             self.render()
-
-    def _add_editable_length_dimensions(self, result: PalletResult) -> None:
-        direction = result.length_result
-        offset = max(50.0, result.pallet_width * 0.055)
-        base, z = direction.beam_centers[0] - direction.beam_width / 2, result.pallet_height + 2
-        last_index = len(direction.beam_centers) - 1
-        for index, center in enumerate(direction.beam_centers[1:], start=1):
-            end = center + direction.beam_width / 2 if index == last_index else center - direction.beam_width / 2
-            display_y = self._display_y(result, -offset * index)
-            actor = self.add_mesh(pv.Line((base, display_y, z), (end, display_y, z)), color="#d28326",
-                                  line_width=14, opacity=0.01, pickable=True,
-                                  name=f"editable-length-dimension-{index}")
-            self._distance_actors[actor] = ("length", index, end - base)
-
-    def _add_editable_width_dimensions(self, result: PalletResult) -> None:
-        direction = result.width_result
-        offset = max(50.0, result.pallet_length * 0.035)
-        base, z = direction.beam_centers[0] - direction.beam_width / 2, result.pallet_height + 2
-        last_index = len(direction.beam_centers) - 1
-        for index, center in enumerate(direction.beam_centers[1:], start=1):
-            end = center + direction.beam_width / 2 if index == last_index else center - direction.beam_width / 2
-            x = -offset * index
-            actor = self.add_mesh(pv.Line((x, self._display_y(result, base), z),
-                                          (x, self._display_y(result, end), z)), color="#d28326",
-                                  line_width=14, opacity=0.01, pickable=True,
-                                  name=f"editable-width-dimension-{index}")
-            self._distance_actors[actor] = ("width", index, end - base)
 
     def _select_distance(self, actor) -> None:
         if not self._distance_editing_mode or actor not in self._distance_actors:
@@ -350,19 +309,10 @@ class PalletView(QtInteractor):
         actor.GetProperty().SetColor(*color)
         actor.GetProperty().SetOpacity(0.95 if selected else 0.01)
 
-    def show_insertion_preview(self, result: PalletResult, slot: InsertionSlot, clear_gap: float) -> None:
+    def show_insertion_preview(self, preview: PreviewBox) -> None:
         """Draw a translucent candidate beam without committing it to the model."""
         self.clear_insertion_preview()
-        direction = result.length_result if slot.axis == "length" else result.width_result
-        center = inserted_beam_center(direction, slot.after_beam_index, clear_gap)
-        if slot.axis == "length":
-            z_base = result.width_result.beam_height if result.upper_layer == "length" else 0.0
-            cube = pv.Cube(center=(center, self._display_y(result, result.pallet_width / 2), z_base + direction.beam_height / 2),
-                           x_length=direction.beam_width, y_length=result.pallet_width, z_length=direction.beam_height)
-        else:
-            z_base = result.length_result.beam_height if result.upper_layer == "width" else 0.0
-            cube = pv.Cube(center=(result.pallet_length / 2, self._display_y(result, center), z_base + direction.beam_height / 2),
-                           x_length=result.pallet_length, y_length=direction.beam_width, z_length=direction.beam_height)
+        cube = pv.Cube(center=preview.center, x_length=preview.size[0], y_length=preview.size[1], z_length=preview.size[2])
         self.add_mesh(cube, color="#23908a", opacity=0.46, show_edges=True, edge_color="#155854",
                       name="insertion-preview")
         self.render()
@@ -379,7 +329,7 @@ class PalletView(QtInteractor):
             if marker == actor:
                 self._active_insertion_slot = slot
                 if self._insertion_callback:
-                    self._insertion_callback(slot)
+                    self._insertion_callback(slot.slot)
                 return
 
     def _update_insertion_hover(self, *_args) -> None:
@@ -395,9 +345,8 @@ class PalletView(QtInteractor):
         self._hovered_insertion_actor = hovered
         for actor in self._insertion_slots:
             actor.GetProperty().SetOpacity(0.6 if actor == hovered else 0.35)
-        if hovered and self._insertion_result:
-            self.show_insertion_preview(self._insertion_result, self._insertion_slots[hovered],
-                                        self._insertion_slots[hovered].suggested_clear_gap)
+        if hovered:
+            self.show_insertion_preview(self._insertion_slots[hovered].preview)
         else:
             self.clear_insertion_preview()
         self.render()

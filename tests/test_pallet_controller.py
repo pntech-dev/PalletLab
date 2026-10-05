@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from palletlab.controllers.pallet_controller import PalletController
+from palletlab.controllers.viewport_geometry import editable_dimensions, insertion_markers, insertion_preview
 from palletlab.core.calculator import insertion_slots
 from palletlab.core.models import DirectionInput
 from palletlab.core.project_state import ProjectState
@@ -53,8 +54,14 @@ class _View:
     def update_dimension_annotations(self, result, **kwargs) -> None:
         self.annotations.append((result, kwargs))
 
-    def show_insertion_preview(self, result, slot, clear_gap) -> None:
-        self.previews.append((result, slot, clear_gap))
+    def show_insertion_preview(self, preview) -> None:
+        self.previews.append(preview)
+
+    def enable_insertion_mode(self, _markers, _callback) -> None:
+        pass
+
+    def enable_distance_editing(self, _dimensions, _callback) -> None:
+        pass
 
     def clear_insertion_selection(self) -> None:
         self.insertion_cleared += 1
@@ -119,7 +126,7 @@ def test_controller_handles_insert_delete_and_distance_edits_through_project_sta
     axis, inserted = controller.confirm_insertion(100)
     assert axis == "length"
     assert state.length_input is inserted
-    assert view.previews[-1] == (result, slot, 100)
+    assert view.previews[-1].size[0] == result.length_result.beam_width
 
     assert controller.recalculate_from_state() is not None
     controller.set_deletion_selection("length", 1, True)
@@ -133,3 +140,18 @@ def test_controller_handles_insert_delete_and_distance_edits_through_project_sta
     assert edited is not None
     assert state.pending_distance is None
     assert errors == []
+
+
+def test_viewport_geometry_is_prepared_outside_the_3d_view():
+    controller, _state, _view, _timer, _calculated, _errors, _stale = _controller()
+    result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")
+    slot = next(slot for slot in insertion_slots(result, "length") if slot.after_beam_index == 1)
+
+    markers = insertion_markers(result, (slot,))
+    preview = insertion_preview(result, slot, 100)
+    dimensions = editable_dimensions(result)
+
+    assert markers[0].slot is slot
+    assert markers[0].preview.size == preview.size
+    assert preview.size[0] == result.length_result.beam_width
+    assert {dimension.axis for dimension in dimensions} == {"length", "width"}
