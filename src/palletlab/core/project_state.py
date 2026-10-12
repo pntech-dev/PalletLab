@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .models import DirectionInput, InsertionSlot, PalletAxis, PalletResult
+from .materials import DEFAULT_MATERIAL_ID
 
 
 CameraMode = Literal["isometric", "top", "front", "side"]
@@ -24,6 +25,7 @@ class ProjectState:
     width_input: DirectionInput | None = None
     upper_layer: Literal["length", "width"] = "width"
     rounding_step: Literal[0, 5, 50] = 50
+    material_id: str = DEFAULT_MATERIAL_ID
     result: PalletResult | None = None
 
     active_tool: ToolMode = "none"

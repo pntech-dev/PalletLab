@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
+from palletlab.core.materials import PalletMaterial, get_material
 
 
 BASE_PLANE_NAME = "Спереди"
@@ -65,11 +66,12 @@ def export_pallet(
     result: PalletResult,
     parent_directory: str | Path,
     configured_templates: tuple[str | Path | None, str | Path | None] = (None, None),
+    material_id: str = "pine",
 ) -> Path:
     """Create the native parts and assembly; return the newly-created folder."""
     api = _load_solidworks_api()
     try:
-        return _export(api, result, Path(parent_directory), configured_templates)
+        return _export(api, result, Path(parent_directory), configured_templates, get_material(material_id))
     except SolidWorksExportError:
         raise
     except Exception as exc:
@@ -115,7 +117,7 @@ def _load_solidworks_api() -> dict[str, object]:
     }
 
 
-def _export(api: dict[str, object], result: PalletResult, parent_directory: Path, configured_templates) -> Path:
+def _export(api: dict[str, object], result: PalletResult, parent_directory: Path, configured_templates, material: PalletMaterial) -> Path:
     sw = api["SldWorks"]()
     if sw is None:
         raise SolidWorksExportError("Не удалось запустить SolidWorks.")
@@ -132,7 +134,7 @@ def _export(api: dict[str, object], result: PalletResult, parent_directory: Path
         orientation, size_x, size_y, size_z = key
         length, cross_width = (size_y, size_x) if orientation == "width" else (size_x, size_y)
         filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(cross_width)}x{_format_number(size_z)}.SLDPRT"
-        _create_beam(api, sw, templates.part, length, cross_width, size_z, filename)
+        _create_beam(api, sw, templates.part, material, length, cross_width, size_z, filename)
         parts[key] = filename
 
     assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
@@ -177,7 +179,7 @@ def _new_document(sw, template: Path, name: str):
     return document
 
 
-def _create_beam(api, sw, template: Path, length: float, width: float, height: float, filename: Path) -> None:
+def _create_beam(api, sw, template: Path, material: PalletMaterial, length: float, width: float, height: float, filename: Path) -> None:
     model = _new_document(sw, template, filename.name)
     model.ClearSelection2(True)
     if not model.Extension.SelectByID2(BASE_PLANE_NAME, "PLANE", 0.0, 0.0, 0.0, False, 0, None, 0):
@@ -198,7 +200,22 @@ def _create_beam(api, sw, template: Path, length: float, width: float, height: f
         False, False, False, False, 0.0, 0.0, False, False, False, False, True, True, True, 0, 0.0, False)
     if extrusion is None:
         raise SolidWorksExportError("Не удалось создать брус в SolidWorks.")
+    _apply_material(model, material)
     _save(api, model, filename)
+
+
+def _apply_material(model, material: PalletMaterial) -> None:
+    """Assign PalletLab's native material and always preserve readable metadata."""
+    try:
+        model.Extension.SetMaterialPropertyName2("", "", material.solidworks_name)
+    except Exception:
+        pass
+    try:
+        manager = model.Extension.CustomPropertyManager("")
+        manager.Add2("Материал", 30, material.name)
+        manager.Add2("Плотность, кг/м³", 30, str(material.density_kg_m3))
+    except Exception:
+        pass
 
 
 def _save(api, model, filename: Path) -> None:

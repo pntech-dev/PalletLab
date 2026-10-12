@@ -16,6 +16,7 @@ def _state() -> ProjectState:
         width_input=DirectionInput(60, 40, (200,), 90, 190, 80, 70, False, 5),
         upper_layer="length",
         rounding_step=50,
+        material_id="spruce",
         camera="top",
         show_length_dimensions=False,
         show_width_dimensions=True,
@@ -34,6 +35,7 @@ def test_project_json_round_trip_preserves_configuration_not_transient_state(tmp
     assert restored.length_input == state.length_input
     assert restored.width_input == state.width_input
     assert restored.upper_layer == "length"
+    assert restored.material_id == "spruce"
     assert restored.camera == "top"
     assert restored.show_length_dimensions is False
     assert restored.active_tool == "none"

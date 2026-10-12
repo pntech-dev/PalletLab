@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import DirectionInput
+from .materials import MATERIALS, DEFAULT_MATERIAL_ID
 from .project_state import ProjectState
 
 
@@ -63,6 +64,7 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
             "width": _direction_to_dict(state.width_input),
             "upper_layer": state.upper_layer,
             "rounding_step": state.rounding_step,
+            "material_id": state.material_id,
         },
         "view": {
             "camera": state.camera,
@@ -80,13 +82,15 @@ def project_from_dict(raw: object) -> ProjectState:
     if not isinstance(pallet, dict) or not isinstance(view, dict):
         raise ProjectPersistenceError("В файле отсутствуют разделы поддона или вида.")
     upper_layer, rounding_step, camera = pallet.get("upper_layer"), pallet.get("rounding_step"), view.get("camera")
-    if upper_layer not in ("length", "width") or rounding_step not in (0, 5, 50) or camera not in ("isometric", "top", "front", "side"):
+    material_id = pallet.get("material_id", DEFAULT_MATERIAL_ID)
+    if upper_layer not in ("length", "width") or rounding_step not in (0, 5, 50) or camera not in ("isometric", "top", "front", "side") or material_id not in MATERIALS:
         raise ProjectPersistenceError("Файл содержит неподдерживаемые настройки проекта.")
     return ProjectState(
         length_input=_direction_from_dict(pallet.get("length"), "длина"),
         width_input=_direction_from_dict(pallet.get("width"), "ширина"),
         upper_layer=upper_layer,
         rounding_step=rounding_step,
+        material_id=material_id,
         camera=camera,
         show_length_dimensions=bool(view.get("show_length_dimensions", True)),
         show_width_dimensions=bool(view.get("show_width_dimensions", True)),

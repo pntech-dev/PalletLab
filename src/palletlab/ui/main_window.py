@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, Q
 from palletlab.controllers.pallet_controller import PalletController
 from palletlab.core.calculator import insertion_slots
 from palletlab.core.formatting import format_mm
+from palletlab.core.materials import MATERIALS, get_material, pallet_mass_kg
 from palletlab.core.models import InsertionSlot, PalletAxis
 from palletlab.core.project_state import ProjectState
 from palletlab.core.validation import CalculationError
@@ -206,6 +207,14 @@ class MainWindow(QMainWindow):
         auto_calculate_hint.setObjectName("sectionHint")
         auto_calculate_hint.setWordWrap(True)
         action_layout.addWidget(auto_calculate_hint)
+        material_row = QHBoxLayout()
+        material_row.addWidget(QLabel("Материал брусьев"))
+        self.material_combo = QComboBox()
+        for material in MATERIALS.values():
+            self.material_combo.addItem(material.name, material.id)
+        self.material_combo.currentIndexChanged.connect(self._material_changed)
+        material_row.addWidget(self.material_combo, 1)
+        action_layout.addLayout(material_row)
         reset_button = QPushButton("Сбросить пример")
         reset_button.clicked.connect(self.reset_example)
         reset_button.setMinimumHeight(42)
@@ -458,14 +467,14 @@ class MainWindow(QMainWindow):
         try:
             templates = self._solidworks_templates()
             try:
-                output = export_pallet(result, parent, templates)
+                output = export_pallet(result, parent, templates, self.state.material_id)
             except SolidWorksTemplateError as error:
                 templates = self._select_solidworks_templates(error.missing, templates)
                 if templates is None:
                     self.statusBar().showMessage("Экспорт в SolidWorks отменён: не выбран шаблон.")
                     return
                 self._save_solidworks_templates(templates)
-                output = export_pallet(result, parent, templates)
+                output = export_pallet(result, parent, templates, self.state.material_id)
         except SolidWorksExportError as exc:
             QMessageBox.critical(self, "Экспорт в SolidWorks", str(exc))
             self.statusBar().showMessage("Экспорт в SolidWorks не выполнен.")
@@ -554,7 +563,7 @@ class MainWindow(QMainWindow):
         self.export_kompas_button.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            output = export_kompas_pallet(result, parent)
+            output = export_kompas_pallet(result, parent, self.state.material_id)
         except KompasExportError as exc:
             QMessageBox.critical(self, "Экспорт в КОМПАС-3D", str(exc))
             self.statusBar().showMessage("Экспорт в КОМПАС-3D не выполнен.")
@@ -762,12 +771,19 @@ class MainWindow(QMainWindow):
         return super().eventFilter(watched, event)
 
     def _update_scene_info(self, result) -> None:
+        material = get_material(self.state.material_id)
         self.scene_info.setText(
             f"Габариты поддона: длина {format_mm(result.pallet_length)} мм · "
             f"ширина {format_mm(result.pallet_width)} мм · высота {format_mm(result.pallet_height)} мм    "
             f"|    Балки: поперечные {format_mm(result.pallet_width)} мм · "
-            f"продольные {format_mm(result.pallet_length)} мм"
+            f"продольные {format_mm(result.pallet_length)} мм    "
+            f"|    Материал: {material.name} · масса {pallet_mass_kg(result.beams_3d, material.id):.1f} кг"
         )
+
+    def _material_changed(self, _index: int) -> None:
+        self.state.material_id = self.material_combo.currentData()
+        if self._last_result is not None:
+            self._update_scene_info(self._last_result)
 
     def _handle_calculation_error(self, error: CalculationError, show_error: bool) -> None:
         self.statusBar().showMessage(str(error))
@@ -816,6 +832,8 @@ class MainWindow(QMainWindow):
             self.round_to_50, self.round_to_5, self.no_rounding, self.show_length_gaps,
             self.show_width_gaps, self.camera_combo,
         )]
+        material_index = self.material_combo.findData(state.material_id)
+        self.material_combo.setCurrentIndex(max(0, material_index))
         self.length_panel.apply_position_data(state.length_input)
         self.width_panel.apply_position_data(state.width_input)
         self.length_upper.setChecked(state.upper_layer == "length")

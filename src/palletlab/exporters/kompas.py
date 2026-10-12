@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
+from palletlab.core.materials import PalletMaterial, get_material
 
 
 class KompasExportError(RuntimeError):
@@ -34,13 +35,13 @@ def create_output_directory(parent: str | Path, result: PalletResult) -> Path:
     return output
 
 
-def export_pallet(result: PalletResult, parent_directory: str | Path) -> Path:
+def export_pallet(result: PalletResult, parent_directory: str | Path, material_id: str = "pine") -> Path:
     """Create KOMPAS M3D parts and an A3D assembly from the current pallet."""
     api = _load_kompas_api()
     output = create_output_directory(parent_directory, result)
     api["pythoncom"].CoInitialize()
     try:
-        return _export(api, result, output)
+        return _export(api, result, output, get_material(material_id))
     except Exception as exc:
         raise KompasExportError(str(exc)) from exc
     finally:
@@ -64,7 +65,7 @@ def _load_kompas_api() -> dict[str, object]:
     return {"pythoncom": pythoncom, "Dispatch": Dispatch, "constants": constants, "constants3d": constants3d}
 
 
-def _export(api: dict[str, object], result: PalletResult, output: Path) -> Path:
+def _export(api: dict[str, object], result: PalletResult, output: Path, material: PalletMaterial) -> Path:
     try:
         kompas = api["Dispatch"]("KOMPAS.Application.5")
         kompas.Visible = True
@@ -81,7 +82,7 @@ def _export(api: dict[str, object], result: PalletResult, output: Path) -> Path:
         orientation, size_x, size_y, size_z = key
         length, width = (size_x, size_y) if orientation == "length" else (size_y, size_x)
         filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(width)}x{_format_number(size_z)}.m3d"
-        _create_beam(kompas, constants3d, length, width, size_z, filename)
+        _create_beam(kompas, constants3d, material, length, width, size_z, filename)
         parts[key] = filename
 
     assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.a3d"
@@ -89,7 +90,7 @@ def _export(api: dict[str, object], result: PalletResult, output: Path) -> Path:
     return output
 
 
-def _create_beam(kompas, constants3d, length: float, width: float, height: float, filename: Path) -> None:
+def _create_beam(kompas, constants3d, material: PalletMaterial, length: float, width: float, height: float, filename: Path) -> None:
     document = kompas.Document3D
     if not document.Create(False, True):
         raise KompasExportError(f"Не удалось создать деталь {filename.name}.")
@@ -122,8 +123,18 @@ def _create_beam(kompas, constants3d, length: float, width: float, height: float
     parameters.depthNormal = height
     if not extrusion.Create():
         raise KompasExportError("Не удалось выполнить выдавливание детали КОМПАС.")
+    _apply_material(document, material)
     if not document.SaveAs(str(filename)):
         raise KompasExportError(f"Не удалось сохранить {filename.name}.")
+
+
+def _apply_material(document, material: PalletMaterial) -> None:
+    """Store material metadata; supported KOMPAS installations may expose SetCustomProperty."""
+    for name, value in (("Материал", material.kompas_name), ("Плотность, кг/м³", str(material.density_kg_m3))):
+        try:
+            document.SetCustomProperty(name, value)
+        except Exception:
+            pass
 
 
 def _placement(beam: Beam3D) -> tuple[float, float, float, bool]:
