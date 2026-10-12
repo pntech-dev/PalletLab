@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QSignalBlocker, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QSettings, QSignalBlocker, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
@@ -13,7 +13,7 @@ from palletlab.core.models import InsertionSlot, PalletAxis
 from palletlab.core.project_state import ProjectState
 from palletlab.core.validation import CalculationError
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
-from palletlab.exporters.solidworks import SolidWorksExportError, export_pallet
+from palletlab.exporters.solidworks import SolidWorksExportError, SolidWorksTemplateError, export_pallet
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
 from palletlab.ui.update_dialog import check_for_updates
@@ -456,7 +456,16 @@ class MainWindow(QMainWindow):
         self.export_solidworks_button.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            output = export_pallet(result, parent)
+            templates = self._solidworks_templates()
+            try:
+                output = export_pallet(result, parent, templates)
+            except SolidWorksTemplateError as error:
+                templates = self._select_solidworks_templates(error.missing, templates)
+                if templates is None:
+                    self.statusBar().showMessage("Экспорт в SolidWorks отменён: не выбран шаблон.")
+                    return
+                self._save_solidworks_templates(templates)
+                output = export_pallet(result, parent, templates)
         except SolidWorksExportError as exc:
             QMessageBox.critical(self, "Экспорт в SolidWorks", str(exc))
             self.statusBar().showMessage("Экспорт в SolidWorks не выполнен.")
@@ -466,6 +475,35 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
             self.export_solidworks_button.setEnabled(True)
+
+    @staticmethod
+    def _solidworks_templates() -> tuple[str | None, str | None]:
+        settings = QSettings("PalletLab", "PalletLab")
+        part = settings.value("solidworks/part_template", "", type=str) or None
+        assembly = settings.value("solidworks/assembly_template", "", type=str) or None
+        return part, assembly
+
+    @staticmethod
+    def _save_solidworks_templates(templates: tuple[str | None, str | None]) -> None:
+        settings = QSettings("PalletLab", "PalletLab")
+        settings.setValue("solidworks/part_template", templates[0] or "")
+        settings.setValue("solidworks/assembly_template", templates[1] or "")
+
+    def _select_solidworks_templates(
+        self, missing: tuple[str, ...], current: tuple[str | None, str | None]
+    ) -> tuple[str | None, str | None] | None:
+        selected = list(current)
+        choices = {
+            "part": (0, "Выберите шаблон детали SolidWorks", "Шаблоны деталей SolidWorks (*.prtdot)"),
+            "assembly": (1, "Выберите шаблон сборки SolidWorks", "Шаблоны сборок SolidWorks (*.asmdot)"),
+        }
+        for kind in missing:
+            index, title, file_filter = choices[kind]
+            path, _ = QFileDialog.getOpenFileName(self, title, "", file_filter)
+            if not path:
+                return None
+            selected[index] = path
+        return selected[0], selected[1]
 
     def save_project(self) -> None:
         """Save the current editable pallet state; no automatic save is used."""

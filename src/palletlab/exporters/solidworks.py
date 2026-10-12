@@ -7,6 +7,7 @@ usable on workstations where the CAD system is not installed.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,13 +15,26 @@ if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
 
 
-PART_TEMPLATE = Path(r"D:\KTO-PDM\!SW_Stuff\Templates\Деталь.prtdot")
-ASSEMBLY_TEMPLATE = Path(r"D:\KTO-PDM\!SW_Stuff\Templates\Сборка.asmdot")
 BASE_PLANE_NAME = "Спереди"
 SOLIDWORKS_API_DIR = Path(r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist")
 
 class SolidWorksExportError(RuntimeError):
     """A user-facing failure while preparing or exporting a CAD model."""
+
+
+class SolidWorksTemplateError(SolidWorksExportError):
+    """SolidWorks has no usable part or assembly template configured."""
+
+    def __init__(self, missing: tuple[str, ...]) -> None:
+        self.missing = missing
+        labels = {"part": "детали (.prtdot)", "assembly": "сборки (.asmdot)"}
+        super().__init__("Не найден шаблон " + " и ".join(labels[item] for item in missing) + ".")
+
+
+@dataclass(frozen=True)
+class TemplatePaths:
+    part: Path
+    assembly: Path
 
 
 def _format_number(value: float) -> str:
@@ -47,12 +61,17 @@ def create_output_directory(parent: str | Path, result: PalletResult) -> Path:
     return output
 
 
-def export_pallet(result: PalletResult, parent_directory: str | Path) -> Path:
+def export_pallet(
+    result: PalletResult,
+    parent_directory: str | Path,
+    configured_templates: tuple[str | Path | None, str | Path | None] = (None, None),
+) -> Path:
     """Create the native parts and assembly; return the newly-created folder."""
     api = _load_solidworks_api()
-    output = create_output_directory(parent_directory, result)
     try:
-        return _export(api, result, output)
+        return _export(api, result, Path(parent_directory), configured_templates)
+    except SolidWorksExportError:
+        raise
     except Exception as exc:
         raise SolidWorksExportError(str(exc)) from exc
 
@@ -60,7 +79,7 @@ def export_pallet(result: PalletResult, parent_directory: str | Path) -> Path:
 def _load_solidworks_api() -> dict[str, object]:
     sldworks_dll = SOLIDWORKS_API_DIR / "SolidWorks.Interop.sldworks.dll"
     swconst_dll = SOLIDWORKS_API_DIR / "SolidWorks.Interop.swconst.dll"
-    missing = [str(path) for path in (sldworks_dll, swconst_dll, PART_TEMPLATE, ASSEMBLY_TEMPLATE) if not path.exists()]
+    missing = [str(path) for path in (sldworks_dll, swconst_dll) if not path.exists()]
     if missing:
         raise SolidWorksExportError("Не найдены файлы SolidWorks или шаблоны:\n" + "\n".join(missing))
     try:
@@ -77,6 +96,7 @@ def _load_solidworks_api() -> dict[str, object]:
             swSaveAsOptions_e,
             swSaveAsVersion_e,
             swStandardViews_e,
+            swUserPreferenceStringValue_e,
         )
     except (ImportError, OSError) as exc:
         raise SolidWorksExportError("Не удалось подключить API SolidWorks. Переустановите компоненты pythonnet и pywin32 приложения.") from exc
@@ -88,17 +108,20 @@ def _load_solidworks_api() -> dict[str, object]:
             "save_options": swSaveAsOptions_e,
             "save_version": swSaveAsVersion_e,
             "views": swStandardViews_e,
+            "user_preferences": swUserPreferenceStringValue_e,
         },
         "pythoncom": pythoncom,
         "win32": win32com.client,
     }
 
 
-def _export(api: dict[str, object], result: PalletResult, output: Path) -> Path:
+def _export(api: dict[str, object], result: PalletResult, parent_directory: Path, configured_templates) -> Path:
     sw = api["SldWorks"]()
     if sw is None:
         raise SolidWorksExportError("Не удалось запустить SolidWorks.")
     sw.Visible = True
+    templates = _resolve_templates(api, sw, configured_templates)
+    output = create_output_directory(parent_directory, result)
 
     groups: dict[tuple[str, float, float, float], list[Beam3D]] = defaultdict(list)
     for beam in result.beams_3d:
@@ -109,12 +132,33 @@ def _export(api: dict[str, object], result: PalletResult, output: Path) -> Path:
         orientation, size_x, size_y, size_z = key
         length, cross_width = (size_y, size_x) if orientation == "width" else (size_x, size_y)
         filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(cross_width)}x{_format_number(size_z)}.SLDPRT"
-        _create_beam(api, sw, length, cross_width, size_z, filename)
+        _create_beam(api, sw, templates.part, length, cross_width, size_z, filename)
         parts[key] = filename
 
     assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
-    _create_assembly(api, sw, result, parts, assembly_file)
+    _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
     return output
+
+
+def _resolve_templates(api: dict[str, object], sw, configured_templates) -> TemplatePaths:
+    configured_part, configured_assembly = (Path(path) if path else None for path in configured_templates)
+    preferences = api["const"]["user_preferences"]
+    default_part = _solidworks_template(sw, preferences.swDefaultTemplatePart)
+    default_assembly = _solidworks_template(sw, preferences.swDefaultTemplateAssembly)
+    part = configured_part if configured_part and configured_part.is_file() else default_part
+    assembly = configured_assembly if configured_assembly and configured_assembly.is_file() else default_assembly
+    missing = tuple(name for name, path in (("part", part), ("assembly", assembly)) if path is None or not path.is_file())
+    if missing:
+        raise SolidWorksTemplateError(missing)
+    return TemplatePaths(part=part, assembly=assembly)
+
+
+def _solidworks_template(sw, preference) -> Path | None:
+    try:
+        value = sw.GetUserPreferenceStringValue(preference)
+    except Exception:
+        return None
+    return Path(value) if value else None
 
 
 def _flag_methods(com_object, *names: str) -> None:
@@ -133,8 +177,8 @@ def _new_document(sw, template: Path, name: str):
     return document
 
 
-def _create_beam(api, sw, length: float, width: float, height: float, filename: Path) -> None:
-    model = _new_document(sw, PART_TEMPLATE, filename.name)
+def _create_beam(api, sw, template: Path, length: float, width: float, height: float, filename: Path) -> None:
+    model = _new_document(sw, template, filename.name)
     model.ClearSelection2(True)
     if not model.Extension.SelectByID2(BASE_PLANE_NAME, "PLANE", 0.0, 0.0, 0.0, False, 0, None, 0):
         raise SolidWorksExportError(f"Не удалось выбрать плоскость '{BASE_PLANE_NAME}'.")
@@ -196,8 +240,8 @@ def _matrix(beam: Beam3D) -> tuple[float, ...]:
     return (*axes[0], *axes[1], *axes[2], *origin, 1.0, 0.0, 0.0, 0.0)
 
 
-def _create_assembly(api, sw, result: PalletResult, parts, filename: Path) -> None:
-    _new_document(sw, ASSEMBLY_TEMPLATE, filename.name)
+def _create_assembly(api, sw, template: Path, result: PalletResult, parts, filename: Path) -> None:
+    _new_document(sw, template, filename.name)
     assembly = api["win32"].GetActiveObject("SldWorks.Application").ActiveDoc
     if assembly is None:
         raise SolidWorksExportError("Не удалось получить сборку SolidWorks.")

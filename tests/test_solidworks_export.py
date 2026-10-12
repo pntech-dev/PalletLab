@@ -2,9 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from palletlab.core.calculator import build_pallet, calculate_direction
 from palletlab.core.models import Beam3D, DirectionInput
-from palletlab.exporters.solidworks import _matrix, _metres, _new_document, create_output_directory
+from palletlab.exporters.solidworks import (
+    SolidWorksTemplateError,
+    _matrix,
+    _metres,
+    _new_document,
+    _resolve_templates,
+    create_output_directory,
+)
 
 
 def _result():
@@ -56,3 +65,36 @@ def test_lengthwise_beam_starts_at_the_shared_pallet_corner():
     matrix = _matrix(beam)
 
     assert matrix[9:12] == (0.0, 0.035, -2.0)
+
+
+def test_templates_are_read_from_solidworks_preferences(tmp_path):
+    part = tmp_path / "part.prtdot"; part.write_text("part")
+    assembly = tmp_path / "assembly.asmdot"; assembly.write_text("assembly")
+
+    class _Preferences:
+        swDefaultTemplatePart = "part"
+        swDefaultTemplateAssembly = "assembly"
+
+    class _SolidWorks:
+        def GetUserPreferenceStringValue(self, preference):
+            return str(part if preference == "part" else assembly)
+
+    templates = _resolve_templates({"const": {"user_preferences": _Preferences}}, _SolidWorks(), (None, None))
+
+    assert templates.part == part
+    assert templates.assembly == assembly
+
+
+def test_missing_templates_request_user_selection(tmp_path):
+    class _Preferences:
+        swDefaultTemplatePart = "part"
+        swDefaultTemplateAssembly = "assembly"
+
+    class _SolidWorks:
+        def GetUserPreferenceStringValue(self, _preference):
+            return ""
+
+    with pytest.raises(SolidWorksTemplateError) as error:
+        _resolve_templates({"const": {"user_preferences": _Preferences}}, _SolidWorks(), (None, None))
+
+    assert error.value.missing == ("part", "assembly")
