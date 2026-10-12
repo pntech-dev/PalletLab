@@ -7,8 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import QThread, pyqtSignal
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QProgressBar, QVBoxLayout
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QProgressBar, QVBoxLayout
 
 from palletlab.update_service import Release, download_verified, fetch_newer_release
 from palletlab.version import __version__
@@ -43,8 +43,11 @@ class DownloadWorker(QThread):
 class UpdateDialog(QDialog):
     def __init__(self, release: Release, parent=None) -> None:
         super().__init__(parent); self.release = release; self.setWindowTitle("Доступно обновление")
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setMinimumWidth(460)
         self.label = QLabel(f"Доступна версия {release.version}.\n\nУстановить её сейчас?")
-        self.progress = QProgressBar(); self.progress.hide()
+        self.label.setWordWrap(True)
+        self.progress = QProgressBar(); self.progress.setTextVisible(True); self.progress.hide()
         self.install, self.later = QPushButton("Скачать и установить"), QPushButton("Позже")
         self.install.clicked.connect(self._download); self.later.clicked.connect(self.reject)
         layout = QVBoxLayout(self); layout.addWidget(self.label); layout.addWidget(self.progress)
@@ -61,10 +64,14 @@ class UpdateDialog(QDialog):
             self._failed("Не найден компонент обновления. Установите новую версию через Setup."); return
         subprocess.Popen([str(updater), "--package", str(package), "--app-dir", str(executable.parent), "--pid", str(os.getpid())])
         self.accept()
-        self.window().close()
+        if self.parentWidget() is not None:
+            self.parentWidget().window().close()
+        application = QApplication.instance()
+        if application is not None:
+            application.quit()
 
     def _failed(self, message: str) -> None:
-        self.label.setText("Не удалось загрузить обновление: " + message); self.install.setEnabled(True); self.later.setEnabled(True)
+        self.label.setText("Не удалось загрузить обновление: " + message); self.label.setWordWrap(True); self.install.setEnabled(True); self.later.setEnabled(True)
 
 
 def check_for_updates(parent) -> CheckWorker | None:

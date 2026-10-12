@@ -40,8 +40,7 @@ class InstallWorker(QThread):
             if backup.exists():
                 shutil.rmtree(backup, ignore_errors=True)
             self.progress.emit(70, "Установка новой версии…")
-            self.app_dir.rename(backup)
-            extracted.rename(self.app_dir)
+            _replace_application_directory(self.app_dir, backup, extracted)
             shutil.rmtree(backup, ignore_errors=True)
             self.progress.emit(100, "Обновление установлено.")
             self.finished_install.emit(str(self.app_dir / "PalletLab.exe"))
@@ -63,12 +62,33 @@ def _running(pid: int) -> bool:
         return False
 
 
+def _replace_application_directory(app_dir: Path, backup: Path, extracted: Path) -> None:
+    """Replace the onedir build, allowing Windows to release files after exit."""
+    last_error: OSError | None = None
+    for _ in range(25):
+        try:
+            app_dir.rename(backup)
+            try:
+                extracted.rename(app_dir)
+            except OSError:
+                backup.rename(app_dir)
+                raise
+            return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.4)
+    raise RuntimeError(
+        "PalletLab всё ещё использует файлы установки. Закройте программу и повторите обновление."
+    ) from last_error
+
+
 class UpdaterDialog(QDialog):
     def __init__(self, package: Path, app_dir: Path, pid: int) -> None:
         super().__init__()
         self.setWindowTitle("Обновление PalletLab")
-        self.setMinimumWidth(380)
+        self.setMinimumWidth(460)
         self.label = QLabel("Подготовка обновления…")
+        self.label.setWordWrap(True)
         self.bar = QProgressBar()
         self.close_button, self.open_button = QPushButton("Закрыть"), QPushButton("Открыть")
         self.open_button.setEnabled(False)
@@ -87,7 +107,9 @@ class UpdaterDialog(QDialog):
         self.executable = executable; self.open_button.setEnabled(True)
 
     def _failed(self, message: str) -> None:
-        self.label.setText("Не удалось установить обновление: " + message); self.close_button.setText("Закрыть")
+        self.label.setText("Не удалось установить обновление: " + message)
+        self.label.setWordWrap(True)
+        self.close_button.setText("Закрыть")
 
     def _open(self) -> None:
         subprocess.Popen([self.executable], cwd=str(Path(self.executable).parent)); self.accept()
