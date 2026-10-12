@@ -123,22 +123,48 @@ def _create_beam(kompas, constants3d, material: PalletMaterial, length: float, w
     parameters.depthNormal = height
     if not extrusion.Create():
         raise KompasExportError("Не удалось выполнить выдавливание детали КОМПАС.")
-    _apply_material(document, material)
+    _apply_material(part, material)
+    _apply_wood_appearance(part)
     if not document.SaveAs(str(filename)):
         raise KompasExportError(f"Не удалось сохранить {filename.name}.")
 
 
-def _apply_material(document, material: PalletMaterial) -> None:
-    """Store material metadata; supported KOMPAS installations may expose SetCustomProperty."""
+def _apply_material(part, material: PalletMaterial) -> None:
+    """Set KOMPAS's native material on a part and rebuild its properties.
+
+    KOMPAS exposes ``Material`` as a read-only property.  ``SetMaterial`` is
+    the API that updates the material shown in the model tree and it expects
+    density in g/cm³, rather than kg/m³.
+    """
+    density_g_cm3 = material.density_kg_m3 / 1000.0
     try:
-        document.Material = material.kompas_name
+        assigned = part.SetMaterial(material.kompas_name, density_g_cm3)
+    except Exception as exc:
+        raise KompasExportError(f"Не удалось назначить материал '{material.name}' детали КОМПАС-3D.") from exc
+    if assigned is False:
+        raise KompasExportError(f"КОМПАС-3D не назначил материал '{material.name}' детали.")
+    try:
+        part.Update()
+    except Exception as exc:
+        raise KompasExportError("КОМПАС-3D не обновил деталь после назначения материала.") from exc
+
+
+def _apply_wood_appearance(part) -> None:
+    """Give exported wooden beams a light, recognisable wood colour.
+
+    Appearance is intentionally optional: older KOMPAS versions may not
+    expose visual properties through Automation, but the material itself must
+    still be exported successfully.
+    """
+    try:
+        # COLORREF is BGR in memory; this produces a light warm wood RGB
+        # colour (222, 173, 112).
+        light_wood = 222 | (173 << 8) | (112 << 16)
+        part.useColor = 0  # useColorOur
+        part.SetAdvancedColor(light_wood, 0.35, 0.80, 0.15, 0.10, 1.0, 0.0)
+        part.Update()
     except Exception:
         pass
-    for name, value in (("Материал", material.kompas_name), ("Плотность, кг/м³", str(material.density_kg_m3))):
-        try:
-            document.SetCustomProperty(name, value)
-        except Exception:
-            pass
 
 
 def _placement(beam: Beam3D) -> tuple[float, float, float, bool]:

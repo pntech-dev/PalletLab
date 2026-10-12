@@ -15,8 +15,8 @@ class PalletMaterial:
 
 
 MATERIALS = {
-    "pine": PalletMaterial("pine", "Сосна", 500.0, "Pine", "Сосна"),
-    "spruce": PalletMaterial("spruce", "Ель", 450.0, "Spruce", "Ель"),
+    "pine": PalletMaterial("pine", "Сосна", 500.0, "Сосна", "Сосна"),
+    "spruce": PalletMaterial("spruce", "Ель", 450.0, "Ель", "Ель"),
 }
 DEFAULT_MATERIAL_ID = "pine"
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import QEvent, QSettings, QSignalBlocker, QTimer, Qt, pyqtSignal
-from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
+from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.controllers.pallet_controller import PalletController
@@ -14,7 +14,7 @@ from palletlab.core.models import InsertionSlot, PalletAxis
 from palletlab.core.project_state import ProjectState
 from palletlab.core.validation import CalculationError
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
-from palletlab.exporters.solidworks import SolidWorksExportError, SolidWorksTemplateError, export_pallet
+from palletlab.exporters.solidworks import SolidWorksExportError, SolidWorksMaterialLibraryError, SolidWorksTemplateError, available_materials, export_pallet
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
 from palletlab.ui.update_dialog import check_for_updates
@@ -466,15 +466,23 @@ class MainWindow(QMainWindow):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             templates = self._solidworks_templates()
+            material_library, material_name = self._solidworks_material()
+            if not material_library or not material_name:
+                selected_material = self._select_solidworks_material()
+                if selected_material is None:
+                    self.statusBar().showMessage("Экспорт в SolidWorks отменён: не выбрана библиотека материалов.")
+                    return
+                material_library, material_name = selected_material
+                self._save_solidworks_material(material_library, material_name)
             try:
-                output = export_pallet(result, parent, templates, self.state.material_id)
+                output = export_pallet(result, parent, templates, self.state.material_id, material_library, material_name)
             except SolidWorksTemplateError as error:
                 templates = self._select_solidworks_templates(error.missing, templates)
                 if templates is None:
                     self.statusBar().showMessage("Экспорт в SolidWorks отменён: не выбран шаблон.")
                     return
                 self._save_solidworks_templates(templates)
-                output = export_pallet(result, parent, templates, self.state.material_id)
+                output = export_pallet(result, parent, templates, self.state.material_id, material_library, material_name)
         except SolidWorksExportError as exc:
             QMessageBox.critical(self, "Экспорт в SolidWorks", str(exc))
             self.statusBar().showMessage("Экспорт в SolidWorks не выполнен.")
@@ -500,12 +508,58 @@ class MainWindow(QMainWindow):
         settings.setValue("solidworks/part_template", templates[0] or "")
         settings.setValue("solidworks/assembly_template", templates[1] or "")
 
+    def _solidworks_material(self) -> tuple[str | None, str | None]:
+        settings = QSettings("PalletLab", "PalletLab")
+        library = settings.value("solidworks/material_library", "", type=str) or None
+        material = settings.value(f"solidworks/materials/{self.state.material_id}", "", type=str) or None
+        return library, material
+
+    def _save_solidworks_material(self, library: str, material: str) -> None:
+        settings = QSettings("PalletLab", "PalletLab")
+        settings.setValue("solidworks/material_library", library)
+        settings.setValue(f"solidworks/materials/{self.state.material_id}", material)
+
+    def _select_solidworks_material(self) -> tuple[str, str] | None:
+        prompt = QMessageBox(self)
+        prompt.setIcon(QMessageBox.Warning)
+        prompt.setWindowTitle("Нужна библиотека материалов SolidWorks")
+        prompt.setText("Выберите библиотеку материалов SolidWorks (.sldmat).")
+        prompt.setInformativeText(
+            "PalletLab не изменяет настройки SolidWorks. Папка библиотеки должна быть уже добавлена в «Базы данных материалов».\n\n"
+            "Стандартный путь: C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\lang\\english\\sldmaterials\n"
+            "Для русской локали: C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\lang\\russian\\sldmaterials"
+        )
+        choose_button = prompt.addButton("Выбрать библиотеку", QMessageBox.AcceptRole)
+        prompt.addButton("Отмена", QMessageBox.RejectRole)
+        prompt.exec_()
+        if prompt.clickedButton() is not choose_button:
+            return None
+        library, _ = QFileDialog.getOpenFileName(self, "Выберите библиотеку материалов SolidWorks", "", "Библиотеки материалов SolidWorks (*.sldmat)")
+        if not library:
+            return None
+        try:
+            names = available_materials(library)
+        except SolidWorksMaterialLibraryError as exc:
+            QMessageBox.critical(self, "Библиотека материалов SolidWorks", str(exc))
+            return None
+        current = get_material(self.state.material_id)
+        initial = names.index(current.solidworks_name) if current.solidworks_name in names else 0
+        material, accepted = QInputDialog.getItem(self, "Материал SolidWorks", f"Материал для «{current.name}»:", names, initial, False)
+        return (library, material) if accepted and material else None
+
     def _select_solidworks_templates(
         self, missing: tuple[str, ...], current: tuple[str | None, str | None]
     ) -> tuple[str | None, str | None] | None:
         selected = list(current)
-        answer = QMessageBox.question(self, "Нужны шаблоны SolidWorks", "Не настроены шаблоны для экспорта. Выбрать их сейчас?", QMessageBox.Cancel | QMessageBox.Open, QMessageBox.Open)
-        if answer != QMessageBox.Open:
+        prompt = QMessageBox(self)
+        prompt.setIcon(QMessageBox.Warning)
+        prompt.setWindowTitle("Нужны шаблоны SolidWorks")
+        prompt.setText("Не настроены шаблоны для экспорта в SolidWorks.")
+        prompt.setInformativeText("Выберите шаблоны детали и сборки сейчас или отмените экспорт.")
+        choose_button = prompt.addButton("Выбрать шаблоны", QMessageBox.AcceptRole)
+        prompt.addButton("Отмена", QMessageBox.RejectRole)
+        prompt.exec_()
+        if prompt.clickedButton() is not choose_button:
             return None
         choices = {
             "part": (0, "Выберите шаблон детали SolidWorks", "Шаблоны деталей SolidWorks (*.prtdot)"),

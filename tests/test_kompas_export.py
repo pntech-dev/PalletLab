@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from palletlab.core.calculator import build_pallet, calculate_direction
 from palletlab.core.models import Beam3D, DirectionInput
-from palletlab.exporters.kompas import _placement, create_output_directory
+from palletlab.core.materials import get_material
+from palletlab.exporters.kompas import _apply_material, _apply_wood_appearance, _placement, create_output_directory
 
 
 def _result():
@@ -26,3 +27,39 @@ def test_kompas_placements_share_the_pallet_origin():
 
     assert _placement(lengthwise) == (0.0, 1975.0, 70.0, False)
     assert _placement(widthwise) == (1525.0, 0.0, 0.0, True)
+
+
+def test_kompas_material_is_assigned_to_the_part_in_grams_per_cm3():
+    class _Part:
+        def __init__(self):
+            self.calls = []
+
+        def SetMaterial(self, name, density):
+            self.calls.append(("material", name, density))
+            return True
+
+        def Update(self):
+            self.calls.append(("update",))
+
+    part = _Part()
+    _apply_material(part, get_material("pine"))
+
+    assert part.calls == [("material", "Сосна", 0.5), ("update",)]
+
+
+def test_kompas_beam_gets_a_light_wood_appearance_when_supported():
+    class _Part:
+        def __init__(self):
+            self.calls = []
+
+        def SetAdvancedColor(self, *args):
+            self.calls.append(("colour", args))
+
+        def Update(self):
+            self.calls.append(("update",))
+
+    part = _Part()
+    _apply_wood_appearance(part)
+
+    assert part.useColor == 0
+    assert part.calls == [("colour", (0x70ADDE, 0.35, 0.80, 0.15, 0.10, 1.0, 0.0)), ("update",)]

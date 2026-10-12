@@ -10,6 +10,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+from xml.etree import ElementTree
 
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
@@ -30,6 +31,10 @@ class SolidWorksTemplateError(SolidWorksExportError):
         self.missing = missing
         labels = {"part": "детали (.prtdot)", "assembly": "сборки (.asmdot)"}
         super().__init__("Не найден шаблон " + " и ".join(labels[item] for item in missing) + ".")
+
+
+class SolidWorksMaterialLibraryError(SolidWorksExportError):
+    """SolidWorks material library is absent, invalid, or not configured."""
 
 
 @dataclass(frozen=True)
@@ -67,11 +72,15 @@ def export_pallet(
     parent_directory: str | Path,
     configured_templates: tuple[str | Path | None, str | Path | None] = (None, None),
     material_id: str = "pine",
+    material_library: str | Path | None = None,
+    material_name: str | None = None,
 ) -> Path:
     """Create the native parts and assembly; return the newly-created folder."""
     api = _load_solidworks_api()
     try:
-        return _export(api, result, Path(parent_directory), configured_templates, get_material(material_id))
+        material = get_material(material_id)
+        library = _validate_material_library(material_library, material_name)
+        return _export(api, result, Path(parent_directory), configured_templates, material, library, material_name)
     except SolidWorksExportError:
         raise
     except Exception as exc:
@@ -117,12 +126,13 @@ def _load_solidworks_api() -> dict[str, object]:
     }
 
 
-def _export(api: dict[str, object], result: PalletResult, parent_directory: Path, configured_templates, material: PalletMaterial) -> Path:
+def _export(api: dict[str, object], result: PalletResult, parent_directory: Path, configured_templates, material: PalletMaterial, material_library: Path, material_name: str) -> Path:
     sw = api["SldWorks"]()
     if sw is None:
         raise SolidWorksExportError("Не удалось запустить SolidWorks.")
     sw.Visible = True
     templates = _resolve_templates(api, sw, configured_templates)
+    _ensure_material_library_is_configured(api, sw, material_library)
     output = create_output_directory(parent_directory, result)
 
     groups: dict[tuple[str, float, float, float], list[Beam3D]] = defaultdict(list)
@@ -134,7 +144,7 @@ def _export(api: dict[str, object], result: PalletResult, parent_directory: Path
         orientation, size_x, size_y, size_z = key
         length, cross_width = (size_y, size_x) if orientation == "width" else (size_x, size_y)
         filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(cross_width)}x{_format_number(size_z)}.SLDPRT"
-        _create_beam(api, sw, templates.part, material, length, cross_width, size_z, filename)
+        _create_beam(api, sw, templates.part, material, material_library, material_name, length, cross_width, size_z, filename)
         parts[key] = filename
 
     assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
@@ -179,7 +189,7 @@ def _new_document(sw, template: Path, name: str):
     return document
 
 
-def _create_beam(api, sw, template: Path, material: PalletMaterial, length: float, width: float, height: float, filename: Path) -> None:
+def _create_beam(api, sw, template: Path, material: PalletMaterial, material_library: Path, material_name: str, length: float, width: float, height: float, filename: Path) -> None:
     model = _new_document(sw, template, filename.name)
     model.ClearSelection2(True)
     if not model.Extension.SelectByID2(BASE_PLANE_NAME, "PLANE", 0.0, 0.0, 0.0, False, 0, None, 0):
@@ -200,26 +210,106 @@ def _create_beam(api, sw, template: Path, material: PalletMaterial, length: floa
         False, False, False, False, 0.0, 0.0, False, False, False, False, True, True, True, 0, 0.0, False)
     if extrusion is None:
         raise SolidWorksExportError("Не удалось создать брус в SolidWorks.")
-    _apply_material(model, material)
+    _apply_material(_part_document(api, model), material, material_library, material_name)
     _save(api, model, filename)
 
 
-def _apply_material(model, material: PalletMaterial) -> None:
-    """Assign PalletLab's native material and always preserve readable metadata."""
+def _part_document(api: dict[str, object], model):
+    """Return the active part through IDispatch when pythonnet gives ModelDoc2.
+
+    The interop wrapper exposes the new document as ``IModelDoc2``.  Material
+    assignment is a member of ``IPartDoc`` only; obtaining the same active
+    document through pywin32 gives access to that part-specific interface.
+    """
     try:
-        model.MaterialPropertyName = material.solidworks_name
+        document = api["win32"].GetActiveObject("SldWorks.Application").ActiveDoc
+        if document is not None:
+            return document
     except Exception:
         pass
+    return model
+
+
+def _apply_material(model, material: PalletMaterial, material_library: Path, material_name: str) -> None:
+    """Assign the SolidWorks material and preserve readable export metadata.
+
+    ``SetMaterialPropertyName2`` belongs to ``IPartDoc`` (the document
+    itself), not to ``IModelDocExtension``.  Passing an empty database tells
+    SolidWorks to use its configured default ``.sldmat`` database.
+    """
+    configuration = _active_configuration_name(model)
     try:
-        model.Extension.SetMaterialPropertyName2("", "", material.solidworks_name)
-    except Exception:
-        pass
+        _flag_methods(model, "SetMaterialPropertyName2")
+        model.SetMaterialPropertyName2(configuration, material_library.name, material_name)
+    except Exception as exc:
+        raise SolidWorksExportError(
+            f"Не удалось назначить материал '{material.name}' детали SolidWorks. "
+            "Проверьте доступ к библиотеке материалов SolidWorks."
+        ) from exc
+
+    # These properties are supplemental: the native material assignment above
+    # is what SolidWorks uses for the material tree and mass properties.
     try:
         manager = model.Extension.CustomPropertyManager("")
         manager.Add2("Материал", 30, material.name)
         manager.Add2("Плотность, кг/м³", 30, str(material.density_kg_m3))
     except Exception:
         pass
+
+
+def _active_configuration_name(model) -> str:
+    """Return the exact active configuration for a part material assignment."""
+    try:
+        configuration = model.ConfigurationManager.ActiveConfiguration
+        if configuration is not None and configuration.Name:
+            return str(configuration.Name)
+    except Exception:
+        pass
+    # Empty is the SolidWorks API fallback when a minimal template has no
+    # available ConfigurationManager object.
+    return ""
+
+
+def available_materials(material_library: str | Path) -> tuple[str, ...]:
+    """Return material names from a user-selected SolidWorks .sldmat file."""
+    library = Path(material_library)
+    try:
+        root = ElementTree.parse(library).getroot()
+        names = tuple(node.attrib["name"] for node in root.iter() if node.tag.endswith("material") and node.attrib.get("name"))
+    except (OSError, ElementTree.ParseError) as exc:
+        raise SolidWorksMaterialLibraryError("Не удалось прочитать выбранную библиотеку материалов SolidWorks.") from exc
+    if not names:
+        raise SolidWorksMaterialLibraryError("В выбранной библиотеке SolidWorks нет материалов.")
+    return names
+
+
+def _validate_material_library(material_library: str | Path | None, material_name: str | None) -> Path:
+    if not material_library:
+        raise SolidWorksMaterialLibraryError("Не выбрана библиотека материалов SolidWorks (.sldmat).")
+    library = Path(material_library)
+    names = available_materials(library)
+    if not material_name or material_name not in names:
+        raise SolidWorksMaterialLibraryError("Не выбран материал из библиотеки SolidWorks.")
+    return library
+
+
+def _ensure_material_library_is_configured(api: dict[str, object], sw, library: Path) -> None:
+    """Require an existing corporate SolidWorks setup; never alter it."""
+    try:
+        databases = sw.GetMaterialDatabases()
+        configured = tuple(str(database) for database in (databases or ()))
+        target = str(library.resolve()).casefold()
+        if not any(str(Path(database).resolve()).casefold() == target for database in configured):
+            raise SolidWorksMaterialLibraryError(
+                "Выбранная библиотека не подключена в SolidWorks. "
+                "Добавьте её в Параметры → Расположение файлов → Базы данных материалов."
+            )
+    except Exception as exc:
+        if isinstance(exc, SolidWorksMaterialLibraryError):
+            raise
+        raise SolidWorksExportError(
+            "Не удалось проверить список библиотек материалов SolidWorks."
+        ) from exc
 
 
 def _save(api, model, filename: Path) -> None:
@@ -248,15 +338,19 @@ def _matrix(beam: Beam3D) -> tuple[float, ...]:
     """
     if beam.orientation == "length":
         # Beam spans the pallet's X direction.
-        axes = ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0))
+        # The local cross-width axis points into +Z, so all longitudinal
+        # beams use positive SolidWorks Z coordinates.  The local height axis
+        # is inverted to keep the transformation right-handed.
+        axes = ((0.0, 0.0, 1.0), (0.0, -1.0, 0.0), (1.0, 0.0, 0.0))
         # The part extrusion starts at its local Z=0 face, while a Beam3D
         # coordinate is its centre.  All lengthwise beams start at X=0.
-        origin = (0.0, _metres(beam.z), -_metres(beam.y))
+        origin = (0.0, _metres(beam.z), _metres(beam.y))
     else:
-        # Beam spans the pallet's Y direction, which is -Z in the template.
-        axes = ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, -1.0))
-        # All widthwise beams start at Y=0 (SolidWorks Z=0).  Together with
-        # the branch above this pins the pallet's shared corner to (0, 0, 0).
+        # Beam spans the pallet's Y direction.  Its local Z=0 start face is
+        # pinned to SolidWorks Z=0 and the beam grows in the positive Z
+        # direction, rather than placing the pallet in negative coordinates.
+        axes = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        # All widthwise beams start at Y=0 (SolidWorks Z=0).
         origin = (_metres(beam.x), _metres(beam.z), 0.0)
     return (*axes[0], *axes[1], *axes[2], *origin, 1.0, 0.0, 0.0, 0.0)
 
