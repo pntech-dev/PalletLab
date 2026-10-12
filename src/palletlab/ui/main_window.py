@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import QEvent, QSignalBlocker, Qt, pyqtSignal
-from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
+from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.controllers.pallet_controller import PalletController
@@ -12,6 +12,7 @@ from palletlab.core.formatting import format_mm
 from palletlab.core.models import InsertionSlot, PalletAxis
 from palletlab.core.project_state import ProjectState
 from palletlab.core.validation import CalculationError
+from palletlab.exporters.solidworks import SolidWorksExportError, export_pallet
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
 from palletlab.visualization.pallet_view import PalletView
@@ -333,9 +334,10 @@ class MainWindow(QMainWindow):
         brand.addWidget(title)
         layout.addLayout(brand)
         layout.addStretch()
-        self.status_badge = QLabel("Расчёт актуален")
-        self.status_badge.setObjectName("statusBadge")
-        layout.addWidget(self.status_badge)
+        self.export_solidworks_button = QPushButton("Экспорт в SolidWorks")
+        self.export_solidworks_button.setObjectName("exportSolidWorksButton")
+        self.export_solidworks_button.clicked.connect(self.export_to_solidworks)
+        layout.addWidget(self.export_solidworks_button)
         return header
 
     @staticmethod
@@ -347,7 +349,8 @@ class MainWindow(QMainWindow):
             }
             QLabel#eyebrow { color: #9a6840; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
             QLabel#appTitle { color: #203b40; font-size: 22px; font-weight: 650; }
-            QLabel#statusBadge { background: #e5f0ea; color: #2f6b4f; border-radius: 10px; padding: 6px 10px; font-weight: 600; }
+            QPushButton#exportSolidWorksButton { background: #255e64; border-color: #255e64; color: #fff; font-weight: 650; padding: 8px 13px; }
+            QPushButton#exportSolidWorksButton:hover { background: #1f4f54; border-color: #1f4f54; }
             QLabel#paneTitle { color: #203b40; font-size: 17px; font-weight: 650; }
             QLabel#paneHint, QLabel#sectionHint { color: #6b706c; font-size: 12px; }
             QGroupBox#directionCard { margin-top: 12px; padding-top: 12px; font-weight: 700; color: #203b40; }
@@ -414,13 +417,31 @@ class MainWindow(QMainWindow):
 
     def _set_stale(self, stale: bool) -> None:
         if stale:
-            self.status_badge.setText("Требуется пересчёт")
-            self.status_badge.setStyleSheet("background: #f8ead9; color: #8a5525;")
             self.statusBar().showMessage("Параметры изменены — модель требует пересчёта.")
         else:
-            self.status_badge.setText("Расчёт актуален")
-            self.status_badge.setStyleSheet("")
             self.statusBar().showMessage("Расчёт актуален.")
+
+    def export_to_solidworks(self) -> None:
+        """Rebuild the visible pallet and export its exact current geometry."""
+        result = self.calculate(show_error=True)
+        if result is None:
+            return
+        parent = QFileDialog.getExistingDirectory(self, "Выберите папку для экспорта SolidWorks")
+        if not parent:
+            return
+        self.export_solidworks_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            output = export_pallet(result, parent)
+        except SolidWorksExportError as exc:
+            QMessageBox.critical(self, "Экспорт в SolidWorks", str(exc))
+            self.statusBar().showMessage("Экспорт в SolidWorks не выполнен.")
+        else:
+            QMessageBox.information(self, "Экспорт в SolidWorks", f"Детали и сборка сохранены в папке:\n{output}")
+            self.statusBar().showMessage(f"Экспорт в SolidWorks завершён: {output}")
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.export_solidworks_button.setEnabled(True)
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
@@ -631,13 +652,13 @@ class MainWindow(QMainWindow):
         if show_error:
             QMessageBox.warning(self, "Невозможная геометрия", str(error))
 
-    def calculate(self, *, show_error: bool = True) -> None:
+    def calculate(self, *, show_error: bool = True):
         try:
             length_input, width_input, upper_layer = self._read_calculation_inputs()
         except CalculationError as exc:
             self._set_stale(True)
             self._handle_calculation_error(exc, show_error)
-            return
+            return None
         result = self.controller.calculate(
             length_input,
             width_input,
@@ -645,13 +666,14 @@ class MainWindow(QMainWindow):
             show_error=show_error,
         )
         if result is None:
-            return
+            return None
         if self.add_beam_button.isChecked():
             self._toggle_insertion_mode(True)
         elif self.delete_beam_button.isChecked():
             self._toggle_deletion_mode(True)
         elif self.edit_distance_button.isChecked():
             self._toggle_distance_editing(True)
+        return result
 
     def _read_calculation_inputs(self):
         rounding_step = self.rounding_buttons.checkedId()

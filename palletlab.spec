@@ -14,6 +14,12 @@ HIDDEN_IMPORTS = [
     "pyvista.plotting._vtk",
     "pyvista.plotting._vtk_gl",
     "vtkmodules.qt.QVTKRenderWindowInteractor",
+    "pythoncom",
+    "pywintypes",
+    "win32com",
+    "win32com.client",
+    "clr",
+    "Python.Runtime",
 ]
 
 # PalletLab does not use example data, test helpers, or alternative GUI
