@@ -17,6 +17,7 @@ from palletlab.exporters.solidworks import SolidWorksExportError, export_pallet
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
 from palletlab.ui.update_dialog import check_for_updates
+from palletlab.version import __version__
 from palletlab.visualization.pallet_view import PalletView
 
 
@@ -90,7 +91,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = ProjectState()
         self._project_path: str | None = None
-        self.setWindowTitle("PalletLab — расчёт поддонов")
+        self.setWindowTitle(f"PalletLab {__version__} — расчёт поддонов")
         screen = QApplication.primaryScreen().availableGeometry()
         self.resize(min(1400, int(screen.width() * 0.92)), min(900, int(screen.height() * 0.90)))
         self.setMinimumSize(900, 650)
@@ -333,7 +334,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(header)
         layout.setContentsMargins(18, 14, 18, 14)
         brand = QVBoxLayout()
-        eyebrow = QLabel("PALLETLAB / VERSION 1")
+        eyebrow = QLabel(f"PALLETLAB / ВЕРСИЯ {__version__}")
         eyebrow.setObjectName("eyebrow")
         brand.addWidget(eyebrow)
         title = QLabel("Расчёт и 3D-визуализация поддона")
