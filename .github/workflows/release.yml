@@ -67,7 +67,14 @@ jobs:
       - name: Build Windows distribution
         if: steps.existing_release.outputs.exists == 'false'
         shell: pwsh
-        run: python -m PyInstaller --noconfirm palletlab.spec
+        run: |
+          python -m PyInstaller --noconfirm palletlab.spec
+          python -m PyInstaller --noconfirm updater.spec
+
+      - name: Install Inno Setup
+        if: steps.existing_release.outputs.exists == 'false'
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
 
       - name: Package distribution and calculate checksum
         if: steps.existing_release.outputs.exists == 'false'
@@ -76,13 +83,20 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
-          $assetName = "PalletLab-$env:VERSION-win64.zip"
-          $assetPath = Join-Path $PWD $assetName
-          Compress-Archive -Path "dist\PalletLab" -DestinationPath $assetPath -CompressionLevel Optimal
-          $hash = (Get-FileHash -Path $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $assetName" | Set-Content -NoNewline "$assetPath.sha256"
-          "asset_path=$assetPath" >> $env:GITHUB_OUTPUT
-          "checksum_path=$assetPath.sha256" >> $env:GITHUB_OUTPUT
+          $updateName = "PalletLab-$env:VERSION-update.zip"
+          $updatePath = Join-Path $PWD $updateName
+          Compress-Archive -Path "dist\PalletLab" -DestinationPath $updatePath -CompressionLevel Optimal
+          Copy-Item $updatePath "PalletLab-$env:VERSION-Portable.zip"
+          $hash = (Get-FileHash -Path $updatePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $updateName" | Set-Content -NoNewline "$updatePath.sha256"
+          $env:APP_VERSION = $env:VERSION
+          $env:APP_DIST = (Resolve-Path "dist\PalletLab")
+          $env:UPDATER_DIST = (Resolve-Path "dist\PalletLabUpdater")
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\PalletLab.iss"
+          "update_path=$updatePath" >> $env:GITHUB_OUTPUT
+          "checksum_path=$updatePath.sha256" >> $env:GITHUB_OUTPUT
+          "portable_path=$PWD\PalletLab-$env:VERSION-Portable.zip" >> $env:GITHUB_OUTPUT
+          "setup_path=$PWD\PalletLab-Setup-$env:VERSION.exe" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub release
         if: steps.existing_release.outputs.exists == 'false'
@@ -92,16 +106,17 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.value }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
-          ASSET_PATH: ${{ steps.package.outputs.asset_path }}
+          UPDATE_PATH: ${{ steps.package.outputs.update_path }}
           CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
+          PORTABLE_PATH: ${{ steps.package.outputs.portable_path }}
+          SETUP_PATH: ${{ steps.package.outputs.setup_path }}
         run: |
           $arguments = @(
             'release', 'create', $env:TAG,
             '--repo', '${{ github.repository }}',
             '--title', "PalletLab $env:VERSION",
             '--generate-notes',
-            $env:ASSET_PATH,
-            $env:CHECKSUM_PATH
+            $env:UPDATE_PATH, $env:CHECKSUM_PATH, $env:PORTABLE_PATH, $env:SETUP_PATH
           )
           if ($env:PRERELEASE -eq 'true') {
             $arguments += '--prerelease'

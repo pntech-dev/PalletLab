@@ -46,6 +46,7 @@ a = Analysis(
     pathex=["src"],
     binaries=[],
     datas=[
+        ("VERSION", "."),
         ("src/palletlab/ui/assets/brand", "palletlab/ui/assets/brand"),
         ("src/palletlab/ui/assets/icons", "palletlab/ui/assets/icons"),
     ],

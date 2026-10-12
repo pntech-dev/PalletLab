@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QSignalBlocker, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QSignalBlocker, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
@@ -16,6 +16,7 @@ from palletlab.exporters.kompas import KompasExportError, export_pallet as expor
 from palletlab.exporters.solidworks import SolidWorksExportError, export_pallet
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
+from palletlab.ui.update_dialog import check_for_updates
 from palletlab.visualization.pallet_view import PalletView
 
 
@@ -128,6 +129,10 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._set_stale(False)
         self.calculate()
+        QTimer.singleShot(1500, self._check_for_updates)
+
+    def _check_for_updates(self) -> None:
+        self._update_worker = check_for_updates(self)
 
     def _build_ui(self) -> None:
         root = QWidget()

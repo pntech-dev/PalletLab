@@ -58,7 +58,7 @@ pyinstaller palletlab.spec
 
 ## Релизы
 
-Версия приложения задаётся в корневом файле `VERSION`. После слияния в `main` GitHub Actions запускает тесты. Если версия ещё не имеет Git-тега, workflow создаёт Windows ZIP-дистрибутив, SHA-256-файл, тег `v<версия>` и GitHub Release. Версия с суффиксом `-beta` публикуется как prerelease.
+Версия приложения задаётся только в корневом файле `VERSION`. После слияния в `main` GitHub Actions запускает тесты. Если версия ещё не имеет Git-тега, workflow создаёт Setup, portable ZIP, update ZIP, SHA-256-файл, тег `v<версия>` и GitHub Release. Версия с суффиксом `-beta` публикуется как prerelease.
 
 ## Структура
 
