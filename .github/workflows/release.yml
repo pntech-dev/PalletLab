@@ -57,12 +57,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          gh release view $env:TAG --repo "${{ github.repository }}" 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            "exists=true" >> $env:GITHUB_OUTPUT
-          } else {
-            "exists=false" >> $env:GITHUB_OUTPUT
-          }
+          # `gh release view` returns 1 when the tag has no release yet.
+          # That is the normal case for a new version, not a workflow error.
+          $ErrorActionPreference = 'Continue'
+          & gh release view $env:TAG --repo "${{ github.repository }}" *> $null
+          $exists = $LASTEXITCODE -eq 0
+          "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          exit 0
 
       - name: Build Windows distribution
         if: steps.existing_release.outputs.exists == 'false'
