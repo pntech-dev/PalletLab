@@ -1,4 +1,6 @@
-from palletlab.update_service import find_newer_release, version_key
+import hashlib
+
+from palletlab.update_service import _sha256_file, find_newer_release, version_key
 
 
 def _release(version: str):
@@ -21,3 +23,11 @@ def test_release_selection_includes_beta_and_ignores_drafts():
     selected = find_newer_release([draft, _release("0.2.0-beta"), _release("0.3.0-beta")], "0.1.0-beta")
     assert selected is not None
     assert selected.version == "0.3.0-beta"
+
+
+def test_sha256_file_reads_complete_binary_file(tmp_path):
+    payload = b"PalletLab" * 100_000
+    package = tmp_path / "update.zip"
+    package.write_bytes(payload)
+
+    assert _sha256_file(package) == hashlib.sha256(payload).hexdigest()

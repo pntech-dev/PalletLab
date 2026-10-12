@@ -91,5 +91,10 @@ def _extract_updater(package: Path) -> Path:
         members = [item for item in archive.infolist() if item.filename.startswith("PalletLabUpdater/")]
         if not members:
             return destination / "PalletLabUpdater.exe"
-        archive.extractall(package.parent, members)
+        root = package.parent.resolve()
+        for member in members:
+            target = (root / member.filename).resolve()
+            if root not in target.parents and target != root:
+                raise RuntimeError("Пакет обновления содержит недопустимый путь.")
+            archive.extract(member, root)
     return destination / "PalletLabUpdater.exe"

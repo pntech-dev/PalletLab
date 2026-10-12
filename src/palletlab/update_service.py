@@ -69,8 +69,17 @@ def download_verified(release: Release, progress) -> Path:
             stream.write(chunk)
             received += len(chunk)
             progress(received, total)
-    actual = hashlib.sha256(target.read_bytes()).hexdigest()
+    actual = _sha256_file(target)
     if actual.lower() != expected:
         target.unlink(missing_ok=True)
         raise RuntimeError("Проверка целостности обновления не пройдена.")
     return target
+
+
+def _sha256_file(path: Path) -> str:
+    """Hash update archives in chunks so large builds do not fill RAM."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
