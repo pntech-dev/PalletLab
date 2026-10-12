@@ -60,29 +60,49 @@ class InstallWorker(QThread):
 def _running(pid: int) -> bool:
     try:
         import ctypes
-        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        from ctypes import wintypes
+
+        kernel32 = _kernel32()
+        handle = kernel32.OpenProcess(0x1000, False, pid)
         if not handle:
             return False
-        code = ctypes.c_ulong()
-        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return code.value == 259
+        code = wintypes.DWORD()
+        try:
+            return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel32.CloseHandle(handle)
     except Exception:
         return False
 
 
 def _terminate(pid: int) -> None:
     """Force-close the old application only after its graceful shutdown timed out."""
-    import ctypes
-
-    handle = ctypes.windll.kernel32.OpenProcess(0x0001 | 0x100000, False, pid)
+    kernel32 = _kernel32()
+    handle = kernel32.OpenProcess(0x0001 | 0x100000, False, pid)
     if not handle:
         raise RuntimeError("Не удалось получить доступ к процессу PalletLab.")
     try:
-        if not ctypes.windll.kernel32.TerminateProcess(handle, 0):
+        if not kernel32.TerminateProcess(handle, 0):
             raise RuntimeError("Не удалось завершить PalletLab.")
     finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+        kernel32.CloseHandle(handle)
+
+
+def _kernel32():
+    """Return kernel32 with pointer-size-safe signatures for process handles."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
 
 
 def _replace_application_directory(app_dir: Path, backup: Path, extracted: Path) -> None:
@@ -109,7 +129,7 @@ class UpdaterDialog(QDialog):
     def __init__(self, package: Path, app_dir: Path, pid: int) -> None:
         super().__init__()
         self.setWindowTitle("Обновление PalletLab")
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
         self.setMinimumWidth(460)
         self.label = QLabel("Подготовка обновления…")
         self.label.setWordWrap(True)
