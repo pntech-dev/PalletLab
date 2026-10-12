@@ -43,7 +43,7 @@ class DownloadWorker(QThread):
 class UpdateDialog(QDialog):
     def __init__(self, release: Release, parent=None) -> None:
         super().__init__(parent); self.release = release; self.setWindowTitle("Доступно обновление")
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setMinimumWidth(460)
         self.label = QLabel(f"Доступна версия {release.version}.\n\nУстановить её сейчас?")
         self.label.setWordWrap(True)

@@ -10,7 +10,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QProgressBar, QVBoxLayout
 
 
@@ -26,8 +26,17 @@ class InstallWorker(QThread):
     def run(self) -> None:
         try:
             self.progress.emit(10, "Ожидание завершения PalletLab…")
-            while _running(self.pid):
+            deadline = time.monotonic() + 3
+            while _running(self.pid) and time.monotonic() < deadline:
                 time.sleep(0.2)
+            if _running(self.pid):
+                self.progress.emit(15, "Закрытие PalletLab…")
+                _terminate(self.pid)
+                deadline = time.monotonic() + 10
+                while _running(self.pid) and time.monotonic() < deadline:
+                    time.sleep(0.2)
+            if _running(self.pid):
+                raise RuntimeError("Не удалось завершить PalletLab. Закройте программу и повторите обновление.")
             staging = self.app_dir.with_name(self.app_dir.name + ".new")
             backup = self.app_dir.with_name(self.app_dir.name + ".previous")
             shutil.rmtree(staging, ignore_errors=True)
@@ -62,6 +71,20 @@ def _running(pid: int) -> bool:
         return False
 
 
+def _terminate(pid: int) -> None:
+    """Force-close the old application only after its graceful shutdown timed out."""
+    import ctypes
+
+    handle = ctypes.windll.kernel32.OpenProcess(0x0001 | 0x100000, False, pid)
+    if not handle:
+        raise RuntimeError("Не удалось получить доступ к процессу PalletLab.")
+    try:
+        if not ctypes.windll.kernel32.TerminateProcess(handle, 0):
+            raise RuntimeError("Не удалось завершить PalletLab.")
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
 def _replace_application_directory(app_dir: Path, backup: Path, extracted: Path) -> None:
     """Replace the onedir build, allowing Windows to release files after exit."""
     last_error: OSError | None = None
@@ -86,6 +109,7 @@ class UpdaterDialog(QDialog):
     def __init__(self, package: Path, app_dir: Path, pid: int) -> None:
         super().__init__()
         self.setWindowTitle("Обновление PalletLab")
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setMinimumWidth(460)
         self.label = QLabel("Подготовка обновления…")
         self.label.setWordWrap(True)
