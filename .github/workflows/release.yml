@@ -94,10 +94,11 @@ jobs:
           $env:APP_DIST = (Resolve-Path "dist\PalletLab")
           $env:UPDATER_DIST = (Resolve-Path "dist\PalletLabUpdater")
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\PalletLab.iss"
+          $setupPath = Join-Path $PWD "installer\PalletLab-Setup-$env:VERSION.exe"
           "update_path=$updatePath" >> $env:GITHUB_OUTPUT
           "checksum_path=$updatePath.sha256" >> $env:GITHUB_OUTPUT
           "portable_path=$PWD\PalletLab-$env:VERSION-Portable.zip" >> $env:GITHUB_OUTPUT
-          "setup_path=$PWD\PalletLab-Setup-$env:VERSION.exe" >> $env:GITHUB_OUTPUT
+          "setup_path=$setupPath" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub release
         if: steps.existing_release.outputs.exists == 'false'
