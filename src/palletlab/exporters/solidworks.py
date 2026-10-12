@@ -207,6 +207,10 @@ def _create_beam(api, sw, template: Path, material: PalletMaterial, length: floa
 def _apply_material(model, material: PalletMaterial) -> None:
     """Assign PalletLab's native material and always preserve readable metadata."""
     try:
+        model.MaterialPropertyName = material.solidworks_name
+    except Exception:
+        pass
+    try:
         model.Extension.SetMaterialPropertyName2("", "", material.solidworks_name)
     except Exception:
         pass

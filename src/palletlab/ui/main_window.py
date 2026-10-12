@@ -479,10 +479,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Экспорт в SolidWorks", str(exc))
             self.statusBar().showMessage("Экспорт в SolidWorks не выполнен.")
         else:
+            QApplication.restoreOverrideCursor()
             QMessageBox.information(self, "Экспорт в SolidWorks", f"Детали и сборка сохранены в папке:\n{output}")
             self.statusBar().showMessage(f"Экспорт в SolidWorks завершён: {output}")
         finally:
-            QApplication.restoreOverrideCursor()
+            if QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
             self.export_solidworks_button.setEnabled(True)
 
     @staticmethod
@@ -502,6 +504,9 @@ class MainWindow(QMainWindow):
         self, missing: tuple[str, ...], current: tuple[str | None, str | None]
     ) -> tuple[str | None, str | None] | None:
         selected = list(current)
+        answer = QMessageBox.question(self, "Нужны шаблоны SolidWorks", "Не настроены шаблоны для экспорта. Выбрать их сейчас?", QMessageBox.Cancel | QMessageBox.Open, QMessageBox.Open)
+        if answer != QMessageBox.Open:
+            return None
         choices = {
             "part": (0, "Выберите шаблон детали SolidWorks", "Шаблоны деталей SolidWorks (*.prtdot)"),
             "assembly": (1, "Выберите шаблон сборки SolidWorks", "Шаблоны сборок SolidWorks (*.asmdot)"),
@@ -568,10 +573,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Экспорт в КОМПАС-3D", str(exc))
             self.statusBar().showMessage("Экспорт в КОМПАС-3D не выполнен.")
         else:
+            QApplication.restoreOverrideCursor()
             QMessageBox.information(self, "Экспорт в КОМПАС-3D", f"Детали и сборка сохранены в папке:\n{output}")
             self.statusBar().showMessage(f"Экспорт в КОМПАС-3D завершён: {output}")
         finally:
-            QApplication.restoreOverrideCursor()
+            if QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
             self.export_kompas_button.setEnabled(True)
 
     def _schedule_recalculation(self, *_args) -> None:

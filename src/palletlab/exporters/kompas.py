@@ -130,6 +130,10 @@ def _create_beam(kompas, constants3d, material: PalletMaterial, length: float, w
 
 def _apply_material(document, material: PalletMaterial) -> None:
     """Store material metadata; supported KOMPAS installations may expose SetCustomProperty."""
+    try:
+        document.Material = material.kompas_name
+    except Exception:
+        pass
     for name, value in (("Материал", material.kompas_name), ("Плотность, кг/м³", str(material.density_kg_m3))):
         try:
             document.SetCustomProperty(name, value)
