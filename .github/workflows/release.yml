@@ -1,0 +1,109 @@
+name: Test and release Windows build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test-build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run tests
+        shell: pwsh
+        run: python -m pytest -q
+
+      - name: Read and validate version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Raw VERSION).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+(-beta)?$') {
+            throw "VERSION must use MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta. Received: $version"
+          }
+          "value=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          if ($version.EndsWith('-beta')) {
+            "prerelease=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "prerelease=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Check whether this version is already released
+        id: existing_release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release view $env:TAG --repo "${{ github.repository }}" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            "exists=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "exists=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Build Windows distribution
+        if: steps.existing_release.outputs.exists == 'false'
+        shell: pwsh
+        run: python -m PyInstaller --noconfirm palletlab.spec
+
+      - name: Package distribution and calculate checksum
+        if: steps.existing_release.outputs.exists == 'false'
+        id: package
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          $assetName = "PalletLab-$env:VERSION-win64.zip"
+          $assetPath = Join-Path $PWD $assetName
+          Compress-Archive -Path "dist\PalletLab" -DestinationPath $assetPath -CompressionLevel Optimal
+          $hash = (Get-FileHash -Path $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $assetName" | Set-Content -NoNewline "$assetPath.sha256"
+          "asset_path=$assetPath" >> $env:GITHUB_OUTPUT
+          "checksum_path=$assetPath.sha256" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub release
+        if: steps.existing_release.outputs.exists == 'false'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.value }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          ASSET_PATH: ${{ steps.package.outputs.asset_path }}
+          CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
+        run: |
+          $arguments = @(
+            'release', 'create', $env:TAG,
+            '--repo', '${{ github.repository }}',
+            '--title', "PalletLab $env:VERSION",
+            '--generate-notes',
+            $env:ASSET_PATH,
+            $env:CHECKSUM_PATH
+          )
+          if ($env:PRERELEASE -eq 'true') {
+            $arguments += '--prerelease'
+          }
+          & gh @arguments
