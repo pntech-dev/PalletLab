@@ -12,6 +12,7 @@ from palletlab.core.formatting import format_mm
 from palletlab.core.models import InsertionSlot, PalletAxis
 from palletlab.core.project_state import ProjectState
 from palletlab.core.validation import CalculationError
+from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
 from palletlab.exporters.solidworks import SolidWorksExportError, export_pallet
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
 from palletlab.ui.input_panel import DirectionInputPanel
@@ -334,6 +335,10 @@ class MainWindow(QMainWindow):
         brand.addWidget(title)
         layout.addLayout(brand)
         layout.addStretch()
+        self.export_kompas_button = QPushButton("Экспорт в КОМПАС")
+        self.export_kompas_button.setObjectName("exportKompasButton")
+        self.export_kompas_button.clicked.connect(self.export_to_kompas)
+        layout.addWidget(self.export_kompas_button)
         self.export_solidworks_button = QPushButton("Экспорт в SolidWorks")
         self.export_solidworks_button.setObjectName("exportSolidWorksButton")
         self.export_solidworks_button.clicked.connect(self.export_to_solidworks)
@@ -351,6 +356,8 @@ class MainWindow(QMainWindow):
             QLabel#appTitle { color: #203b40; font-size: 22px; font-weight: 650; }
             QPushButton#exportSolidWorksButton { background: #255e64; border-color: #255e64; color: #fff; font-weight: 650; padding: 8px 13px; }
             QPushButton#exportSolidWorksButton:hover { background: #1f4f54; border-color: #1f4f54; }
+            QPushButton#exportKompasButton { background: #795548; border-color: #795548; color: #fff; font-weight: 650; padding: 8px 13px; }
+            QPushButton#exportKompasButton:hover { background: #5d4037; border-color: #5d4037; }
             QLabel#paneTitle { color: #203b40; font-size: 17px; font-weight: 650; }
             QLabel#paneHint, QLabel#sectionHint { color: #6b706c; font-size: 12px; }
             QGroupBox#directionCard { margin-top: 12px; padding-top: 12px; font-weight: 700; color: #203b40; }
@@ -442,6 +449,28 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
             self.export_solidworks_button.setEnabled(True)
+
+    def export_to_kompas(self) -> None:
+        """Rebuild the visible pallet and export its exact current geometry."""
+        result = self.calculate(show_error=True)
+        if result is None:
+            return
+        parent = QFileDialog.getExistingDirectory(self, "Выберите папку для экспорта КОМПАС-3D")
+        if not parent:
+            return
+        self.export_kompas_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            output = export_kompas_pallet(result, parent)
+        except KompasExportError as exc:
+            QMessageBox.critical(self, "Экспорт в КОМПАС-3D", str(exc))
+            self.statusBar().showMessage("Экспорт в КОМПАС-3D не выполнен.")
+        else:
+            QMessageBox.information(self, "Экспорт в КОМПАС-3D", f"Детали и сборка сохранены в папке:\n{output}")
+            self.statusBar().showMessage(f"Экспорт в КОМПАС-3D завершён: {output}")
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.export_kompas_button.setEnabled(True)
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
