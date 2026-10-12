@@ -102,6 +102,23 @@ def test_calculate_rebuilds_model_from_current_panels():
     assert kwargs == {"show_error": False}
 
 
+def test_save_project_delegates_current_state_to_controller():
+    result = _pallet_result()
+    saved_paths: list[str] = []
+    status_bar = _StatusBar()
+    window = SimpleNamespace(
+        _project_path="C:/projects/pallet.palletlab.json",
+        calculate=lambda **_kwargs: result,
+        controller=SimpleNamespace(save_project=lambda path: saved_paths.append(path) or True),
+        statusBar=lambda: status_bar,
+    )
+
+    MainWindow.save_project(window)
+
+    assert saved_paths == ["C:/projects/pallet.palletlab.json"]
+    assert status_bar.messages[-1].endswith("pallet.palletlab.json")
+
+
 def test_confirm_insertion_updates_the_input_panel_then_recalculates():
     result = _pallet_result()
     slot = next(candidate for candidate in insertion_slots(result, "length") if candidate.after_beam_index == 1)

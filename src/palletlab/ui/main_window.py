@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.state = ProjectState()
+        self._project_path: str | None = None
         self.setWindowTitle("PalletLab — расчёт поддонов")
         screen = QApplication.primaryScreen().availableGeometry()
         self.resize(min(1400, int(screen.width() * 0.92)), min(900, int(screen.height() * 0.90)))
@@ -335,6 +336,14 @@ class MainWindow(QMainWindow):
         brand.addWidget(title)
         layout.addLayout(brand)
         layout.addStretch()
+        self.open_project_button = QPushButton("Открыть")
+        self.open_project_button.setObjectName("openProjectButton")
+        self.open_project_button.clicked.connect(self.open_project)
+        layout.addWidget(self.open_project_button)
+        self.save_project_button = QPushButton("Сохранить")
+        self.save_project_button.setObjectName("saveProjectButton")
+        self.save_project_button.clicked.connect(self.save_project)
+        layout.addWidget(self.save_project_button)
         self.export_kompas_button = QPushButton("Экспорт в КОМПАС")
         self.export_kompas_button.setObjectName("exportKompasButton")
         self.export_kompas_button.clicked.connect(self.export_to_kompas)
@@ -358,6 +367,8 @@ class MainWindow(QMainWindow):
             QPushButton#exportSolidWorksButton:hover { background: #1f4f54; border-color: #1f4f54; }
             QPushButton#exportKompasButton { background: #795548; border-color: #795548; color: #fff; font-weight: 650; padding: 8px 13px; }
             QPushButton#exportKompasButton:hover { background: #5d4037; border-color: #5d4037; }
+            QPushButton#openProjectButton, QPushButton#saveProjectButton { background: #fffdf9; border-color: #bcb5a7; padding: 8px 11px; }
+            QPushButton#openProjectButton:hover, QPushButton#saveProjectButton:hover { background: #f0ece3; }
             QLabel#paneTitle { color: #203b40; font-size: 17px; font-weight: 650; }
             QLabel#paneHint, QLabel#sectionHint { color: #6b706c; font-size: 12px; }
             QGroupBox#directionCard { margin-top: 12px; padding-top: 12px; font-weight: 700; color: #203b40; }
@@ -449,6 +460,44 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
             self.export_solidworks_button.setEnabled(True)
+
+    def save_project(self) -> None:
+        """Save the current editable pallet state; no automatic save is used."""
+        if self.calculate(show_error=True) is None:
+            return
+        path = self._project_path
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Сохранить проект PalletLab",
+                "pallet.palletlab.json",
+                "Проекты PalletLab (*.palletlab.json);;JSON (*.json)",
+            )
+            if not path:
+                return
+            if not path.lower().endswith((".palletlab.json", ".json")):
+                path += ".palletlab.json"
+        if not self.controller.save_project(path):
+            QMessageBox.warning(self, "Сохранение проекта", "Не удалось сохранить файл проекта.")
+            return
+        self._project_path = path
+        self.statusBar().showMessage(f"Проект сохранён: {path}")
+
+    def open_project(self) -> None:
+        """Open a manually selected project file and rebuild the viewport."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Открыть проект PalletLab",
+            "",
+            "Проекты PalletLab (*.palletlab.json *.json);;Все файлы (*)",
+        )
+        if not path:
+            return
+        if self.controller.open_project(path) is None:
+            QMessageBox.warning(self, "Открытие проекта", "Не удалось открыть файл проекта.")
+            return
+        self._project_path = path
+        self.statusBar().showMessage(f"Проект открыт: {path}")
 
     def export_to_kompas(self) -> None:
         """Rebuild the visible pallet and export its exact current geometry."""
