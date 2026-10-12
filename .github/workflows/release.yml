@@ -86,8 +86,8 @@ jobs:
         run: |
           $updateName = "PalletLab-$env:VERSION-update.zip"
           $updatePath = Join-Path $PWD $updateName
-          Compress-Archive -Path "dist\PalletLab" -DestinationPath $updatePath -CompressionLevel Optimal
-          Copy-Item $updatePath "PalletLab-$env:VERSION-Portable.zip"
+          Compress-Archive -Path "dist\PalletLab", "dist\PalletLabUpdater" -DestinationPath $updatePath -CompressionLevel Optimal
+          Compress-Archive -Path "dist\PalletLab" -DestinationPath "PalletLab-$env:VERSION-Portable.zip" -CompressionLevel Optimal
           $hash = (Get-FileHash -Path $updatePath -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $updateName" | Set-Content -NoNewline "$updatePath.sha256"
           $env:APP_VERSION = $env:VERSION

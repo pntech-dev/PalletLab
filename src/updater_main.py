@@ -38,7 +38,6 @@ class InstallWorker(QThread):
             if _running(self.pid):
                 raise RuntimeError("Не удалось завершить PalletLab. Закройте программу и повторите обновление.")
             staging = self.app_dir.with_name(self.app_dir.name + ".new")
-            backup = self.app_dir.with_name(self.app_dir.name + ".previous")
             shutil.rmtree(staging, ignore_errors=True)
             self.progress.emit(35, "Распаковка обновления…")
             with zipfile.ZipFile(self.package) as archive:
@@ -46,11 +45,9 @@ class InstallWorker(QThread):
             extracted = staging / "PalletLab"
             if not extracted.is_dir():
                 raise RuntimeError("Архив обновления имеет неверную структуру.")
-            if backup.exists():
-                shutil.rmtree(backup, ignore_errors=True)
             self.progress.emit(70, "Установка новой версии…")
-            _replace_application_directory(self.app_dir, backup, extracted)
-            shutil.rmtree(backup, ignore_errors=True)
+            _install_application_files(self.app_dir, extracted)
+            shutil.rmtree(staging, ignore_errors=True)
             self.progress.emit(100, "Обновление установлено.")
             self.finished_install.emit(str(self.app_dir / "PalletLab.exe"))
         except Exception as exc:
@@ -105,24 +102,25 @@ def _kernel32():
     return kernel32
 
 
-def _replace_application_directory(app_dir: Path, backup: Path, extracted: Path) -> None:
-    """Replace the onedir build, allowing Windows to release files after exit."""
+def _install_application_files(app_dir: Path, extracted: Path) -> None:
+    """Overlay the new build without renaming a directory that Explorer may hold."""
+    for source in (path for path in extracted.rglob("*") if path.is_file()):
+        destination = app_dir / source.relative_to(extracted)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _replace_file(source, destination)
+
+
+def _replace_file(source: Path, destination: Path) -> None:
+    """Copy one file after Windows releases its final handle."""
     last_error: OSError | None = None
-    for _ in range(25):
+    for _ in range(75):
         try:
-            app_dir.rename(backup)
-            try:
-                extracted.rename(app_dir)
-            except OSError:
-                backup.rename(app_dir)
-                raise
+            shutil.copy2(source, destination)
             return
         except OSError as exc:
             last_error = exc
             time.sleep(0.4)
-    raise RuntimeError(
-        "PalletLab всё ещё использует файлы установки. Закройте программу и повторите обновление."
-    ) from last_error
+    raise RuntimeError(f"Не удалось заменить файл {destination.name}.") from last_error
 
 
 class UpdaterDialog(QDialog):

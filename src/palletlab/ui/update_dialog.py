@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
@@ -59,9 +60,9 @@ class UpdateDialog(QDialog):
 
     def _launch_updater(self, package: Path) -> None:
         executable = Path(sys.executable)
-        updater = executable.parent.parent / "Updater" / "PalletLabUpdater.exe"
+        updater = _extract_updater(package)
         if not updater.exists():
-            self._failed("Не найден компонент обновления. Установите новую версию через Setup."); return
+            self._failed("Пакет обновления не содержит апдейтер. Установите новую версию через Setup."); return
         subprocess.Popen([str(updater), "--package", str(package), "--app-dir", str(executable.parent), "--pid", str(os.getpid())])
         self.accept()
         if self.parentWidget() is not None:
@@ -81,3 +82,14 @@ def check_for_updates(parent) -> CheckWorker | None:
     worker.found.connect(lambda release: UpdateDialog(release, parent).exec_() if release else None)
     worker.start()
     return worker
+
+
+def _extract_updater(package: Path) -> Path:
+    """Run the updater delivered with this release, not a stale installed copy."""
+    destination = package.parent / "PalletLabUpdater"
+    with zipfile.ZipFile(package) as archive:
+        members = [item for item in archive.infolist() if item.filename.startswith("PalletLabUpdater/")]
+        if not members:
+            return destination / "PalletLabUpdater.exe"
+        archive.extractall(package.parent, members)
+    return destination / "PalletLabUpdater.exe"
