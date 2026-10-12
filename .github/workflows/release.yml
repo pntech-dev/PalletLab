@@ -3,6 +3,7 @@ name: Test and release Windows build
 on:
   push:
     branches:
+      - dev
       - main
   workflow_dispatch:
 
@@ -51,6 +52,7 @@ jobs:
           }
 
       - name: Check whether this version is already released
+        if: github.ref == 'refs/heads/main'
         id: existing_release
         shell: pwsh
         env:
@@ -66,19 +68,19 @@ jobs:
           exit 0
 
       - name: Build Windows distribution
-        if: steps.existing_release.outputs.exists == 'false'
+        if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm palletlab.spec
           python -m PyInstaller --noconfirm updater.spec
 
       - name: Install Inno Setup
-        if: steps.existing_release.outputs.exists == 'false'
+        if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'
         shell: pwsh
         run: choco install innosetup --no-progress --yes
 
       - name: Package distribution and calculate checksum
-        if: steps.existing_release.outputs.exists == 'false'
+        if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'
         id: package
         shell: pwsh
         env:
@@ -101,7 +103,7 @@ jobs:
           "setup_path=$setupPath" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub release
-        if: steps.existing_release.outputs.exists == 'false'
+        if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
