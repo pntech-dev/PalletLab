@@ -11,6 +11,8 @@ APP_NAME = "PalletLab"
 # These modules are imported dynamically by PyVista/VTK's Qt integration and
 # cannot always be discovered from the application's direct imports.
 HIDDEN_IMPORTS = [
+    "palletlab.importers.step_model",
+    "palletlab.importers.step_import_worker",
     "pyvista.plotting._vtk",
     "pyvista.plotting._vtk_gl",
     "vtkmodules.qt.QVTKRenderWindowInteractor",

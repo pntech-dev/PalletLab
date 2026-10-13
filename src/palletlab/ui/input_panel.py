@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QVBoxLayout, QWidget
 
@@ -50,6 +52,7 @@ class DirectionInputPanel(QGroupBox):
         self.margin_start = self._spin(100.0)
         self.margin_end = self._spin(100.0)
         self._support_positions_override: tuple[float, ...] | None = None
+        self._model_input: DirectionInput | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 20, 16, 16)
         layout.setSpacing(10)
@@ -98,10 +101,20 @@ class DirectionInputPanel(QGroupBox):
 
     def _position_data_changed(self, *_args) -> None:
         """Manual edits resume the normal distances-based calculation."""
+        if self._model_input is not None:
+            # Only the two model-derived fields are locked. Editing any other
+            # position value intentionally returns the panel to manual mode.
+            self.set_model_driven_mode(None)
         self._support_positions_override = None
         self.changed.emit()
 
     def values(self, round_pallet_size: bool = False, rounding_step: int = 5) -> DirectionInput:
+        if self._model_input is not None:
+            return replace(
+                self._model_input,
+                round_pallet_size=round_pallet_size,
+                rounding_step=rounding_step,
+            )
         raw = self.distances.text().strip().replace(",", ".")
         try:
             distances = tuple(float(token) for token in raw.split()) if raw else ()
@@ -136,6 +149,17 @@ class DirectionInputPanel(QGroupBox):
             field.blockSignals(False)
         self._support_positions_override = data.support_positions
         self.changed.emit()
+
+    def set_model_driven_mode(self, data: DirectionInput | None) -> None:
+        """Lock geometry-derived edge-to-support values for an imported model."""
+        self._model_input = data
+        locked = data is not None
+        for field in (self.first, self.last):
+            field.blockSignals(True)
+            if locked:
+                field.setValue(0.0)
+            field.setEnabled(not locked)
+            field.blockSignals(False)
 
     def reset_example(self, distances: str, first: float, last: float) -> None:
         self._support_positions_override = None

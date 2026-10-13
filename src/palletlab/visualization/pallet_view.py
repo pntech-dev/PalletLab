@@ -37,6 +37,15 @@ class PalletView(QtInteractor):
         self._distance_editing_mode = False
         self._selected_distance_actor = None
         self._hovered_distance_actor = None
+        self._step_mesh: pv.PolyData | None = None
+        self._step_edges: pv.PolyData | None = None
+        self._step_model_actor = None
+        self._step_edge_actor = None
+        self._step_model_visible = True
+        self._step_faces = ()
+        self._support_callback: Callable[[int], None] | None = None
+        self._step_picker = pv._vtk.vtkCellPicker()
+        self._step_picker.SetTolerance(0.0005)
         # Picking is used on every mouse move in interactive modes.  Reusing
         # VTK's picker avoids repeated native-object allocation.
         self._prop_picker = pv._vtk.vtkPropPicker()
@@ -55,6 +64,7 @@ class PalletView(QtInteractor):
         self.iren.add_observer("MouseMoveEvent", self._update_deletion_hover)
         self.iren.add_observer("MouseMoveEvent", self._update_distance_hover)
         self.iren.add_observer("LeftButtonPressEvent", self._click_distance)
+        self.iren.add_observer("LeftButtonPressEvent", self._pick_step_support)
 
     def show_pallet(self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True) -> None:
         camera_position = self.camera_position if self._has_model else None
@@ -90,12 +100,152 @@ class PalletView(QtInteractor):
         # ``clear`` also removes VTK's orientation widget.  Add back only the
         # compact corner marker; unlike ``show_grid`` it adds no scene grid.
         self.add_axes(line_width=1, xlabel="X", ylabel="Y", zlabel="Z", viewport=(0, 0, 0.13, 0.13))
+        self._add_step_model(render=False)
         if camera_position is None:
             self.camera_isometric()
         else:
             self.camera_position = camera_position
             self.render()
         self._has_model = True
+
+    def clear_workspace(self) -> None:
+        """Remove the pallet and any imported machine before a new STEP import."""
+        self.clear()
+        self._annotation_actors.clear()
+        self._beam_actors.clear()
+        self._distance_actors.clear()
+        self._step_mesh = None
+        self._step_edges = None
+        self._step_model_actor = None
+        self._step_edge_actor = None
+        self._step_faces = ()
+        self._support_callback = None
+        self._has_model = False
+        self.add_axes(line_width=1, xlabel="X", ylabel="Y", zlabel="Z", viewport=(0, 0, 0.13, 0.13))
+        self.render()
+
+    def clear_step_model(self) -> None:
+        """Forget only the imported machine while leaving a pallet render intact."""
+        self.remove_actor("step-model", render=False)
+        self.remove_actor("step-model-edges", render=False)
+        self._step_mesh = None
+        self._step_edges = None
+        self._step_model_actor = None
+        self._step_edge_actor = None
+        self._step_faces = ()
+        self._support_callback = None
+        self._step_model_visible = True
+        self.render()
+
+    def prepare_step_model_rebuild(self, callback: Callable[[int], None]) -> None:
+        """Remove only pallet geometry and re-enable support picking on the visible model."""
+        self._remove_actors(list(self._beam_actors))
+        self._beam_actors.clear()
+        self._beam_counts = {"length": 0, "width": 0}
+        self._remove_actors(self._annotation_actors)
+        self.remove_actor("length-dimension-labels-points", render=False)
+        self.remove_actor("width-dimension-labels-points", render=False)
+        self._remove_actors(list(self._distance_actors))
+        self._distance_actors.clear()
+        self._support_callback = callback
+        self._step_model_visible = True
+        if self._step_mesh is not None:
+            self._step_mesh.cell_data["face_colors"] = [(184, 194, 204)] * self._step_mesh.n_cells
+            self._step_mesh.Modified()
+        if self._step_model_actor is not None:
+            self._step_model_actor.SetVisibility(True)
+            self._step_model_actor.mapper.Update()
+        if self._step_edge_actor is not None:
+            self._step_edge_actor.SetVisibility(True)
+        self.render()
+
+    def show_step_model(self, mesh: pv.PolyData, edges: pv.PolyData, faces: tuple, callback: Callable[[int], None]) -> None:
+        """Display an imported STEP mesh and wait for the user to choose a support face."""
+        self.clear_workspace()
+        self._step_mesh = mesh.copy(deep=True)
+        self._step_mesh.cell_data["face_colors"] = [(184, 194, 204)] * mesh.n_cells
+        self._step_edges = edges.copy(deep=True)
+        self._step_faces = faces
+        self._support_callback = callback
+        self._step_model_visible = True
+        self._add_step_model(render=False)
+        self.view_isometric()
+        self.reset_camera(render=True)
+
+    def stage_step_model(self, mesh: pv.PolyData, edges: pv.PolyData) -> None:
+        """Prepare a correctly placed machine before rendering the new pallet."""
+        self._step_mesh = mesh.copy(deep=True)
+        self._step_mesh.cell_data["face_colors"] = [(184, 194, 204)] * mesh.n_cells
+        self._step_edges = edges.copy(deep=True)
+        self._add_step_model(render=True)
+
+    def update_step_model(self, mesh: pv.PolyData, edges: pv.PolyData, support_indices: set[int], reference_index: int) -> None:
+        """Place the selected model on the pallet and retain support highlighting."""
+        self._step_mesh = mesh.copy(deep=True)
+        colors = [[184, 194, 204] for _ in range(mesh.n_cells)]
+        face_indices = self._step_mesh.cell_data["step_face_index"]
+        for index in support_indices:
+            for cell_index, face_id in enumerate(face_indices):
+                if face_id == index:
+                    colors[cell_index] = [230, 41, 51]
+        for cell_index, face_id in enumerate(face_indices):
+            if face_id == reference_index:
+                colors[cell_index] = [255, 176, 26]
+        self._step_mesh.cell_data["face_colors"] = colors
+        self._step_edges = edges.copy(deep=True)
+        self._support_callback = None
+        self._add_step_model(render=True)
+
+    def toggle_step_model_visibility(self) -> bool:
+        """Toggle the imported machine without changing the generated pallet."""
+        if self._step_model_actor is None:
+            return False
+        self._step_model_visible = not self._step_model_visible
+        self._step_model_actor.SetVisibility(self._step_model_visible)
+        if self._step_edge_actor is not None:
+            self._step_edge_actor.SetVisibility(self._step_model_visible)
+        self.render()
+        return self._step_model_visible
+
+    def _add_step_model(self, *, render: bool) -> None:
+        if self._step_mesh is None:
+            return
+        self.remove_actor("step-model", render=False)
+        self.remove_actor("step-model-edges", render=False)
+        self._step_edge_actor = None
+        self._step_model_actor = self.add_mesh(
+            self._step_mesh,
+            scalars="face_colors",
+            rgb=True,
+            # Imported assemblies are often made of overlapping shells.  A
+            # translucent surface and dark face edges keep their internal
+            # members readable while still leaving a clickable solid model.
+            opacity=0.60,
+            show_edges=False,
+            smooth_shading=False,
+            pickable=True,
+            name="step-model",
+        )
+        self._step_model_actor.SetVisibility(self._step_model_visible)
+        if self._step_edges is not None and self._step_edges.n_cells:
+            self._step_edge_actor = self.add_mesh(
+                self._step_edges, color="#536271", opacity=0.85,
+                line_width=1.35, pickable=False, name="step-model-edges",
+            )
+            self._step_edge_actor.SetVisibility(self._step_model_visible)
+        if render:
+            self.render()
+
+    def _pick_step_support(self, *_args) -> None:
+        if self._support_callback is None or self._step_model_actor is None or not self._step_model_visible:
+            return
+        x, y = self.iren.get_event_position()
+        self._step_picker.Pick(x, y, 0, self.renderer)
+        if self._step_picker.GetActor() != self._step_model_actor:
+            return
+        cell_id = self._step_picker.GetCellId()
+        if self._step_mesh is not None and 0 <= cell_id < self._step_mesh.n_cells:
+            self._support_callback(int(self._step_mesh.cell_data["step_face_index"][cell_id]))
 
     def update_dimension_annotations(
         self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True, *, render: bool = True
