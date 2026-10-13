@@ -346,25 +346,50 @@ def _support_frame_mesh(source: pv.PolyData, frame: tuple[np.ndarray, np.ndarray
     return transformed
 
 
-def _unique_positions(values: list[float], tolerance: float) -> tuple[float, ...]:
-    values.sort()
-    grouped: list[list[float]] = []
-    for value in values:
-        if not grouped or abs(value - grouped[-1][-1]) > tolerance:
-            grouped.append([value])
-        else:
-            grouped[-1].append(value)
-    return tuple(sum(group) / len(group) for group in grouped)
+def _coalesced_beam_positions(values: list[float], tolerance: float, beam_width: float) -> tuple[float, ...]:
+    """Choose non-overlapping beam centres for nearby support-face centres.
 
-
-def _snap_positions_to_millimetres(values: tuple[float, ...]) -> tuple[float, ...]:
-    """Use production-friendly whole-millimetre beam centres.
-
-    STEP geometry frequently contains half-millimetre offsets.  The pallet is
-    manufactured in whole millimetres, so snap after clustering coincident
-    support faces and merge positions that round to the same millimetre.
+    Faces sharing a coordinate (within the STEP tolerance) represent several
+    feet that one beam can carry.  If two candidate beams would overlap, keep
+    the one carrying more feet.  With equal coverage the later candidate is
+    farther from the already accepted beam on its left, which leaves the more
+    useful clear span for subsequent beams.
     """
-    return tuple(float(value) for value in sorted({math.floor(value + 0.5) for value in values}))
+    if not values:
+        return ()
+    values.sort()
+    candidates: list[tuple[float, int]] = []
+    cluster: list[float] = [values[0]]
+    for value in values[1:]:
+        if value - cluster[-1] <= tolerance:
+            cluster.append(value)
+        else:
+            candidates.append((sum(cluster) / len(cluster), len(cluster)))
+            cluster = [value]
+    candidates.append((sum(cluster) / len(cluster), len(cluster)))
+
+    # Production coordinates are whole millimetres.  Merge candidates that
+    # collapse to the same manufactured centre before resolving collisions.
+    snapped: list[tuple[float, int]] = []
+    for position, coverage in candidates:
+        centre = float(math.floor(position + 0.5))
+        if snapped and centre == snapped[-1][0]:
+            previous_centre, previous_coverage = snapped[-1]
+            snapped[-1] = (previous_centre, previous_coverage + coverage)
+        else:
+            snapped.append((centre, coverage))
+
+    selected: list[tuple[float, int]] = []
+    for candidate in snapped:
+        if not selected or candidate[0] - selected[-1][0] >= beam_width - tolerance:
+            selected.append(candidate)
+            continue
+        previous = selected[-1]
+        # In a tie replace the right candidate: it maximises the distance from
+        # the preceding accepted beam and avoids arbitrary result changes.
+        if candidate[1] >= previous[1]:
+            selected[-1] = candidate
+    return tuple(position for position, _coverage in selected)
 
 
 def edge_to_support_center_distance(
@@ -436,8 +461,14 @@ def pallet_inputs_from_supports(
     margin_x_end = max(length_margin_end, 2 * length_beam_width)
     margin_y_start = max(width_margin_start, 2 * width_beam_width)
     margin_y_end = max(width_margin_end, 2 * width_beam_width)
-    support_x = _unique_positions([float(local_points[face.index][0]) for face in supports if face.index in local_points], tolerance)
-    support_y = _unique_positions([float(local_points[face.index][1]) for face in supports if face.index in local_points], tolerance)
+    support_x = _coalesced_beam_positions(
+        [float(local_points[face.index][0]) for face in supports if face.index in local_points],
+        tolerance, length_beam_width,
+    )
+    support_y = _coalesced_beam_positions(
+        [float(local_points[face.index][1]) for face in supports if face.index in local_points],
+        tolerance, width_beam_width,
+    )
     if not support_x or not support_y:
         raise ValueError("Не удалось определить координаты опор.")
 
@@ -445,7 +476,7 @@ def pallet_inputs_from_supports(
         positions: tuple[float, ...], origin: float, size: float,
         distances: tuple[float | None, float | None] | None,
     ) -> tuple[tuple[float, ...], float, float]:
-        relative = _snap_positions_to_millimetres(tuple(value - positions[0] for value in positions))
+        relative = tuple(value - positions[0] for value in positions)
         default_start = float(math.floor(positions[0] - origin + 0.5))
         default_end = float(math.floor(origin + size - positions[-1] + 0.5))
         start, end = distances if distances is not None else (default_start, default_end)

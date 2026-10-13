@@ -7,6 +7,7 @@ from palletlab.importers.step_model import (
     ImportedStepModel,
     StepFace,
     _surface_centroid,
+    _coalesced_beam_positions,
     coplanar_supports,
     edge_to_support_center_distance,
     pallet_inputs_from_supports,
@@ -97,3 +98,17 @@ def test_selected_boundary_distances_position_supports_from_that_boundary():
     assert length.first_edge_to_support == 120
     assert length.last_support_to_edge == 100
     assert length.support_positions == (220, 1000)
+
+
+def test_close_support_candidates_keep_the_beam_with_more_supported_feet():
+    # Two feet at X=100 compete with five feet at X=130 for a 50 mm beam.
+    assert _coalesced_beam_positions([100, 100, 130, 130, 130, 130, 130], 0.01, 50) == (130,)
+
+
+def test_equal_close_candidates_keep_the_one_farther_from_the_previous_beam():
+    # The right candidate wins the documented deterministic tie-break.
+    assert _coalesced_beam_positions([100, 100, 130, 130], 0.01, 50) == (130,)
+
+
+def test_non_conflicting_candidates_remain_separate_beams():
+    assert _coalesced_beam_positions([100, 100, 160, 160, 160], 0.01, 50) == (100, 160)
