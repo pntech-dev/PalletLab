@@ -305,20 +305,17 @@ class MainWindow(QMainWindow):
         view_title.setToolTip("Вращайте модель мышью, колёсиком меняйте масштаб.")
         title_block.addWidget(view_title)
         view_heading.addLayout(title_block)
-        self.build_from_model_button = QPushButton("Построить по модели")
-        self.build_from_model_button.setObjectName("buildFromModelButton")
-        self.build_from_model_button.setToolTip("Загрузить STEP-модель и выбрать нижнюю грань одной опоры.")
-        self.build_from_model_button.clicked.connect(self.build_from_model)
-        view_heading.addWidget(self.build_from_model_button)
         self.rebuild_from_model_button = QPushButton("Перестроить по модели")
         self.rebuild_from_model_button.setObjectName("rebuildFromModelButton")
         self.rebuild_from_model_button.setToolTip("Удалить поддон и заново выбрать грань опоры уже загруженной модели.")
         self.rebuild_from_model_button.setEnabled(False)
+        self.rebuild_from_model_button.setVisible(False)
         self.rebuild_from_model_button.clicked.connect(self.rebuild_from_model)
         view_heading.addWidget(self.rebuild_from_model_button)
         self.toggle_model_button = QPushButton("Скрыть 3D модель")
         self.toggle_model_button.setObjectName("toggleModelButton")
         self.toggle_model_button.setEnabled(False)
+        self.toggle_model_button.setVisible(False)
         self.toggle_model_button.clicked.connect(self._toggle_model_visibility)
         view_heading.addWidget(self.toggle_model_button)
         self.add_beam_button = QPushButton("＋ Добавить брус")
@@ -464,6 +461,11 @@ class MainWindow(QMainWindow):
         self.save_project_button.setObjectName("saveProjectButton")
         self.save_project_button.clicked.connect(self.save_project)
         layout.addWidget(self.save_project_button)
+        self.build_from_model_button = QPushButton("Построить по модели")
+        self.build_from_model_button.setObjectName("buildFromModelButton")
+        self.build_from_model_button.setToolTip("Загрузить STEP-модель и выбрать нижнюю грань одной опоры.")
+        self.build_from_model_button.clicked.connect(self.build_from_model)
+        layout.addWidget(self.build_from_model_button)
         self.export_kompas_button = QPushButton("Экспорт в КОМПАС")
         self.export_kompas_button.setObjectName("exportKompasButton")
         self.export_kompas_button.clicked.connect(self.export_to_kompas)
@@ -587,6 +589,7 @@ class MainWindow(QMainWindow):
         self.width_panel.set_model_driven_mode(None)
         self._clear_model_supports()
         self._imported_step_model = None
+        self._set_model_controls_visible(False)
         self.state.beam_sections.clear()
         self.state.result = None
         self.view.clear_workspace()
@@ -632,6 +635,7 @@ class MainWindow(QMainWindow):
         # first support face, not only after the pallet has been built.
         self.length_panel.set_model_driven_mode(None, hide_model_offsets=True)
         self.width_panel.set_model_driven_mode(None, hide_model_offsets=True)
+        self._set_model_controls_visible(True)
         self.rebuild_from_model_button.setEnabled(True)
         self.toggle_model_button.setEnabled(True)
         self.toggle_model_button.setText("Скрыть 3D модель")
@@ -671,6 +675,7 @@ class MainWindow(QMainWindow):
     def _step_import_failed(self, message: str) -> None:
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
+        self._set_model_controls_visible(False)
         QMessageBox.warning(self, "Загрузка 3D-модели", message)
         self.scene_info.setText("3D-модель не загружена.")
         self.statusBar().showMessage("Не удалось загрузить 3D-модель.")
@@ -805,6 +810,15 @@ class MainWindow(QMainWindow):
     def _toggle_model_visibility(self) -> None:
         visible = self.view.toggle_step_model_visibility()
         self.toggle_model_button.setText("Скрыть 3D модель" if visible else "Показать 3D модель")
+
+    def _set_model_controls_visible(self, visible: bool) -> None:
+        """Keep model-only controls out of the manual pallet workflow."""
+        self.rebuild_from_model_button.setVisible(visible)
+        self.toggle_model_button.setVisible(visible)
+        if not visible:
+            self.rebuild_from_model_button.setEnabled(False)
+            self.toggle_model_button.setEnabled(False)
+            self.toggle_model_button.setText("Скрыть 3D модель")
 
     def export_to_solidworks(self) -> None:
         """Rebuild the visible pallet and export its exact current geometry."""
@@ -960,6 +974,10 @@ class MainWindow(QMainWindow):
         if self.controller.open_project(path) is None:
             QMessageBox.warning(self, "Открытие проекта", "Не удалось открыть файл проекта.")
             return
+        self._imported_step_model = None
+        self._clear_model_supports()
+        self.view.clear_step_model()
+        self._set_model_controls_visible(False)
         self._project_path = path
         self.statusBar().showMessage(f"Проект открыт: {path}")
 
@@ -1002,6 +1020,7 @@ class MainWindow(QMainWindow):
             return
         self._model_rebuild_timer.stop()
         self._clear_model_supports()
+        self._set_model_controls_visible(False)
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
 
@@ -1371,9 +1390,7 @@ class MainWindow(QMainWindow):
         self.state.beam_sections.clear()
         self.controller.clear_section_selection()
         self.view.clear_step_model()
-        self.toggle_model_button.setEnabled(False)
-        self.toggle_model_button.setText("Скрыть 3D модель")
-        self.rebuild_from_model_button.setEnabled(False)
+        self._set_model_controls_visible(False)
         self.length_panel.reset_example("1070 460 1300 499", 123, 552)
         self.width_panel.reset_example("560 720", 277, 179)
         self.width_upper.setChecked(True)
