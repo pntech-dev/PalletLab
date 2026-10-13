@@ -22,6 +22,7 @@ class PalletView(QtInteractor):
         self._annotation_actors: list[object] = []
         self._annotation_segments: list[pv.PolyData] | None = None
         self._insertion_slots: dict[object, InsertionMarker] = {}
+        self._insertion_visual_actors: list[object] = []
         self._insertion_callback: Callable[[object], None] | None = None
         self._insertion_mode = False
         self._hovered_insertion_actor = None
@@ -46,12 +47,16 @@ class PalletView(QtInteractor):
         self._support_callback: Callable[[int], None] | None = None
         self._step_picker = pv._vtk.vtkCellPicker()
         self._step_picker.SetTolerance(0.0005)
+        self._mesh_picker = pv._vtk.vtkCellPicker()
+        self._mesh_picker.SetTolerance(0.0005)
         # Picking is used on every mouse move in interactive modes.  Reusing
         # VTK's picker avoids repeated native-object allocation.
         self._prop_picker = pv._vtk.vtkPropPicker()
         self._interaction_colors = {
             "selected": pv.Color("#d83a3a").float_rgb,
             "selected_edge": pv.Color("#7a1717").float_rgb,
+            "selected_hover": pv.Color("#ed6259").float_rgb,
+            "selected_hover_edge": pv.Color("#9e211b").float_rgb,
             "length_beam": pv.Color("#b7791f").float_rgb,
             "width_beam": pv.Color("#8b5a2b").float_rgb,
             "default_edge": pv.Color("#4a2c12").float_rgb,
@@ -64,6 +69,8 @@ class PalletView(QtInteractor):
         self.iren.add_observer("MouseMoveEvent", self._update_deletion_hover)
         self.iren.add_observer("MouseMoveEvent", self._update_distance_hover)
         self.iren.add_observer("LeftButtonPressEvent", self._click_distance)
+        self.iren.add_observer("LeftButtonPressEvent", self._click_insertion)
+        self.iren.add_observer("LeftButtonPressEvent", self._click_deletion)
         self.iren.add_observer("LeftButtonPressEvent", self._pick_step_support)
 
     def show_pallet(self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True) -> None:
@@ -174,15 +181,22 @@ class PalletView(QtInteractor):
 
     def stage_step_model(self, mesh: pv.PolyData, edges: pv.PolyData) -> None:
         """Prepare a correctly placed machine before rendering the new pallet."""
-        self._step_mesh = mesh.copy(deep=True)
+        # ``mesh`` and ``edges`` are freshly created for this calculation.
+        # Retain them directly: duplicating a large assembly here can block the
+        # UI for seconds immediately after the pallet appears.
+        self._step_mesh = mesh
         self._step_mesh.cell_data["face_colors"] = [(184, 194, 204)] * mesh.n_cells
-        self._step_edges = edges.copy(deep=True)
-        self._add_step_model(render=True)
+        self._step_edges = edges
 
-    def update_step_model(self, mesh: pv.PolyData, edges: pv.PolyData, support_indices: set[int], reference_index: int) -> None:
-        """Place the selected model on the pallet and retain support highlighting."""
-        self._step_mesh = mesh.copy(deep=True)
-        colors = [[184, 194, 204] for _ in range(mesh.n_cells)]
+    def commit_step_support_selection(self, support_indices: set[int], reference_index: int) -> None:
+        """Highlight supports in the already-rendered placed model.
+
+        This deliberately does not rebuild any VTK actors: the model and pallet
+        were rendered together by ``show_pallet`` immediately beforehand.
+        """
+        if self._step_mesh is None:
+            return
+        colors = [[184, 194, 204] for _ in range(self._step_mesh.n_cells)]
         face_indices = self._step_mesh.cell_data["step_face_index"]
         for index in support_indices:
             for cell_index, face_id in enumerate(face_indices):
@@ -192,8 +206,17 @@ class PalletView(QtInteractor):
             if face_id == reference_index:
                 colors[cell_index] = [255, 176, 26]
         self._step_mesh.cell_data["face_colors"] = colors
-        self._step_edges = edges.copy(deep=True)
         self._support_callback = None
+        color_array = self._step_mesh.GetCellData().GetArray("face_colors")
+        if color_array is not None:
+            color_array.Modified()
+        self._step_mesh.Modified()
+        if self._step_model_actor is not None:
+            self._step_model_actor.mapper.Update()
+        self.render()
+
+    def show_staged_step_model(self) -> None:
+        """Reveal a staged placement after a failed pallet calculation."""
         self._add_step_model(render=True)
 
     def toggle_step_model_visibility(self) -> bool:
@@ -283,11 +306,15 @@ class PalletView(QtInteractor):
         self._active_insertion_slot = None
         for item in markers:
             marker = pv.Text3D("+", height=item.size, depth=1, center=item.center)
-            actor = self.add_mesh(marker, color="#1f7775", opacity=0.35, pickable=True,
+            visual = self.add_mesh(marker, color="#1f7775", opacity=0.7, pickable=False,
+                                   name=f"insert-symbol-{item.slot.axis}-{item.slot.after_beam_index}")
+            self._insertion_visual_actors.append(visual)
+            hit_size = max(48.0, item.size * 2.4)
+            hitbox = pv.Cube(center=item.center, x_length=hit_size, y_length=hit_size,
+                             z_length=max(12.0, item.size * 0.35))
+            actor = self.add_mesh(hitbox, opacity=0.01, pickable=True,
                                   name=f"insert-slot-{item.slot.axis}-{item.slot.after_beam_index}")
             self._insertion_slots[actor] = item
-        self.enable_mesh_picking(callback=self._select_insertion_slot, show=False, left_clicking=True,
-                                 use_actor=True, show_message=False)
         self.render()
 
     def disable_insertion_mode(self, *, render: bool = True) -> None:
@@ -295,6 +322,7 @@ class PalletView(QtInteractor):
         self.disable_picking()
         for actor in self._insertion_slots:
             self.remove_actor(actor, render=False)
+        self._remove_actors(self._insertion_visual_actors)
         self._insertion_slots.clear()
         self._insertion_callback = None
         self._insertion_mode = False
@@ -311,8 +339,6 @@ class PalletView(QtInteractor):
         self._deletion_callback = callback
         self._selected_deletion_actors.clear()
         self._hovered_deletion_actor = None
-        self.enable_mesh_picking(callback=self._select_deletion_beam, show=False, left_clicking=True,
-                                 use_actor=True, show_message=False)
         self.render()
 
     def disable_deletion_mode(self) -> None:
@@ -348,6 +374,20 @@ class PalletView(QtInteractor):
             self._deletion_callback(axis, index, selected)
         self.render()
 
+    def _click_insertion(self, *_args) -> None:
+        if not self._insertion_mode or self._active_insertion_slot is not None:
+            return
+        x, y = self.iren.get_event_position()
+        self._mesh_picker.Pick(x, y, 0, self.renderer)
+        self._select_insertion_slot(self._mesh_picker.GetActor())
+
+    def _click_deletion(self, *_args) -> None:
+        if not self._deletion_mode:
+            return
+        x, y = self.iren.get_event_position()
+        self._mesh_picker.Pick(x, y, 0, self.renderer)
+        self._select_deletion_beam(self._mesh_picker.GetActor())
+
     def _set_deletion_color(self, actor, selected: bool) -> None:
         axis, _ = self._beam_actors[actor]
         colors = self._interaction_colors
@@ -357,8 +397,12 @@ class PalletView(QtInteractor):
         actor.GetProperty().SetEdgeColor(*edge_color)
 
     def _set_deletion_hover_color(self, actor) -> None:
-        actor.GetProperty().SetColor(*self._interaction_colors["beam_hover"])
-        actor.GetProperty().SetEdgeColor(*self._interaction_colors["beam_hover_edge"])
+        if actor in self._selected_deletion_actors:
+            actor.GetProperty().SetColor(*self._interaction_colors["selected_hover"])
+            actor.GetProperty().SetEdgeColor(*self._interaction_colors["selected_hover_edge"])
+        else:
+            actor.GetProperty().SetColor(*self._interaction_colors["beam_hover"])
+            actor.GetProperty().SetEdgeColor(*self._interaction_colors["beam_hover_edge"])
 
     def _update_deletion_hover(self, *_args) -> None:
         if not self._deletion_mode:
@@ -372,9 +416,9 @@ class PalletView(QtInteractor):
             return
         previous = self._hovered_deletion_actor
         self._hovered_deletion_actor = hovered
-        if previous and previous not in self._selected_deletion_actors:
-            self._set_deletion_color(previous, selected=False)
-        if hovered and hovered not in self._selected_deletion_actors:
+        if previous:
+            self._set_deletion_color(previous, selected=previous in self._selected_deletion_actors)
+        if hovered:
             self._set_deletion_hover_color(hovered)
         self.render()
 
@@ -478,8 +522,16 @@ class PalletView(QtInteractor):
         for marker, slot in self._insertion_slots.items():
             if marker == actor:
                 self._active_insertion_slot = slot
+                # One insertion is confirmed at a time. Hide stale markers
+                # while its editor is open; the mode rebuilds fresh ones after
+                # confirmation.
+                for hitbox in tuple(self._insertion_slots):
+                    self.remove_actor(hitbox, render=False)
+                self._insertion_slots.clear()
+                self._remove_actors(self._insertion_visual_actors)
                 if self._insertion_callback:
                     self._insertion_callback(slot.slot)
+                self.render()
                 return
 
     def _update_insertion_hover(self, *_args) -> None:

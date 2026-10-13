@@ -38,7 +38,7 @@ REFERENCE_RGB = np.array((255, 176, 26), dtype=np.uint8)
 SUPPORT_RGB = np.array((230, 41, 51), dtype=np.uint8)
 PARALLEL_COSINE = math.cos(math.radians(0.5))
 HORIZONTAL_COSINE = math.cos(math.radians(2.0))
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -91,7 +91,8 @@ def _load_cached_model(source_path: Path) -> ImportedStepModel | None:
                          None if np.isnan(normal).any() else normal)
                 for index, (point, normal) in enumerate(zip(points, normals))
             )
-            edges = pv.PolyData(np.asarray(cached["edge_points"]), np.asarray(cached["edge_cells"]))
+            # Feature contours are VTK line cells, not polygon faces.
+            edges = pv.PolyData(np.asarray(cached["edge_points"]), lines=np.asarray(cached["edge_cells"]))
             diagonal = float(np.linalg.norm((mesh.bounds[1] - mesh.bounds[0], mesh.bounds[3] - mesh.bounds[2], mesh.bounds[5] - mesh.bounds[4])))
             return ImportedStepModel(mesh, edges, faces, max(diagonal * 1e-6, 1e-9), source_path)
     except (KeyError, OSError, ValueError, TypeError):

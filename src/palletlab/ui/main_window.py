@@ -548,6 +548,15 @@ class MainWindow(QMainWindow):
         self.view.show_step_model(model.mesh, model.edges, model.faces, self._support_face_selected)
         self.statusBar().showMessage("Выберите левой кнопкой плоскую нижнюю грань любой опоры установки.")
 
+    def _show_support_selection_prompt(self) -> None:
+        """Give the user a clear next action after a STEP model becomes selectable."""
+        QMessageBox.information(
+            self,
+            "Выберите опору",
+            "Нажмите левой кнопкой мыши на плоскую нижнюю грань любой опоры установки.\n\n"
+            "PalletLab найдёт остальные опоры в той же плоскости и построит поддон.",
+        )
+
     def rebuild_from_model(self) -> None:
         """Discard only the pallet and repeat support selection for the loaded STEP model."""
         model = self._imported_step_model
@@ -563,6 +572,7 @@ class MainWindow(QMainWindow):
         self.toggle_model_button.setText("Скрыть 3D модель")
         self.scene_info.setText("Выберите нижнюю грань опоры, чтобы перестроить поддон.")
         self.statusBar().showMessage("Выберите левой кнопкой плоскую нижнюю грань любой опоры установки.")
+        self._show_support_selection_prompt()
 
     def _step_import_failed(self, message: str) -> None:
         QMessageBox.warning(self, "Загрузка 3D-модели", message)
@@ -588,6 +598,7 @@ class MainWindow(QMainWindow):
 
     def _step_import_process_finished(self, exit_code: int, exit_status) -> None:
         process = self._step_import_process
+        show_selection_prompt = False
         if process is not None:
             self._read_step_import_output()
         if exit_code == 0 and self._step_import_error is None and self._step_import_path is not None:
@@ -597,6 +608,7 @@ class MainWindow(QMainWindow):
                 if model is None:
                     raise RuntimeError("Кэш модели не был создан.")
                 self._step_import_loaded(model)
+                show_selection_prompt = True
             except Exception as exc:
                 self._step_import_failed(str(exc))
         else:
@@ -605,6 +617,8 @@ class MainWindow(QMainWindow):
                 detail = bytes(process.readAllStandardError()).decode("utf-8", errors="replace").strip()
             self._step_import_failed(detail or "Процесс загрузки STEP-модели завершился с ошибкой.")
         self._step_import_finished()
+        if show_selection_prompt:
+            self._show_support_selection_prompt()
 
     def _step_import_finished(self) -> None:
         if self._step_import_progress is not None:
@@ -647,15 +661,16 @@ class MainWindow(QMainWindow):
         self.view.stage_step_model(placed_mesh, placed_edges)
         result = self.controller.calculate(length_input, width_input, self.upper_layer())
         if result is None:
-            # Keep the unmodified STEP actor and its picking callback alive:
-            # a non-support face can legitimately produce overlapping beams.
+            # Keep the staged STEP actor and its picking callback alive: a
+            # non-support face can legitimately produce overlapping beams.
+            self.view.show_staged_step_model()
             self.statusBar().showMessage("Поддон не построен. Выберите другую нижнюю грань опоры.")
             return
         self.length_panel.apply_position_data(length_input)
         self.width_panel.apply_position_data(width_input)
         self.length_panel.set_model_driven_mode(length_input)
         self.width_panel.set_model_driven_mode(width_input)
-        self.view.update_step_model(placed_mesh, placed_edges, {face.index for face in supports}, face_index)
+        self.view.commit_step_support_selection({face.index for face in supports}, face_index)
         self._update_scene_info(result)
         self.statusBar().showMessage(f"Найдено опорных граней: {len(supports)}. Поддон построен под установкой.")
 
@@ -957,7 +972,11 @@ class MainWindow(QMainWindow):
         panel = self.length_panel if axis == "length" else self.width_panel
         panel.apply_position_data(updated_input)
         self.distance_editor.setVisible(False)
-        self.controller.recalculate_from_state()
+        result = self.controller.recalculate_from_state()
+        # Rebuilding the viewport removes the old pickable dimension actors.
+        # Keep the checked tool immediately usable by registering the new ones.
+        if result is not None and self.edit_distance_button.isChecked():
+            self._toggle_distance_editing(True)
         self.statusBar().showMessage("Расстояние обновлено. Выберите следующую размерную линию.")
 
     def _selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
@@ -978,8 +997,11 @@ class MainWindow(QMainWindow):
         for axis, updated_input in updated_inputs.items():
             panel = self.length_panel if axis == "length" else self.width_panel
             panel.apply_position_data(updated_input)
-        self.delete_beam_button.setChecked(False)
-        self.controller.recalculate_from_state()
+        result = self.controller.recalculate_from_state()
+        # ``show_pallet`` recreates all beam actors, so restore deletion
+        # picking without forcing the user to toggle the tool off and on.
+        if result is not None and self.delete_beam_button.isChecked():
+            self._toggle_deletion_mode(True)
         self.statusBar().showMessage(f"Удалено брусьев: {deleted}.")
 
     def _start_insertion(self, slot: InsertionSlot) -> None:
@@ -1012,9 +1034,18 @@ class MainWindow(QMainWindow):
         panel = self.length_panel if axis == "length" else self.width_panel
         panel.apply_position_data(updated_input)
         self.insertion_editor.setVisible(False)
-        self.controller.recalculate_from_state()
+        result = self.controller.recalculate_from_state()
+        # The viewport rebuild removes insertion markers together with the old
+        # beams. Re-register the markers while the tool remains checked.
+        if result is not None and self.add_beam_button.isChecked():
+            self._toggle_insertion_mode(True)
 
     def keyPressEvent(self, event) -> None:
+        if (event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.delete_beam_button.isChecked()
+                and any(self._selected_for_deletion.values())):
+            self._confirm_deletion()
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape and (self.add_beam_button.isChecked() or self.delete_beam_button.isChecked()
                                                or self.edit_distance_button.isChecked()):
             if self.add_beam_button.isChecked():
@@ -1028,6 +1059,10 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def eventFilter(self, watched, event) -> bool:
+        if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and self.delete_beam_button.isChecked() and any(self._selected_for_deletion.values())):
+            self._confirm_deletion()
+            return True
         if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
                 and self.add_beam_button.isChecked() and self._pending_insertion is None):
             self.add_beam_button.setChecked(False)
