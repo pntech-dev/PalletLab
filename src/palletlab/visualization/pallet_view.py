@@ -21,6 +21,7 @@ class PalletView(QtInteractor):
         self.setStyleSheet("border: 0px; margin: 0px; padding: 0px;")
         self.set_background("#f5f7fa")
         self._has_model = False
+        self._axes_added = False
         self._annotation_actors: list[object] = []
         self._annotation_segments: list[pv.PolyData] | None = None
         self._insertion_slots: dict[object, InsertionMarker] = {}
@@ -84,14 +85,9 @@ class PalletView(QtInteractor):
 
     def show_pallet(self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True) -> None:
         camera_position = self.camera_position if self._has_model else None
-        # Geometry is rebuilt through the same per-beam actor path used by
-        # the interactive deletion tool.  This is intentionally not merged:
-        # on the deployed VTK backend the alternative scene layer could leave
-        # the dimension annotations visible while hiding all beam meshes.
-        self.clear()
-        self._annotation_actors.clear()
-        self._beam_actors.clear()
-        self._distance_actors.clear()
+        # Keep the STEP actor in the renderer.  Clearing the complete scene
+        # made a large translucent model flash on every pallet recalculation.
+        self._clear_pallet_actors()
         length_count = len(result.length_result.beam_centers)
         self._beam_counts = {
             "length": length_count,
@@ -108,21 +104,38 @@ class PalletView(QtInteractor):
                 smooth_shading=False,
                 pickable=True,
                 name=f"pallet-beam-{beam_index}",
+                reset_camera=False,
             )
             axis = "length" if beam_index < length_count else "width"
             index = beam_index if axis == "length" else beam_index - length_count
             self._beam_actors[actor] = (axis, index)
         self.update_dimension_annotations(result, show_length_gaps, show_width_gaps, render=False)
-        # ``clear`` also removes VTK's orientation widget.  Add back only the
-        # compact corner marker; unlike ``show_grid`` it adds no scene grid.
-        self.add_axes(line_width=1, xlabel="X", ylabel="Y", zlabel="Z", viewport=(0, 0, 0.13, 0.13))
-        self._add_step_model(render=False)
+        self._ensure_axes()
+        self._sync_step_model_actor()
         if camera_position is None:
             self.camera_isometric()
         else:
             self.camera_position = camera_position
             self.render()
         self._has_model = True
+
+    def _clear_pallet_actors(self) -> None:
+        """Replace pallet-only actors without disturbing the STEP preview."""
+        self.disable_insertion_mode(render=False)
+        self.disable_deletion_mode(render=False)
+        self.disable_distance_editing(render=False)
+        self._remove_actors(list(self._beam_actors))
+        self._beam_actors.clear()
+        self._remove_actors(self._annotation_actors)
+        self.remove_actor("length-dimension-labels-points", render=False)
+        self.remove_actor("width-dimension-labels-points", render=False)
+        self._annotation_segments = None
+
+    def _ensure_axes(self) -> None:
+        if self._axes_added:
+            return
+        self.add_axes(line_width=1, xlabel="X", ylabel="Y", zlabel="Z", viewport=(0, 0, 0.13, 0.13))
+        self._axes_added = True
 
     def clear_workspace(self) -> None:
         """Remove the pallet and any imported machine before a new STEP import."""
@@ -142,7 +155,8 @@ class PalletView(QtInteractor):
         self._hovered_step_face_index = None
         self._step_hover_actor = None
         self._has_model = False
-        self.add_axes(line_width=1, xlabel="X", ylabel="Y", zlabel="Z", viewport=(0, 0, 0.13, 0.13))
+        self._axes_added = False
+        self._ensure_axes()
         self.render()
 
     def clear_step_model(self) -> None:
@@ -382,6 +396,16 @@ class PalletView(QtInteractor):
         if render:
             self.render()
 
+    def _sync_step_model_actor(self) -> None:
+        """Refresh STEP geometry without rendering an intermediate empty scene."""
+        if self._step_mesh is None:
+            return
+        # Recreating the two actors is more reliable than changing a VTK
+        # mapper's input in place: the latter can lose PyVista's opacity and
+        # RGB cell-colour configuration.  All actor operations use
+        # ``render=False``, so the user sees only the finished frame.
+        self._add_step_model(render=False)
+
     def _pick_step_face(self, *_args) -> None:
         if self._support_callback is None or self._step_model_actor is None or not self._step_model_visible:
             return
@@ -473,7 +497,7 @@ class PalletView(QtInteractor):
         self._hovered_deletion_actor = None
         self.render()
 
-    def disable_deletion_mode(self) -> None:
+    def disable_deletion_mode(self, *, render: bool = True) -> None:
         if not self._deletion_mode and not self._selected_deletion_actors:
             return
         self.disable_picking()
@@ -485,7 +509,8 @@ class PalletView(QtInteractor):
         self._deletion_callback = None
         self._deletion_mode = False
         self._hovered_deletion_actor = None
-        self.render()
+        if render:
+            self.render()
 
     def _select_deletion_beam(self, actor) -> None:
         if not self._deletion_mode or actor not in self._beam_actors:
@@ -697,7 +722,7 @@ class PalletView(QtInteractor):
         if self._annotation_segments is not None:
             self._annotation_segments.append(pv.Line(start, end))
             return
-        actor = self.add_mesh(pv.Line(start, end), color="#3d8582", line_width=2, name=name)
+        actor = self.add_mesh(pv.Line(start, end), color="#3d8582", line_width=2, name=name, reset_camera=False)
         self._annotation_actors.append(actor)
 
     def _begin_annotation_batch(self) -> None:
@@ -708,7 +733,9 @@ class PalletView(QtInteractor):
         self._annotation_segments = None
         if not segments:
             return
-        actor = self.add_mesh(pv.merge(segments, merge_points=False), color="#3d8582", line_width=2, name=name)
+        actor = self.add_mesh(
+            pv.merge(segments, merge_points=False), color="#3d8582", line_width=2, name=name, reset_camera=False
+        )
         self._annotation_actors.append(actor)
 
     def _add_t_end(self, point: tuple[float, float, float], perpendicular: str, size: float, name: str) -> None:
@@ -749,7 +776,7 @@ class PalletView(QtInteractor):
             self._flush_annotation_batch("length-dimension-lines")
         actor = self.add_point_labels(points, labels, name="length-dimension-labels", show_points=False, font_size=12,
                                       text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
-                                      fill_shape=True, always_visible=True)
+                                      fill_shape=True, always_visible=True, reset_camera=False)
         if hasattr(self, "_annotation_actors"):
             self._annotation_actors.append(actor)
 
@@ -785,7 +812,7 @@ class PalletView(QtInteractor):
             self._flush_annotation_batch("width-dimension-lines")
         actor = self.add_point_labels(points, labels, name="width-dimension-labels", show_points=False, font_size=12,
                                       text_color="#173f45", shape_color="#fffdf9", shape_opacity=0.88,
-                                      fill_shape=True, always_visible=True)
+                                      fill_shape=True, always_visible=True, reset_camera=False)
         if hasattr(self, "_annotation_actors"):
             self._annotation_actors.append(actor)
 

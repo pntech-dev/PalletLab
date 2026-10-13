@@ -109,6 +109,10 @@ class MainWindow(QMainWindow):
         self._step_import_progress: QProgressDialog | None = None
         self._model_supports = ()
         self._model_reference_support_index: int | None = None
+        self._model_rebuild_timer = QTimer(self)
+        self._model_rebuild_timer.setSingleShot(True)
+        self._model_rebuild_timer.setInterval(300)
+        self._model_rebuild_timer.timeout.connect(self._build_selected_model_pallet)
         self.setWindowTitle(f"PalletLab {__version__} — расчёт поддонов")
         screen = QApplication.primaryScreen().availableGeometry()
         self.resize(min(1400, int(screen.width() * 0.92)), min(900, int(screen.height() * 0.90)))
@@ -502,6 +506,7 @@ class MainWindow(QMainWindow):
         self.add_beam_button.setChecked(False)
         self.delete_beam_button.setChecked(False)
         self.edit_distance_button.setChecked(False)
+        self._model_rebuild_timer.stop()
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
         self._clear_model_supports()
@@ -545,6 +550,11 @@ class MainWindow(QMainWindow):
 
     def _step_import_loaded(self, model: ImportedStepModel) -> None:
         self._imported_step_model = model
+        # A STEP import always uses support coordinates derived from the model;
+        # hide the manual gabarit-to-support fields before the user selects the
+        # first support face, not only after the pallet has been built.
+        self.length_panel.set_model_driven_mode(None, hide_model_offsets=True)
+        self.width_panel.set_model_driven_mode(None, hide_model_offsets=True)
         self.rebuild_from_model_button.setEnabled(True)
         self.toggle_model_button.setEnabled(True)
         self.toggle_model_button.setText("Скрыть 3D модель")
@@ -568,6 +578,7 @@ class MainWindow(QMainWindow):
         self.add_beam_button.setChecked(False)
         self.delete_beam_button.setChecked(False)
         self.edit_distance_button.setChecked(False)
+        self._model_rebuild_timer.stop()
         self.controller.deactivate_tool()
         self.state.result = None
         self._clear_model_supports()
@@ -579,6 +590,8 @@ class MainWindow(QMainWindow):
         self._show_support_selection_prompt()
 
     def _step_import_failed(self, message: str) -> None:
+        self.length_panel.set_model_driven_mode(None)
+        self.width_panel.set_model_driven_mode(None)
         QMessageBox.warning(self, "Загрузка 3D-модели", message)
         self.scene_info.setText("3D-модель не загружена.")
         self.statusBar().showMessage("Не удалось загрузить 3D-модель.")
@@ -687,8 +700,11 @@ class MainWindow(QMainWindow):
             self.view.show_staged_step_model()
             self.statusBar().showMessage("Поддон не построен. Выберите другую нижнюю грань опоры.")
             return
-        self.length_panel.apply_position_data(length_input)
-        self.width_panel.apply_position_data(width_input)
+        # These values describe the just-detected supports.  Updating the
+        # display must not briefly schedule a manual rebuild or unhide the
+        # model-only form rows.
+        self.length_panel.apply_position_data(length_input, notify=False)
+        self.width_panel.apply_position_data(width_input, notify=False)
         self.length_panel.set_model_driven_mode(length_input)
         self.width_panel.set_model_driven_mode(width_input)
         # ``apply_position_data`` intentionally notifies regular manual
@@ -894,7 +910,21 @@ class MainWindow(QMainWindow):
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
+        if getattr(self, "_imported_step_model", None) is not None and getattr(self, "_model_supports", ()):
+            self.controller.stop_scheduled_recalculation()
+            self._set_stale(True)
+            self._model_rebuild_timer.start()
+            return
         self.controller.schedule_recalculation()
+
+    def _switch_model_pallet_to_manual_editing(self) -> None:
+        """Keep an imported model visible while manual beam edits take over."""
+        if not getattr(self, "_model_supports", ()):
+            return
+        self._model_rebuild_timer.stop()
+        self._clear_model_supports()
+        self.length_panel.set_model_driven_mode(None)
+        self.width_panel.set_model_driven_mode(None)
 
     def _layer_changed(self, *_args) -> None:
         self.controller.set_upper_layer(self.upper_layer())
@@ -1003,6 +1033,7 @@ class MainWindow(QMainWindow):
             return
         axis, updated_input = update
         panel = self.length_panel if axis == "length" else self.width_panel
+        MainWindow._switch_model_pallet_to_manual_editing(self)
         panel.apply_position_data(updated_input)
         self.distance_editor.setVisible(False)
         result = self.controller.recalculate_from_state()
@@ -1027,6 +1058,7 @@ class MainWindow(QMainWindow):
         if updated_inputs is None:
             return
         deleted = sum(len(indices) for indices in self._selected_for_deletion.values())
+        MainWindow._switch_model_pallet_to_manual_editing(self)
         for axis, updated_input in updated_inputs.items():
             panel = self.length_panel if axis == "length" else self.width_panel
             panel.apply_position_data(updated_input)
@@ -1065,6 +1097,7 @@ class MainWindow(QMainWindow):
             return
         axis, updated_input = update
         panel = self.length_panel if axis == "length" else self.width_panel
+        MainWindow._switch_model_pallet_to_manual_editing(self)
         panel.apply_position_data(updated_input)
         self.insertion_editor.setVisible(False)
         result = self.controller.recalculate_from_state()
