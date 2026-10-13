@@ -216,6 +216,9 @@ class PalletView(QtInteractor):
         self._add_step_model(render=False)
         self.view_isometric()
         self.reset_camera(render=True)
+        # The STEP preview is already a real scene.  Subsequent pallet renders
+        # must preserve any zoom/rotation the user made while choosing a face.
+        self._has_model = True
 
     def stage_step_model(self, mesh: pv.PolyData, edges: pv.PolyData) -> None:
         """Prepare a correctly placed machine before rendering the new pallet."""
