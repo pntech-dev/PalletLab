@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PyQt5.QtCore import QTimer
+import numpy as np
 import pyvista as pv
 from pyvistaqt import QtInteractor
 
@@ -50,6 +51,8 @@ class PalletView(QtInteractor):
         self._support_face_indices: set[int] = set()
         self._reference_support_index: int | None = None
         self._measurement_face_indices: dict[tuple[str, str, str], int] = {}
+        self._step_face_cell_indices: dict[int, object] = {}
+        self._hovered_step_face_index: int | None = None
         self._step_picker = pv._vtk.vtkCellPicker()
         self._step_picker.SetTolerance(0.0005)
         self._mesh_picker = pv._vtk.vtkCellPicker()
@@ -73,6 +76,7 @@ class PalletView(QtInteractor):
         self.iren.add_observer("MouseMoveEvent", self._update_insertion_hover)
         self.iren.add_observer("MouseMoveEvent", self._update_deletion_hover)
         self.iren.add_observer("MouseMoveEvent", self._update_distance_hover)
+        self.iren.add_observer("MouseMoveEvent", self._update_step_face_hover)
         self.iren.add_observer("LeftButtonPressEvent", self._click_distance)
         self.iren.add_observer("LeftButtonPressEvent", self._click_insertion)
         self.iren.add_observer("LeftButtonPressEvent", self._click_deletion)
@@ -136,6 +140,8 @@ class PalletView(QtInteractor):
         self._support_face_indices.clear()
         self._reference_support_index = None
         self._measurement_face_indices.clear()
+        self._step_face_cell_indices.clear()
+        self._hovered_step_face_index = None
         self._has_model = False
         self.add_axes(line_width=1, xlabel="X", ylabel="Y", zlabel="Z", viewport=(0, 0, 0.13, 0.13))
         self.render()
@@ -154,6 +160,8 @@ class PalletView(QtInteractor):
         self._support_face_indices.clear()
         self._reference_support_index = None
         self._measurement_face_indices.clear()
+        self._step_face_cell_indices.clear()
+        self._hovered_step_face_index = None
         self._step_model_visible = True
         self.render()
 
@@ -172,6 +180,7 @@ class PalletView(QtInteractor):
         self._support_face_indices.clear()
         self._reference_support_index = None
         self._measurement_face_indices.clear()
+        self._hovered_step_face_index = None
         self._step_model_visible = True
         if self._step_mesh is not None:
             self._step_mesh.cell_data["face_colors"] = [(184, 194, 204)] * self._step_mesh.n_cells
@@ -187,7 +196,7 @@ class PalletView(QtInteractor):
         """Display an imported STEP mesh and wait for the user to choose a support face."""
         self.clear_workspace()
         self._step_mesh = mesh.copy(deep=True)
-        self._step_mesh.cell_data["face_colors"] = [(184, 194, 204)] * mesh.n_cells
+        self._step_mesh.cell_data["face_colors"] = np.tile(np.array((184, 194, 204), dtype=np.uint8), (mesh.n_cells, 1))
         self._step_edges = edges.copy(deep=True)
         self._step_faces = faces
         self._support_callback = callback
@@ -195,6 +204,8 @@ class PalletView(QtInteractor):
         self._support_face_indices.clear()
         self._reference_support_index = None
         self._measurement_face_indices.clear()
+        self._index_step_faces()
+        self._hovered_step_face_index = None
         self._step_model_visible = True
         self._add_step_model(render=False)
         self.view_isometric()
@@ -206,8 +217,10 @@ class PalletView(QtInteractor):
         # Retain them directly: duplicating a large assembly here can block the
         # UI for seconds immediately after the pallet appears.
         self._step_mesh = mesh
-        self._step_mesh.cell_data["face_colors"] = [(184, 194, 204)] * mesh.n_cells
+        self._step_mesh.cell_data["face_colors"] = np.tile(np.array((184, 194, 204), dtype=np.uint8), (mesh.n_cells, 1))
         self._step_edges = edges
+        self._index_step_faces()
+        self._hovered_step_face_index = None
 
     def commit_step_support_selection(self, support_indices: set[int], reference_index: int) -> None:
         """Highlight supports in the already-rendered placed model.
@@ -233,6 +246,7 @@ class PalletView(QtInteractor):
         """Forget visual measurement selections while retaining the STEP model."""
         self._measurement_callback = None
         self._measurement_face_indices.clear()
+        self._hovered_step_face_index = None
         self._refresh_step_face_colors(render=True)
 
     def set_step_measurement_face(self, axis: str, side: str, role: str, face_index: int | None) -> None:
@@ -247,18 +261,13 @@ class PalletView(QtInteractor):
     def _refresh_step_face_colors(self, *, render: bool) -> None:
         if self._step_mesh is None:
             return
-        colors = [[184, 194, 204] for _ in range(self._step_mesh.n_cells)]
-        face_indices = self._step_mesh.cell_data["step_face_index"]
-        for cell_index, face_id in enumerate(face_indices):
-            if face_id in self._support_face_indices:
-                colors[cell_index] = [230, 41, 51]
-            if face_id == self._reference_support_index:
-                colors[cell_index] = [255, 176, 26]
-        for (axis, side, role), selected in self._measurement_face_indices.items():
-            color = [37, 116, 170] if role == "boundary" else [43, 148, 91]
-            for cell_index, face_id in enumerate(face_indices):
-                if face_id == selected:
-                    colors[cell_index] = color
+        colors = np.tile(np.array((184, 194, 204), dtype=np.uint8), (self._step_mesh.n_cells, 1))
+        for face_id, cells in self._step_face_cell_indices.items():
+            colors[cells] = self._step_face_color(face_id)
+        if self._hovered_step_face_index is not None:
+            cells = self._step_face_cell_indices.get(self._hovered_step_face_index)
+            if cells is not None:
+                colors[cells] = (51, 185, 174)
         self._step_mesh.cell_data["face_colors"] = colors
         color_array = self._step_mesh.GetCellData().GetArray("face_colors")
         if color_array is not None:
@@ -268,6 +277,63 @@ class PalletView(QtInteractor):
             self._step_model_actor.mapper.Update()
         if render:
             self.render()
+
+    def _index_step_faces(self) -> None:
+        """Index cells once so hover updates touch only the one hovered face."""
+        if self._step_mesh is None:
+            return
+        face_indices = np.asarray(self._step_mesh.cell_data["step_face_index"])
+        self._step_face_cell_indices = {
+            int(face_id): np.flatnonzero(face_indices == face_id)
+            for face_id in np.unique(face_indices)
+        }
+
+    def _step_face_color(self, face_id: int) -> tuple[int, int, int]:
+        color = (184, 194, 204)
+        if face_id in self._support_face_indices:
+            color = (230, 41, 51)
+        if face_id == self._reference_support_index:
+            color = (255, 176, 26)
+        for (_axis, _side, role), selected in self._measurement_face_indices.items():
+            if selected == face_id:
+                color = (37, 116, 170) if role == "boundary" else (43, 148, 91)
+        return color
+
+    def _set_step_face_color(self, face_id: int, color: tuple[int, int, int]) -> None:
+        if self._step_mesh is None:
+            return
+        cells = self._step_face_cell_indices.get(face_id)
+        if cells is None:
+            return
+        colors = self._step_mesh.cell_data["face_colors"]
+        colors[cells] = color
+        color_array = self._step_mesh.GetCellData().GetArray("face_colors")
+        if color_array is not None:
+            color_array.Modified()
+        self._step_mesh.Modified()
+        if self._step_model_actor is not None:
+            self._step_model_actor.mapper.Update()
+
+    def _update_step_face_hover(self, *_args) -> None:
+        if ((self._support_callback is None and self._measurement_callback is None)
+                or self._step_model_actor is None or not self._step_model_visible):
+            return
+        x, y = self.iren.get_event_position()
+        self._step_picker.Pick(x, y, 0, self.renderer)
+        hovered = None
+        if self._step_picker.GetActor() == self._step_model_actor:
+            cell_id = self._step_picker.GetCellId()
+            if self._step_mesh is not None and 0 <= cell_id < self._step_mesh.n_cells:
+                hovered = int(self._step_mesh.cell_data["step_face_index"][cell_id])
+        if hovered == self._hovered_step_face_index:
+            return
+        previous = self._hovered_step_face_index
+        self._hovered_step_face_index = hovered
+        if previous is not None:
+            self._set_step_face_color(previous, self._step_face_color(previous))
+        if hovered is not None:
+            self._set_step_face_color(hovered, (51, 185, 174))
+        self.render()
 
     def show_staged_step_model(self) -> None:
         """Reveal a staged placement after a failed pallet calculation."""

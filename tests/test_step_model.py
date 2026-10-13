@@ -7,6 +7,7 @@ from palletlab.importers.step_model import (
     ImportedStepModel,
     StepFace,
     _surface_centroid,
+    boundary_face_axis,
     _coalesced_beam_positions,
     coplanar_supports,
     edge_to_support_center_distance,
@@ -35,6 +36,17 @@ def test_edge_distance_uses_the_selected_support_face_centre():
     )
 
     assert edge_to_support_center_distance(model, 0, 1, 0, 1) == 124
+
+
+def test_boundary_face_axis_accepts_any_vertical_model_boundary():
+    model = _model(
+        StepFace(0, np.array((0, 0, 0), dtype=float), np.array((0, 0, -1), dtype=float)),
+        StepFace(1, np.array((100, 0, 0), dtype=float), np.array((1, 0, 0), dtype=float)),
+        StepFace(2, np.array((0, 100, 0), dtype=float), np.array((0, 1, 0), dtype=float)),
+    )
+
+    assert boundary_face_axis(model, 0, 1) == 0
+    assert boundary_face_axis(model, 0, 2) == 1
 
 
 def test_support_detection_accepts_a_machine_laid_on_its_side():

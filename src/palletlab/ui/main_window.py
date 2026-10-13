@@ -753,18 +753,17 @@ class MainWindow(QMainWindow):
         coordinate = 0 if axis == "length" else 1
         if role == "boundary":
             try:
-                from palletlab.importers.step_model import edge_to_support_center_distance
-                if face.point is None or face.normal is None:
-                    raise ValueError("Грань габарита должна быть плоской.")
-                # Validate against the reference support now, so an incorrect
-                # boundary face never becomes part of a pending selection.
-                edge_to_support_center_distance(
-                    model, face_index, self._model_reference_support_index, coordinate,
-                    self._model_reference_support_index,
-                )
+                from palletlab.importers.step_model import boundary_face_axis
+                detected_axis = boundary_face_axis(model, self._model_reference_support_index, face_index)
             except ValueError as exc:
                 QMessageBox.information(self, "Выбор габарита", str(exc))
                 return
+            if detected_axis != coordinate:
+                self._move_model_measurement_axis("length" if detected_axis == 0 else "width")
+                active = self._active_model_measurement
+                assert active is not None
+                axis, side = active
+                coordinate = detected_axis
         support_indices = {item.index for item in self._model_supports}
         if role == "support" and face_index not in support_indices:
             QMessageBox.information(self, "Выбор опоры", "Выберите одну из нижних граней найденных опор.")
@@ -778,6 +777,25 @@ class MainWindow(QMainWindow):
         else:
             self.view.end_step_face_measurement()
             self.statusBar().showMessage("Грани выбраны. Нажмите «Готово», чтобы применить отступ и перестроить поддон.")
+
+    def _move_model_measurement_axis(self, axis: str) -> None:
+        """Assign a vertical boundary face to its actual pallet axis."""
+        active = self._active_model_measurement
+        if active is None or active[0] == axis:
+            return
+        previous_axis, side = active
+        role_order = ("boundary", "support") if side == "start" else ("support", "boundary")
+        for index, selected_face in enumerate(self._pending_model_faces):
+            role = role_order[index]
+            self.view.set_step_measurement_face(previous_axis, side, role, None)
+            self.view.set_step_measurement_face(axis, side, role, selected_face)
+        self._active_model_measurement = (axis, side)
+        if self.state.length_input is not None and self.state.width_input is not None:
+            self._refresh_measurement_buttons(self.state.length_input, self.state.width_input)
+        panel = self.length_panel if axis == "length" else self.width_panel
+        panel.set_measurement_action(side, active=True)
+        self.length_panel.set_measurement_buttons_enabled(axis == "length")
+        self.width_panel.set_measurement_buttons_enabled(axis == "width")
 
     def _finish_model_measurement(self) -> None:
         active = self._active_model_measurement

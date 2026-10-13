@@ -337,6 +337,19 @@ def support_axis_coordinate(model: ImportedStepModel, reference_index: int, poin
     return float(np.dot(point - origin, x_axis if axis == 0 else y_axis))
 
 
+def boundary_face_axis(model: ImportedStepModel, reference_index: int, face_index: int) -> int:
+    """Return the pallet axis perpendicular to a selected vertical boundary face."""
+    face = model.faces[face_index]
+    if face.point is None or face.normal is None:
+        raise ValueError("Грань габарита должна быть плоской.")
+    _origin, x_axis, y_axis, _z_axis = _support_frame(model, reference_index)
+    alignment = (abs(float(np.dot(face.normal, x_axis))), abs(float(np.dot(face.normal, y_axis))))
+    axis = int(np.argmax(alignment))
+    if alignment[axis] < HORIZONTAL_COSINE:
+        raise ValueError("Грань габарита должна быть вертикальной относительно плоскости опор.")
+    return axis
+
+
 def _support_frame_mesh(source: pv.PolyData, frame: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]) -> pv.PolyData:
     """Copy display geometry into the selected support plane's local frame."""
     origin, x_axis, y_axis, z_axis = frame
@@ -402,8 +415,8 @@ def edge_to_support_center_distance(
         raise ValueError("Грань габарита должна быть плоской.")
     if support.point is None or support.normal is None:
         raise ValueError("Грань опоры должна быть плоской.")
-    _origin, x_axis, y_axis, _z_axis = _support_frame(model, reference_index)
-    if abs(float(np.dot(boundary.normal, x_axis if axis == 0 else y_axis))) < HORIZONTAL_COSINE:
+    detected_axis = boundary_face_axis(model, reference_index, boundary_index)
+    if detected_axis != axis:
         direction = "X" if axis == 0 else "Y"
         raise ValueError(f"Грань габарита должна быть перпендикулярна оси {direction}.")
     boundary_coordinate = support_axis_coordinate(model, reference_index, boundary.point, axis)
