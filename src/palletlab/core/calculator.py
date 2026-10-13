@@ -241,15 +241,24 @@ def _section_for(
     return section
 
 
+def _centres_for_sections(direction: DirectionResult, sections: tuple[BeamSection, ...]) -> tuple[float, ...]:
+    """Keep the two structural edge beams flush with the pallet boundary."""
+    centres = list(direction.beam_centers)
+    if len(centres) > 1:
+        centres[0] = sections[0].width / 2
+        centres[-1] = direction.pallet_size - sections[-1].width / 2
+    return tuple(centres)
+
+
 def _validate_sections(
-    axis: PalletAxis, direction: DirectionResult, sections: tuple[BeamSection, ...],
+    direction: DirectionResult, sections: tuple[BeamSection, ...], centres: tuple[float, ...],
 ) -> None:
-    """Ensure individually sized beams still fit on their existing centre grid."""
-    for index, (center, section) in enumerate(zip(direction.beam_centers, sections)):
+    """Ensure individually sized beams fit on their physical centre grid."""
+    for index, (center, section) in enumerate(zip(centres, sections)):
         if center - section.width / 2 < -EPSILON or center + section.width / 2 > direction.pallet_size + EPSILON:
             raise CalculationError(f"Брус {index + 1} выходит за границу поддона после изменения сечения.")
     for index, (left, right) in enumerate(zip(sections, sections[1:])):
-        centre_distance = direction.beam_centers[index + 1] - direction.beam_centers[index]
+        centre_distance = centres[index + 1] - centres[index]
         required_distance = (left.width + right.width) / 2
         if centre_distance < required_distance - EPSILON:
             raise CalculationError(
@@ -280,8 +289,10 @@ def build_pallet(
         raise CalculationError("Изменённое сечение относится к брусу, которого больше нет.")
     length_sections = tuple(_section_for("length", index, length, overrides) for index in range(len(length.beam_centers)))
     width_sections = tuple(_section_for("width", index, width, overrides) for index in range(len(width.beam_centers)))
-    _validate_sections("length", length, length_sections)
-    _validate_sections("width", width, width_sections)
+    length_centres = _centres_for_sections(length, length_sections)
+    width_centres = _centres_for_sections(width, width_sections)
+    _validate_sections(length, length_sections, length_centres)
+    _validate_sections(width, width_sections, width_centres)
 
     lower = "width" if upper_layer == "length" else "length"
     lower_height = max(section.height for section in (width_sections if lower == "width" else length_sections))
@@ -293,12 +304,12 @@ def build_pallet(
     z_width = lower_height if lower == "length" else 0.0
     beams: list[Beam3D] = []
     # Length-result centres lie on X: these beams span the full pallet width.
-    for x, section in zip(length.beam_centers, length_sections):
+    for x, section in zip(length_centres, length_sections):
         beam_z = z_length + section.height / 2 if lower != "length" else lower_height - section.height / 2
         beams.append(Beam3D(x, width.pallet_size / 2, beam_z,
                             section.width, width.pallet_size, section.height, "width"))
     # Width-result centres lie on Y: these beams span the full pallet length.
-    for y, section in zip(width.beam_centers, width_sections):
+    for y, section in zip(width_centres, width_sections):
         beam_z = z_width + section.height / 2 if lower != "width" else lower_height - section.height / 2
         beams.append(Beam3D(length.pallet_size / 2, y, beam_z,
                             length.pallet_size, section.width, section.height, "length"))

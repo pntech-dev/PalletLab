@@ -132,6 +132,20 @@ def test_changed_sections_cannot_overlap_on_the_existing_beam_grid():
         })
 
 
+def test_changed_edge_sections_stay_flush_with_the_pallet_boundary():
+    length = calculate_direction(LENGTH_EXAMPLE)
+    width = calculate_direction(WIDTH_EXAMPLE)
+
+    result = build_pallet(length, width, section_overrides={
+        ("length", 0): BeamSection(70, 100),
+        ("length", len(length.beam_centers) - 1): BeamSection(70, 100),
+    })
+
+    edge_beams = (result.beams_3d[0], result.beams_3d[len(length.beam_centers) - 1])
+    assert edge_beams[0].x - edge_beams[0].size_x / 2 == pytest.approx(0)
+    assert edge_beams[1].x + edge_beams[1].size_x / 2 == pytest.approx(result.pallet_length)
+
+
 def test_interactive_beam_insertion_uses_a_face_gap_and_updates_the_existing_input_model():
     length = calculate_direction(LENGTH_EXAMPLE)
     width = calculate_direction(WIDTH_EXAMPLE)
