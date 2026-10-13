@@ -6,7 +6,7 @@ import pytest
 from palletlab.core.calculator import (build_pallet, calculate_direction, delete_beams_input, insert_beam, insert_beam_input,
                                        insertion_slots, pallet_bounds)
 from palletlab.core.calculator import set_beam_face_distance_input
-from palletlab.core.models import DirectionInput
+from palletlab.core.models import BeamSection, DirectionInput
 from palletlab.core.validation import CalculationError
 from palletlab.visualization.pallet_view import PalletView
 
@@ -106,6 +106,30 @@ def test_pallet_geometry_matches_calculated_dimensions_and_layer_switch():
     # Upper-layer toggle must really move the corresponding physical beams.
     assert [b.z for b in width_upper.beams_3d if b.orientation == "length"][0] == pytest.approx(105)
     assert [b.z for b in length_upper.beams_3d if b.orientation == "length"][0] == pytest.approx(35)
+
+
+def test_changed_lower_beam_section_lifts_the_whole_upper_layer_by_its_top_face():
+    length = calculate_direction(LENGTH_EXAMPLE)
+    width = calculate_direction(WIDTH_EXAMPLE)
+
+    result = build_pallet(length, width, "width", {("length", 2): BeamSection(100, 50)})
+
+    lower = result.beams_3d[:len(length.beam_centers)]
+    upper = result.beams_3d[len(length.beam_centers):]
+    assert {round(beam.z + beam.size_z / 2, 6) for beam in lower} == {100}
+    assert all(beam.z - beam.size_z / 2 == pytest.approx(100) for beam in upper)
+    assert result.pallet_height == pytest.approx(170)
+
+
+def test_changed_sections_cannot_overlap_on_the_existing_beam_grid():
+    length = calculate_direction(LENGTH_EXAMPLE)
+    width = calculate_direction(WIDTH_EXAMPLE)
+
+    with pytest.raises(CalculationError, match="после изменения сечения"):
+        build_pallet(length, width, section_overrides={
+            ("width", 1): BeamSection(70, 600),
+            ("width", 2): BeamSection(70, 600),
+        })
 
 
 def test_interactive_beam_insertion_uses_a_face_gap_and_updates_the_existing_input_model():

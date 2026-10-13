@@ -9,20 +9,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSignalBlocker, QTimer, Qt, pyqtSignal
-from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
+from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
                              QMessageBox, QPushButton, QDoubleSpinBox, QProgressDialog, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.controllers.pallet_controller import PalletController
 from palletlab.core.calculator import insertion_slots
 from palletlab.core.formatting import format_mm
 from palletlab.core.materials import MATERIALS, get_material, pallet_mass_kg
-from palletlab.core.models import InsertionSlot, PalletAxis
+from palletlab.core.models import BeamSection, InsertionSlot, PalletAxis
 from palletlab.core.project_state import ProjectState
 from palletlab.core.validation import CalculationError
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
 from palletlab.exporters.solidworks import SolidWorksExportError, SolidWorksMaterialLibraryError, SolidWorksTemplateError, available_materials, export_pallet
 from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
-from palletlab.ui.input_panel import DirectionInputPanel
+from palletlab.ui.input_panel import DirectionInputPanel, SECTIONS
 from palletlab.ui.update_dialog import check_for_updates
 from palletlab.version import __version__
 from palletlab.visualization.pallet_view import PalletView
@@ -47,6 +47,49 @@ class InsertionGapSpinBox(QDoubleSpinBox):
             event.accept()
             return
         super().keyPressEvent(event)
+
+
+class BeamSectionDialog(QDialog):
+    """Choose one standard or custom cross-section for selected beams."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Изменить сечение брусьев")
+        self.setModal(True)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Новое сечение применяется ко всем выделенным брусьям."))
+        form = QFormLayout()
+        self.section_combo = QComboBox()
+        self.section_combo.addItems(SECTIONS)
+        self.height = QDoubleSpinBox()
+        self.width = QDoubleSpinBox()
+        for field in (self.height, self.width):
+            field.setRange(1.0, 1_000_000.0)
+            field.setDecimals(3)
+            field.setSuffix(" мм")
+            field.setSingleStep(1.0)
+        form.addRow("Сечение · высота × ширина", self.section_combo)
+        form.addRow("Высота", self.height)
+        form.addRow("Ширина", self.width)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.section_combo.currentTextChanged.connect(self._section_changed)
+        self._section_changed(self.section_combo.currentText())
+
+    def _section_changed(self, name: str) -> None:
+        values = SECTIONS[name]
+        custom = values is None
+        self.height.setEnabled(custom)
+        self.width.setEnabled(custom)
+        if values is not None:
+            self.height.setValue(values[0])
+            self.width.setValue(values[1])
+
+    def section(self) -> BeamSection:
+        return BeamSection(self.height.value(), self.width.value())
 
 
 class MainWindow(QMainWindow):
@@ -96,6 +139,10 @@ class MainWindow(QMainWindow):
     @_selected_for_deletion.setter
     def _selected_for_deletion(self, value: dict[PalletAxis, set[int]]) -> None:
         self.state.selected_for_deletion = value
+
+    @property
+    def _selected_for_section(self) -> dict[PalletAxis, set[int]]:
+        return self.state.selected_for_section
 
     def __init__(self) -> None:
         super().__init__()
@@ -292,6 +339,12 @@ class MainWindow(QMainWindow):
         self.edit_distance_button.setToolTip("Выбрать размерную линию и изменить расстояние либо общий габарит.")
         self.edit_distance_button.toggled.connect(self._toggle_distance_editing)
         view_heading.addWidget(self.edit_distance_button)
+        self.change_section_button = QPushButton("▣ Изменить сечение")
+        self.change_section_button.setObjectName("changeSectionButton")
+        self.change_section_button.setCheckable(True)
+        self.change_section_button.setToolTip("Выбрать брусья и назначить им другое сечение.")
+        self.change_section_button.toggled.connect(self._toggle_section_editing)
+        view_heading.addWidget(self.change_section_button)
         self.insertion_editor = QFrame()
         self.insertion_editor.setObjectName("insertionEditor")
         insertion_layout = QHBoxLayout(self.insertion_editor)
@@ -326,6 +379,20 @@ class MainWindow(QMainWindow):
         deletion_layout.addWidget(self.confirm_deletion_button)
         self.deletion_editor.setVisible(False)
         view_heading.addWidget(self.deletion_editor)
+        self.section_editor = QFrame()
+        self.section_editor.setObjectName("sectionEditor")
+        section_layout = QHBoxLayout(self.section_editor)
+        section_layout.setContentsMargins(8, 4, 8, 4)
+        section_layout.setSpacing(6)
+        self.section_hint = QLabel()
+        self.section_hint.setObjectName("sectionEditHint")
+        section_layout.addWidget(self.section_hint)
+        self.confirm_section_button = QPushButton("Изменить…")
+        self.confirm_section_button.setObjectName("confirmSectionButton")
+        self.confirm_section_button.clicked.connect(self._confirm_section_change)
+        section_layout.addWidget(self.confirm_section_button)
+        self.section_editor.setVisible(False)
+        view_heading.addWidget(self.section_editor)
         self.distance_editor = QFrame()
         self.distance_editor.setObjectName("distanceEditor")
         distance_layout = QHBoxLayout(self.distance_editor)
@@ -372,6 +439,7 @@ class MainWindow(QMainWindow):
         self.add_beam_button.installEventFilter(self)
         self.delete_beam_button.installEventFilter(self)
         self.edit_distance_button.installEventFilter(self)
+        self.change_section_button.installEventFilter(self)
         self.view.installEventFilter(self)
 
     def _header(self) -> QFrame:
@@ -462,6 +530,9 @@ class MainWindow(QMainWindow):
             QPushButton#editDistanceButton { border-color: #b47a22; color: #8a5b14; font-weight: 650; }
             QPushButton#editDistanceButton:hover { background: #fbf0da; }
             QPushButton#editDistanceButton:checked { background: #9a681b; border-color: #9a681b; color: #fff; }
+            QPushButton#changeSectionButton { border-color: #287b9f; color: #1e617d; font-weight: 650; }
+            QPushButton#changeSectionButton:hover { background: #e2f1f6; }
+            QPushButton#changeSectionButton:checked { background: #246f91; border-color: #246f91; color: #fff; }
             QPushButton#buildFromModelButton { background: #255e64; border-color: #255e64; color: #fff; font-weight: 650; }
             QPushButton#buildFromModelButton:hover { background: #1f4f54; border-color: #1f4f54; }
             QPushButton#rebuildFromModelButton { border-color: #8aa7a3; color: #285e59; font-weight: 650; }
@@ -473,6 +544,10 @@ class MainWindow(QMainWindow):
             QLabel#deletionHint { color: #81332e; font-size: 11px; }
             QPushButton#confirmDeletionButton { background: #b83e37; border-color: #b83e37; color: #fff; font-weight: 650; padding: 6px 9px; }
             QPushButton#confirmDeletionButton:disabled { background: #e3b9b5; border-color: #e3b9b5; color: #fff; }
+            QFrame#sectionEditor { background: #e2f1f6; border: 1px solid #afd3df; border-radius: 7px; }
+            QLabel#sectionEditHint { color: #215b72; font-size: 11px; }
+            QPushButton#confirmSectionButton { background: #287b9f; border-color: #287b9f; color: #fff; font-weight: 650; padding: 6px 9px; }
+            QPushButton#confirmSectionButton:disabled { background: #a8ccd9; border-color: #a8ccd9; color: #fff; }
             QFrame#distanceEditor { background: #fbf0da; border: 1px solid #e7c782; border-radius: 7px; }
             QLabel#distanceHint { color: #7d5a20; font-size: 11px; }
             QComboBox#cameraCombo { min-width: 115px; }
@@ -506,11 +581,13 @@ class MainWindow(QMainWindow):
         self.add_beam_button.setChecked(False)
         self.delete_beam_button.setChecked(False)
         self.edit_distance_button.setChecked(False)
+        self.change_section_button.setChecked(False)
         self._model_rebuild_timer.stop()
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
         self._clear_model_supports()
         self._imported_step_model = None
+        self.state.beam_sections.clear()
         self.state.result = None
         self.view.clear_workspace()
         self.scene_info.setText("Загрузка 3D-модели…")
@@ -578,9 +655,11 @@ class MainWindow(QMainWindow):
         self.add_beam_button.setChecked(False)
         self.delete_beam_button.setChecked(False)
         self.edit_distance_button.setChecked(False)
+        self.change_section_button.setChecked(False)
         self._model_rebuild_timer.stop()
         self.controller.deactivate_tool()
         self.state.result = None
+        self.state.beam_sections.clear()
         self._clear_model_supports()
         self.view.prepare_step_model_rebuild(self._support_face_selected)
         self.toggle_model_button.setEnabled(True)
@@ -961,6 +1040,8 @@ class MainWindow(QMainWindow):
             self.delete_beam_button.setChecked(False)
         if self.edit_distance_button.isChecked():
             self.edit_distance_button.setChecked(False)
+        if self.change_section_button.isChecked():
+            self.change_section_button.setChecked(False)
         if self._last_result is None:
             self.add_beam_button.setChecked(False)
             return
@@ -984,6 +1065,8 @@ class MainWindow(QMainWindow):
             self.add_beam_button.setChecked(False)
         if self.edit_distance_button.isChecked():
             self.edit_distance_button.setChecked(False)
+        if self.change_section_button.isChecked():
+            self.change_section_button.setChecked(False)
         if self._last_result is None:
             self.delete_beam_button.setChecked(False)
             return
@@ -1004,12 +1087,34 @@ class MainWindow(QMainWindow):
             self.add_beam_button.setChecked(False)
         if self.delete_beam_button.isChecked():
             self.delete_beam_button.setChecked(False)
+        if self.change_section_button.isChecked():
+            self.change_section_button.setChecked(False)
         if self._last_result is None:
             self.edit_distance_button.setChecked(False)
             return
         self.controller.enable_distance_editing(self._start_distance_edit)
         self.controller.activate_tool("distance_editing")
         self.statusBar().showMessage("Наведите курсор на размерную линию и нажмите: внутренний брус или общий габарит.")
+
+    def _toggle_section_editing(self, enabled: bool) -> None:
+        if not enabled:
+            self.controller.deactivate_tool()
+            self.controller.clear_section_selection()
+            self.section_editor.setVisible(False)
+            self.view.disable_section_editing()
+            return
+        for button in (self.add_beam_button, self.delete_beam_button, self.edit_distance_button):
+            if button.isChecked():
+                button.setChecked(False)
+        if self._last_result is None:
+            self.change_section_button.setChecked(False)
+            return
+        self.controller.clear_section_selection()
+        self.section_editor.setVisible(True)
+        self._update_section_editor()
+        self.view.enable_section_editing(self._section_selection_changed)
+        self.controller.activate_tool("section_editing")
+        self.statusBar().showMessage("Выберите один или несколько брусьев, затем нажмите «Изменить…».")
 
     def _start_distance_edit(self, axis: PalletAxis, beam_index: int, value: float) -> None:
         self.controller.begin_distance_edit(axis, beam_index)
@@ -1046,6 +1151,30 @@ class MainWindow(QMainWindow):
     def _selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
         self.controller.set_deletion_selection(axis, index, selected)
         self._update_deletion_editor()
+
+    def _section_selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
+        self.controller.set_section_selection(axis, index, selected)
+        self._update_section_editor()
+
+    def _update_section_editor(self) -> None:
+        count = sum(len(indices) for indices in self._selected_for_section.values())
+        self.section_hint.setText(
+            "Выделено: " + (f"{count}. Сечение будет заменено." if count else "0. Выберите брусья в модели.")
+        )
+        self.confirm_section_button.setEnabled(count > 0)
+
+    def _confirm_section_change(self) -> None:
+        if not any(self._selected_for_section.values()):
+            return
+        dialog = BeamSectionDialog(self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        changed = sum(len(indices) for indices in self._selected_for_section.values())
+        MainWindow._switch_model_pallet_to_manual_editing(self)
+        result = self.controller.apply_section_change(dialog.section())
+        if result is not None and self.change_section_button.isChecked():
+            self._toggle_section_editing(True)
+            self.statusBar().showMessage(f"Сечение изменено у брусьев: {changed}.")
 
     def _update_deletion_editor(self) -> None:
         count = sum(len(indices) for indices in self._selected_for_deletion.values())
@@ -1112,14 +1241,21 @@ class MainWindow(QMainWindow):
             self._confirm_deletion()
             event.accept()
             return
+        if (event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.change_section_button.isChecked()
+                and any(self._selected_for_section.values())):
+            self._confirm_section_change()
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape and (self.add_beam_button.isChecked() or self.delete_beam_button.isChecked()
-                                               or self.edit_distance_button.isChecked()):
+                                               or self.edit_distance_button.isChecked() or self.change_section_button.isChecked()):
             if self.add_beam_button.isChecked():
                 self.add_beam_button.setChecked(False)
             elif self.delete_beam_button.isChecked():
                 self.delete_beam_button.setChecked(False)
-            else:
+            elif self.edit_distance_button.isChecked():
                 self.edit_distance_button.setChecked(False)
+            else:
+                self.change_section_button.setChecked(False)
             event.accept()
             return
         super().keyPressEvent(event)
@@ -1128,6 +1264,10 @@ class MainWindow(QMainWindow):
         if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
                 and self.delete_beam_button.isChecked() and any(self._selected_for_deletion.values())):
             self._confirm_deletion()
+            return True
+        if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and self.change_section_button.isChecked() and any(self._selected_for_section.values())):
+            self._confirm_section_change()
             return True
         if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
                 and self.add_beam_button.isChecked() and self._pending_insertion is None):
@@ -1138,6 +1278,9 @@ class MainWindow(QMainWindow):
             return True
         if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape and self.edit_distance_button.isChecked():
             self.edit_distance_button.setChecked(False)
+            return True
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape and self.change_section_button.isChecked():
+            self.change_section_button.setChecked(False)
             return True
         return super().eventFilter(watched, event)
 
@@ -1182,6 +1325,8 @@ class MainWindow(QMainWindow):
             self._toggle_deletion_mode(True)
         elif self.edit_distance_button.isChecked():
             self._toggle_distance_editing(True)
+        elif self.change_section_button.isChecked():
+            self._toggle_section_editing(True)
         return result
 
     def _read_calculation_inputs(self):
@@ -1223,6 +1368,8 @@ class MainWindow(QMainWindow):
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
         self._imported_step_model = None
+        self.state.beam_sections.clear()
+        self.controller.clear_section_selection()
         self.view.clear_step_model()
         self.toggle_model_button.setEnabled(False)
         self.toggle_model_button.setText("Скрыть 3D модель")

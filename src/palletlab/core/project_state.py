@@ -9,12 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .models import DirectionInput, InsertionSlot, PalletAxis, PalletResult
+from .models import BeamKey, BeamSection, DirectionInput, InsertionSlot, PalletAxis, PalletResult
 from .materials import DEFAULT_MATERIAL_ID
 
 
 CameraMode = Literal["isometric", "top", "front", "side"]
-ToolMode = Literal["none", "insertion", "deletion", "distance_editing"]
+ToolMode = Literal["none", "insertion", "deletion", "distance_editing", "section_editing"]
 
 
 @dataclass
@@ -34,6 +34,13 @@ class ProjectState:
     selected_for_deletion: dict[PalletAxis, set[int]] = field(
         default_factory=lambda: {"length": set(), "width": set()}
     )
+    selected_for_section: dict[PalletAxis, set[int]] = field(
+        default_factory=lambda: {"length": set(), "width": set()}
+    )
+    # Per-beam sections deliberately live beside the direction inputs: the
+    # latter describe the coordinate grid, while these overrides describe the
+    # physical timber mounted on that grid.
+    beam_sections: dict[BeamKey, BeamSection] = field(default_factory=dict)
 
     camera: CameraMode = "isometric"
     show_length_dimensions: bool = True

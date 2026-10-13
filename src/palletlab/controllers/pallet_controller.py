@@ -13,7 +13,7 @@ from palletlab.core.calculator import (
     insert_beam_input,
     set_beam_face_distance_input,
 )
-from palletlab.core.models import DirectionInput, InsertionSlot, LayerDirection, PalletAxis, PalletResult
+from palletlab.core.models import BeamSection, DirectionInput, InsertionSlot, LayerDirection, PalletAxis, PalletResult
 from palletlab.core.persistence import ProjectPersistenceError, load_project, save_project
 from palletlab.core.project_state import ProjectState, ToolMode
 from palletlab.core.validation import CalculationError
@@ -75,6 +75,7 @@ class PalletController:
                 calculate_direction(length_input),
                 calculate_direction(width_input),
                 upper_layer,
+                self.state.beam_sections,
             )
         except CalculationError as exc:
             self._on_stale_changed(True)
@@ -180,6 +181,7 @@ class PalletController:
             self._on_error(exc, False)
             return None
         self.state.set_input(slot.axis, updated)
+        self._clear_sections_for_axis(slot.axis)
         self.state.pending_insertion = None
         return slot.axis, updated
 
@@ -209,6 +211,7 @@ class PalletController:
             self._on_error(exc, False)
             return None
         self.state.set_input(axis, updated)
+        self._clear_sections_for_axis(axis)
         self.state.pending_distance = None
         return axis, updated
 
@@ -237,11 +240,44 @@ class PalletController:
                 direction = result.length_result if axis == "length" else result.width_result
                 updated = delete_beams_input(data, direction, indices)
                 self.state.set_input(axis, updated)
+                self._clear_sections_for_axis(axis)
                 updated_inputs[axis] = updated
         except CalculationError as exc:
             self._on_error(exc, False)
             return None
         return updated_inputs
+
+    def clear_section_selection(self) -> None:
+        self.state.selected_for_section = {"length": set(), "width": set()}
+
+    def set_section_selection(self, axis: PalletAxis, index: int, selected: bool) -> None:
+        indices = self.state.selected_for_section[axis]
+        if selected:
+            indices.add(index)
+        else:
+            indices.discard(index)
+
+    def apply_section_change(self, section: BeamSection) -> PalletResult | None:
+        """Apply a section to selected beams, preserving the old pallet on error."""
+        selected = [
+            (axis, index)
+            for axis, indices in self.state.selected_for_section.items()
+            for index in indices
+        ]
+        if not selected:
+            return None
+        previous = self.state.beam_sections.copy()
+        self.state.beam_sections.update({key: section for key in selected})
+        result = self.recalculate_from_state()
+        if result is None:
+            self.state.beam_sections = previous
+        return result
+
+    def _clear_sections_for_axis(self, axis: PalletAxis) -> None:
+        """Geometry edits renumber beam indices, so stale overrides must not move."""
+        self.state.beam_sections = {
+            key: section for key, section in self.state.beam_sections.items() if key[0] != axis
+        }
 
     def _run_automatic_rebuild(self) -> None:
         if self._input_provider is None:

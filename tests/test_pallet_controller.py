@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from palletlab.controllers.pallet_controller import PalletController
-from palletlab.controllers.viewport_geometry import editable_dimensions, insertion_markers, insertion_preview
+from palletlab.controllers.viewport_geometry import beam_faces, editable_dimensions, insertion_markers, insertion_preview
 from palletlab.core.calculator import insertion_slots
 from palletlab.core.models import DirectionInput
 from palletlab.core.project_state import ProjectState
@@ -156,3 +158,18 @@ def test_viewport_geometry_is_prepared_outside_the_3d_view():
     assert markers[0].preview.size == preview.size
     assert preview.size[0] == result.length_result.beam_width
     assert {dimension.axis for dimension in dimensions} == {"length", "width"}
+
+
+def test_viewport_geometry_uses_actual_faces_after_a_section_change():
+    from palletlab.core.calculator import build_pallet, calculate_direction
+    from palletlab.core.models import BeamSection
+
+    length = calculate_direction(LENGTH_INPUT)
+    width = calculate_direction(WIDTH_INPUT)
+    result = build_pallet(length, width, section_overrides={("length", 1): BeamSection(70, 80)})
+
+    faces = beam_faces(result, "length")
+    dimensions = editable_dimensions(result)
+    first_internal = next(item for item in dimensions if item.axis == "length" and item.index == 1)
+    assert faces[1][0] == pytest.approx(length.beam_centers[1] - 40)
+    assert first_internal.value == pytest.approx(faces[1][0] - faces[0][0])

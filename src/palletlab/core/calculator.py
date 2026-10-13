@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
-from typing import Iterable
+from typing import Iterable, Mapping
 
-from .models import Beam3D, DirectionInput, DirectionResult, InsertionSlot, LayerDirection, PalletAxis, PalletResult
+from .models import Beam3D, BeamKey, BeamSection, DirectionInput, DirectionResult, InsertionSlot, LayerDirection, PalletAxis, PalletResult
 from .validation import CalculationError
 
 EPSILON = 1e-7
@@ -233,7 +233,37 @@ def set_beam_face_distance_input(
     return _input_with_support_positions(data, direction, positions)
 
 
-def build_pallet(length: DirectionResult, width: DirectionResult, upper_layer: LayerDirection = "width") -> PalletResult:
+def _section_for(
+    axis: PalletAxis, index: int, direction: DirectionResult, overrides: Mapping[BeamKey, BeamSection],
+) -> BeamSection:
+    section = overrides.get((axis, index), BeamSection(direction.beam_height, direction.beam_width))
+    _validate_measurements((("Высота сечения бруса", section.height), ("Ширина сечения бруса", section.width)))
+    return section
+
+
+def _validate_sections(
+    axis: PalletAxis, direction: DirectionResult, sections: tuple[BeamSection, ...],
+) -> None:
+    """Ensure individually sized beams still fit on their existing centre grid."""
+    for index, (center, section) in enumerate(zip(direction.beam_centers, sections)):
+        if center - section.width / 2 < -EPSILON or center + section.width / 2 > direction.pallet_size + EPSILON:
+            raise CalculationError(f"Брус {index + 1} выходит за границу поддона после изменения сечения.")
+    for index, (left, right) in enumerate(zip(sections, sections[1:])):
+        centre_distance = direction.beam_centers[index + 1] - direction.beam_centers[index]
+        required_distance = (left.width + right.width) / 2
+        if centre_distance < required_distance - EPSILON:
+            raise CalculationError(
+                f"Брусья {index + 1} и {index + 2} пересекаются после изменения сечения: "
+                f"расстояние между центрами {centre_distance:g} мм, требуется не менее {required_distance:g} мм."
+            )
+
+
+def build_pallet(
+    length: DirectionResult,
+    width: DirectionResult,
+    upper_layer: LayerDirection = "width",
+    section_overrides: Mapping[BeamKey, BeamSection] | None = None,
+) -> PalletResult:
     """Turn two already-calculated directions into real 3D beam boxes.
 
     Input coordinates are the only positioning source: length-axis centres make
@@ -241,20 +271,39 @@ def build_pallet(length: DirectionResult, width: DirectionResult, upper_layer: L
     """
     if upper_layer not in ("length", "width"):
         raise CalculationError("Верхний слой должен быть задан как 'length' или 'width'.")
+    overrides = section_overrides or {}
+    valid_keys = {
+        *( ("length", index) for index in range(len(length.beam_centers)) ),
+        *( ("width", index) for index in range(len(width.beam_centers)) ),
+    }
+    if any(key not in valid_keys for key in overrides):
+        raise CalculationError("Изменённое сечение относится к брусу, которого больше нет.")
+    length_sections = tuple(_section_for("length", index, length, overrides) for index in range(len(length.beam_centers)))
+    width_sections = tuple(_section_for("width", index, width, overrides) for index in range(len(width.beam_centers)))
+    _validate_sections("length", length, length_sections)
+    _validate_sections("width", width, width_sections)
+
     lower = "width" if upper_layer == "length" else "length"
-    z_length = width.beam_height if lower == "width" else 0.0
-    z_width = length.beam_height if lower == "length" else 0.0
+    lower_height = max(section.height for section in (width_sections if lower == "width" else length_sections))
+    # A layer is a bearing plane.  Beams with a smaller height are therefore
+    # lifted inside their own lower layer so their *upper* faces remain flush
+    # with the highest beam.  Keeping them on Z=0 would leave a visible and
+    # structural gap below every beam of the next layer.
+    z_length = lower_height if lower == "width" else 0.0
+    z_width = lower_height if lower == "length" else 0.0
     beams: list[Beam3D] = []
     # Length-result centres lie on X: these beams span the full pallet width.
-    for x in length.beam_centers:
-        beams.append(Beam3D(x, width.pallet_size / 2, z_length + length.beam_height / 2,
-                            length.beam_width, width.pallet_size, length.beam_height, "width"))
+    for x, section in zip(length.beam_centers, length_sections):
+        beam_z = z_length + section.height / 2 if lower != "length" else lower_height - section.height / 2
+        beams.append(Beam3D(x, width.pallet_size / 2, beam_z,
+                            section.width, width.pallet_size, section.height, "width"))
     # Width-result centres lie on Y: these beams span the full pallet length.
-    for y in width.beam_centers:
-        beams.append(Beam3D(length.pallet_size / 2, y, z_width + width.beam_height / 2,
-                            length.pallet_size, width.beam_width, width.beam_height, "length"))
+    for y, section in zip(width.beam_centers, width_sections):
+        beam_z = z_width + section.height / 2 if lower != "width" else lower_height - section.height / 2
+        beams.append(Beam3D(length.pallet_size / 2, y, beam_z,
+                            length.pallet_size, section.width, section.height, "length"))
     result = PalletResult(length, width, length.pallet_size, width.pallet_size,
-                          length.beam_height + width.beam_height, upper_layer, tuple(beams))
+                          lower_height + max(section.height for section in (length_sections if upper_layer == "length" else width_sections)), upper_layer, tuple(beams))
     bounds = pallet_bounds(result.beams_3d)
     if not (math.isclose(bounds[1] - bounds[0], result.pallet_length, abs_tol=EPSILON)
             and math.isclose(bounds[3] - bounds[2], result.pallet_width, abs_tol=EPSILON)):

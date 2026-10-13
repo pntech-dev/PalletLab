@@ -11,7 +11,7 @@ from pyvistaqt import QtInteractor
 
 from palletlab.core.formatting import format_mm
 from palletlab.core.models import PalletAxis, PalletResult
-from palletlab.controllers.viewport_geometry import EditableDimension, InsertionMarker, PreviewBox
+from palletlab.controllers.viewport_geometry import EditableDimension, InsertionMarker, PreviewBox, beam_faces
 
 
 class PalletView(QtInteractor):
@@ -36,6 +36,10 @@ class PalletView(QtInteractor):
         self._deletion_mode = False
         self._selected_deletion_actors: set[object] = set()
         self._hovered_deletion_actor = None
+        self._section_callback: Callable[[PalletAxis, int, bool], None] | None = None
+        self._section_editing_mode = False
+        self._selected_section_actors: set[object] = set()
+        self._hovered_section_actor = None
         self._distance_actors: dict[object, tuple[PalletAxis, int, float]] = {}
         self._distance_callback: Callable[[PalletAxis, int, float], None] | None = None
         self._distance_editing_mode = False
@@ -73,14 +77,20 @@ class PalletView(QtInteractor):
             "beam_hover_edge": pv.Color("#805518").float_rgb,
             "distance": pv.Color("#d28326").float_rgb,
             "distance_selected": pv.Color("#c23832").float_rgb,
+            "section_selected": pv.Color("#247ba0").float_rgb,
+            "section_selected_edge": pv.Color("#124c67").float_rgb,
+            "section_hover": pv.Color("#55b6d9").float_rgb,
+            "section_hover_edge": pv.Color("#216f8d").float_rgb,
         }
         self.iren.add_observer("MouseMoveEvent", self._update_insertion_hover)
         self.iren.add_observer("MouseMoveEvent", self._update_deletion_hover)
+        self.iren.add_observer("MouseMoveEvent", self._update_section_hover)
         self.iren.add_observer("MouseMoveEvent", self._update_distance_hover)
         self.iren.add_observer("MouseMoveEvent", self._update_step_face_hover)
         self.iren.add_observer("LeftButtonPressEvent", self._click_distance)
         self.iren.add_observer("LeftButtonPressEvent", self._click_insertion)
         self.iren.add_observer("LeftButtonPressEvent", self._click_deletion)
+        self.iren.add_observer("LeftButtonPressEvent", self._click_section)
         self.iren.add_observer("LeftButtonPressEvent", self._pick_step_face)
 
     def show_pallet(self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True) -> None:
@@ -123,6 +133,7 @@ class PalletView(QtInteractor):
         """Replace pallet-only actors without disturbing the STEP preview."""
         self.disable_insertion_mode(render=False)
         self.disable_deletion_mode(render=False)
+        self.disable_section_editing(render=False)
         self.disable_distance_editing(render=False)
         self._remove_actors(list(self._beam_actors))
         self._beam_actors.clear()
@@ -586,6 +597,87 @@ class PalletView(QtInteractor):
         beam_count = self._beam_counts[axis]
         return 0 < index < beam_count - 1
 
+    def enable_section_editing(self, callback: Callable[[PalletAxis, int, bool], None]) -> None:
+        """Make every beam selectable for a cross-section replacement."""
+        self.disable_insertion_mode(render=False)
+        self.disable_deletion_mode(render=False)
+        self.disable_distance_editing(render=False)
+        self._section_editing_mode = True
+        self._section_callback = callback
+        self._selected_section_actors.clear()
+        self._hovered_section_actor = None
+        self.render()
+
+    def disable_section_editing(self, *, render: bool = True) -> None:
+        if not self._section_editing_mode and not self._selected_section_actors:
+            return
+        self.disable_picking()
+        for actor in tuple(self._selected_section_actors):
+            self._set_section_color(actor, selected=False)
+        if self._hovered_section_actor and self._hovered_section_actor not in self._selected_section_actors:
+            self._set_section_color(self._hovered_section_actor, selected=False)
+        self._selected_section_actors.clear()
+        self._section_callback = None
+        self._section_editing_mode = False
+        self._hovered_section_actor = None
+        if render:
+            self.render()
+
+    def _click_section(self, *_args) -> None:
+        if not self._section_editing_mode:
+            return
+        x, y = self.iren.get_event_position()
+        self._mesh_picker.Pick(x, y, 0, self.renderer)
+        actor = self._mesh_picker.GetActor()
+        if actor not in self._beam_actors:
+            return
+        axis, index = self._beam_actors[actor]
+        selected = actor not in self._selected_section_actors
+        if selected:
+            self._selected_section_actors.add(actor)
+        else:
+            self._selected_section_actors.remove(actor)
+        self._set_section_color(actor, selected=selected)
+        if not selected and actor == self._hovered_section_actor:
+            self._set_section_hover_color(actor)
+        if self._section_callback:
+            self._section_callback(axis, index, selected)
+        self.render()
+
+    def _set_section_color(self, actor, *, selected: bool) -> None:
+        axis, _ = self._beam_actors[actor]
+        colors = self._interaction_colors
+        actor.GetProperty().SetColor(*(colors["section_selected"] if selected else (
+            colors["length_beam"] if axis == "width" else colors["width_beam"]
+        )))
+        actor.GetProperty().SetEdgeColor(*(colors["section_selected_edge"] if selected else colors["default_edge"]))
+
+    def _set_section_hover_color(self, actor) -> None:
+        if actor in self._selected_section_actors:
+            actor.GetProperty().SetColor(*self._interaction_colors["section_hover"])
+            actor.GetProperty().SetEdgeColor(*self._interaction_colors["section_hover_edge"])
+        else:
+            actor.GetProperty().SetColor(*self._interaction_colors["beam_hover"])
+            actor.GetProperty().SetEdgeColor(*self._interaction_colors["beam_hover_edge"])
+
+    def _update_section_hover(self, *_args) -> None:
+        if not self._section_editing_mode:
+            return
+        x, y = self.iren.get_event_position()
+        self._prop_picker.Pick(x, y, 0, self.renderer)
+        hovered = self._prop_picker.GetActor()
+        if hovered not in self._beam_actors:
+            hovered = None
+        if hovered == self._hovered_section_actor:
+            return
+        previous = self._hovered_section_actor
+        self._hovered_section_actor = hovered
+        if previous:
+            self._set_section_color(previous, selected=previous in self._selected_section_actors)
+        if hovered:
+            self._set_section_hover_color(hovered)
+        self.render()
+
     def enable_distance_editing(self, dimensions: tuple[EditableDimension, ...], callback: Callable[[PalletAxis, int, float], None]) -> None:
         """Overlay pickable internal dimension lines above the annotations."""
         self.disable_insertion_mode(render=False)
@@ -753,16 +845,17 @@ class PalletView(QtInteractor):
         if batching:
             self._begin_annotation_batch()
         direction = result.length_result
+        faces = beam_faces(result, "length")
         offset = max(50.0, result.pallet_width * 0.055)
         tick = max(14.0, offset * 0.18)
-        base = direction.beam_centers[0] - direction.beam_width / 2
+        base = faces[0][0]
         model_edge_y, z = 0.0, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
         last_index = len(direction.beam_centers) - 1
         for index, center in enumerate(direction.beam_centers[1:], start=1):
             is_last_beam = index == last_index
-            end = center + direction.beam_width / 2 if is_last_beam else center - direction.beam_width / 2
+            end = faces[index][1] if is_last_beam else faces[index][0]
             display_y = self._display_y(result, -offset * index)
             display_model_y = self._display_y(result, model_edge_y)
             self._add_dimension_segment((base, display_y, z), (end, display_y, z), f"length-dimension-{index}")
@@ -786,16 +879,17 @@ class PalletView(QtInteractor):
         if batching:
             self._begin_annotation_batch()
         direction = result.width_result
+        faces = beam_faces(result, "width")
         offset = max(50.0, result.pallet_length * 0.035)
         tick = max(14.0, offset * 0.18)
-        base = direction.beam_centers[0] - direction.beam_width / 2
+        base = faces[0][0]
         model_edge_x, z = 0.0, result.pallet_height + 2
         points: list[tuple[float, float, float]] = []
         labels: list[str] = []
         last_index = len(direction.beam_centers) - 1
         for index, center in enumerate(direction.beam_centers[1:], start=1):
             is_last_beam = index == last_index
-            end = center + direction.beam_width / 2 if is_last_beam else center - direction.beam_width / 2
+            end = faces[index][1] if is_last_beam else faces[index][0]
             x = -offset * index
             display_start = self._display_y(result, base)
             display_end = self._display_y(result, end)

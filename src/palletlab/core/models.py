@@ -8,6 +8,15 @@ from typing import Literal
 
 LayerDirection = Literal["length", "width"]
 PalletAxis = Literal["length", "width"]
+BeamKey = tuple[PalletAxis, int]
+
+
+@dataclass(frozen=True)
+class BeamSection:
+    """Cross-section of one beam, expressed as height × width in millimetres."""
+
+    height: float
+    width: float
 
 
 @dataclass(frozen=True)

@@ -35,13 +35,22 @@ def _display_y(result: PalletResult, y: float) -> float:
     return result.pallet_width - y
 
 
+def beam_faces(result: PalletResult, axis: PalletAxis) -> tuple[tuple[float, float], ...]:
+    """Return the real left/right (or start/end) faces of beams on one axis."""
+    length_count = len(result.length_result.beam_centers)
+    beams = result.beams_3d[:length_count] if axis == "length" else result.beams_3d[length_count:]
+    if axis == "length":
+        return tuple((beam.x - beam.size_x / 2, beam.x + beam.size_x / 2) for beam in beams)
+    return tuple((beam.y - beam.size_y / 2, beam.y + beam.size_y / 2) for beam in beams)
+
+
 def insertion_markers(result: PalletResult, slots: tuple[InsertionSlot, ...]) -> tuple[InsertionMarker, ...]:
     size = max(24.0, min(result.pallet_length, result.pallet_width) * 0.06)
     markers = []
     for slot in slots:
-        direction = result.length_result if slot.axis == "length" else result.width_result
-        start = direction.beam_centers[slot.after_beam_index] + direction.beam_width / 2
-        end = direction.beam_centers[slot.after_beam_index + 1] - direction.beam_width / 2
+        faces = beam_faces(result, slot.axis)
+        start = faces[slot.after_beam_index][1]
+        end = faces[slot.after_beam_index + 1][0]
         position = (start + end) / 2
         center = ((position, _display_y(result, result.pallet_width / 2), result.pallet_height + 5)
                   if slot.axis == "length"
@@ -68,10 +77,11 @@ def editable_dimensions(result: PalletResult) -> tuple[EditableDimension, ...]:
         ("length", result.length_result, max(50.0, result.pallet_width * 0.055)),
         ("width", result.width_result, max(50.0, result.pallet_length * 0.035)),
     ):
-        base = direction.beam_centers[0] - direction.beam_width / 2
+        faces = beam_faces(result, axis)
+        base = faces[0][0]
         last = len(direction.beam_centers) - 1
-        for index, center in enumerate(direction.beam_centers[1:], start=1):
-            end = center + direction.beam_width / 2 if index == last else center - direction.beam_width / 2
+        for index, _center in enumerate(direction.beam_centers[1:], start=1):
+            end = faces[index][1] if index == last else faces[index][0]
             if axis == "length":
                 start_point, end_point = (base, _display_y(result, -offset * index), result.pallet_height + 2), (end, _display_y(result, -offset * index), result.pallet_height + 2)
             else:

@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
-from .models import DirectionInput
+from .models import BeamSection, DirectionInput
 from .materials import MATERIALS, DEFAULT_MATERIAL_ID
 from .project_state import ProjectState
 
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 
 class ProjectPersistenceError(ValueError):
@@ -65,6 +66,10 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
             "upper_layer": state.upper_layer,
             "rounding_step": state.rounding_step,
             "material_id": state.material_id,
+            "beam_sections": [
+                {"axis": axis, "index": index, "height": section.height, "width": section.width}
+                for (axis, index), section in sorted(state.beam_sections.items())
+            ],
         },
         "view": {
             "camera": state.camera,
@@ -76,7 +81,7 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
 
 def project_from_dict(raw: object) -> ProjectState:
     """Read a stable project configuration, never restoring transient UI state."""
-    if not isinstance(raw, dict) or raw.get("format_version") != FORMAT_VERSION:
+    if not isinstance(raw, dict) or raw.get("format_version") not in (1, FORMAT_VERSION):
         raise ProjectPersistenceError("Неподдерживаемый формат файла проекта.")
     pallet, view = raw.get("pallet"), raw.get("view")
     if not isinstance(pallet, dict) or not isinstance(view, dict):
@@ -85,12 +90,30 @@ def project_from_dict(raw: object) -> ProjectState:
     material_id = pallet.get("material_id", DEFAULT_MATERIAL_ID)
     if upper_layer not in ("length", "width") or rounding_step not in (0, 5, 50) or camera not in ("isometric", "top", "front", "side") or material_id not in MATERIALS:
         raise ProjectPersistenceError("Файл содержит неподдерживаемые настройки проекта.")
+    beam_sections: dict[tuple[str, int], BeamSection] = {}
+    raw_sections = pallet.get("beam_sections", [])
+    if not isinstance(raw_sections, list):
+        raise ProjectPersistenceError("Сечения брусьев должны быть списком.")
+    for item in raw_sections:
+        if not isinstance(item, dict):
+            raise ProjectPersistenceError("Сечение бруса содержит некорректные параметры.")
+        try:
+            axis, index = item["axis"], item["index"]
+            height, width = float(item["height"]), float(item["width"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProjectPersistenceError("Сечение бруса содержит некорректные параметры.") from exc
+        if axis not in ("length", "width") or not isinstance(index, int) or index < 0 or not all(
+            math.isfinite(value) and value > 0 for value in (height, width)
+        ):
+            raise ProjectPersistenceError("Сечение бруса содержит недопустимые значения.")
+        beam_sections[(axis, index)] = BeamSection(height, width)
     return ProjectState(
         length_input=_direction_from_dict(pallet.get("length"), "длина"),
         width_input=_direction_from_dict(pallet.get("width"), "ширина"),
         upper_layer=upper_layer,
         rounding_step=rounding_step,
         material_id=material_id,
+        beam_sections=beam_sections,
         camera=camera,
         show_length_dimensions=bool(view.get("show_length_dimensions", True)),
         show_width_dimensions=bool(view.get("show_width_dimensions", True)),

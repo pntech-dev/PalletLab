@@ -5,7 +5,7 @@ import json
 import pytest
 
 from palletlab.controllers.pallet_controller import PalletController
-from palletlab.core.models import DirectionInput
+from palletlab.core.models import BeamSection, DirectionInput
 from palletlab.core.persistence import ProjectPersistenceError, load_project, project_from_dict, save_project
 from palletlab.core.project_state import ProjectState
 
@@ -27,6 +27,7 @@ def test_project_json_round_trip_preserves_configuration_not_transient_state(tmp
     state = _state()
     state.active_tool = "deletion"
     state.selected_for_deletion["length"].add(2)
+    state.beam_sections[("length", 2)] = BeamSection(100, 75)
     path = tmp_path / "project.json"
 
     save_project(path, state)
@@ -40,7 +41,8 @@ def test_project_json_round_trip_preserves_configuration_not_transient_state(tmp
     assert restored.show_length_dimensions is False
     assert restored.active_tool == "none"
     assert restored.selected_for_deletion == {"length": set(), "width": set()}
-    assert json.loads(path.read_text(encoding="utf-8"))["format_version"] == 1
+    assert restored.beam_sections == {("length", 2): BeamSection(100, 75)}
+    assert json.loads(path.read_text(encoding="utf-8"))["format_version"] == 2
 
 
 def test_project_json_rejects_unknown_or_invalid_format():

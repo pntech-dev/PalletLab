@@ -91,6 +91,7 @@ def test_calculate_rebuilds_model_from_current_panels():
         add_beam_button=_Toggle(),
         delete_beam_button=_Toggle(),
         edit_distance_button=_Toggle(),
+        change_section_button=_Toggle(),
     )
 
     MainWindow.calculate(window, show_error=False)
