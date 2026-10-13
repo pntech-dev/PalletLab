@@ -47,10 +47,8 @@ class PalletView(QtInteractor):
         self._step_model_visible = True
         self._step_faces = ()
         self._support_callback: Callable[[int], None] | None = None
-        self._measurement_callback: Callable[[int], None] | None = None
         self._support_face_indices: set[int] = set()
         self._reference_support_index: int | None = None
-        self._measurement_face_indices: dict[tuple[str, str, str], int] = {}
         self._step_face_cell_indices: dict[int, np.ndarray] = {}
         self._hovered_step_face_index: int | None = None
         self._step_hover_actor = None
@@ -138,10 +136,8 @@ class PalletView(QtInteractor):
         self._step_edge_actor = None
         self._step_faces = ()
         self._support_callback = None
-        self._measurement_callback = None
         self._support_face_indices.clear()
         self._reference_support_index = None
-        self._measurement_face_indices.clear()
         self._step_face_cell_indices.clear()
         self._hovered_step_face_index = None
         self._step_hover_actor = None
@@ -159,10 +155,8 @@ class PalletView(QtInteractor):
         self._step_edge_actor = None
         self._step_faces = ()
         self._support_callback = None
-        self._measurement_callback = None
         self._support_face_indices.clear()
         self._reference_support_index = None
-        self._measurement_face_indices.clear()
         self._step_face_cell_indices.clear()
         self._hovered_step_face_index = None
         self._step_hover_actor = None
@@ -180,10 +174,8 @@ class PalletView(QtInteractor):
         self._remove_actors(list(self._distance_actors))
         self._distance_actors.clear()
         self._support_callback = callback
-        self._measurement_callback = None
         self._support_face_indices.clear()
         self._reference_support_index = None
-        self._measurement_face_indices.clear()
         self._hovered_step_face_index = None
         self._remove_step_hover_face()
         self._step_model_visible = True
@@ -205,10 +197,8 @@ class PalletView(QtInteractor):
         self._step_edges = edges.copy(deep=True)
         self._step_faces = faces
         self._support_callback = callback
-        self._measurement_callback = None
         self._support_face_indices.clear()
         self._reference_support_index = None
-        self._measurement_face_indices.clear()
         self._index_step_faces()
         self._hovered_step_face_index = None
         self._remove_step_hover_face()
@@ -245,30 +235,6 @@ class PalletView(QtInteractor):
         self._support_callback = None
         self._refresh_step_face_colors(render=True)
 
-    def begin_step_face_measurement(self, callback: Callable[[int], None]) -> None:
-        """Route the next STEP face clicks to a two-face edge measurement."""
-        self._measurement_callback = callback
-
-    def end_step_face_measurement(self) -> None:
-        self._measurement_callback = None
-
-    def clear_step_measurements(self) -> None:
-        """Forget visual measurement selections while retaining the STEP model."""
-        self._measurement_callback = None
-        self._measurement_face_indices.clear()
-        self._hovered_step_face_index = None
-        self._remove_step_hover_face()
-        self._refresh_step_face_colors(render=True)
-
-    def set_step_measurement_face(self, axis: str, side: str, role: str, face_index: int | None) -> None:
-        """Keep gabarit and support selections visibly distinct on the model."""
-        key = (axis, side, role)
-        if face_index is None:
-            self._measurement_face_indices.pop(key, None)
-        else:
-            self._measurement_face_indices[key] = face_index
-        self._refresh_step_face_colors(render=True)
-
     def _refresh_step_face_colors(self, *, render: bool) -> None:
         if self._step_mesh is None:
             return
@@ -276,7 +242,6 @@ class PalletView(QtInteractor):
         selected_faces = set(self._support_face_indices)
         if self._reference_support_index is not None:
             selected_faces.add(self._reference_support_index)
-        selected_faces.update(self._measurement_face_indices.values())
         for face_id in selected_faces:
             colors[self._step_face_cells(face_id)] = self._step_face_color(face_id)
         self._step_mesh.cell_data["face_colors"] = colors
@@ -314,14 +279,10 @@ class PalletView(QtInteractor):
             color = (230, 41, 51)
         if face_id == self._reference_support_index:
             color = (255, 176, 26)
-        for (_axis, _side, role), selected in self._measurement_face_indices.items():
-            if selected == face_id:
-                color = (37, 116, 170) if role == "boundary" else (43, 148, 91)
         return color
 
     def _update_step_face_hover(self, *_args) -> None:
-        if ((self._support_callback is None and self._measurement_callback is None)
-                or self._step_model_actor is None or not self._step_model_visible):
+        if self._support_callback is None or self._step_model_actor is None or not self._step_model_visible:
             return
         hovered = self._hardware_step_face_at_cursor()
         if hovered == self._hovered_step_face_index:
@@ -417,8 +378,7 @@ class PalletView(QtInteractor):
             self.render()
 
     def _pick_step_face(self, *_args) -> None:
-        callback = self._measurement_callback or self._support_callback
-        if callback is None or self._step_model_actor is None or not self._step_model_visible:
+        if self._support_callback is None or self._step_model_actor is None or not self._step_model_visible:
             return
         x, y = self.iren.get_event_position()
         self._step_picker.Pick(x, y, 0, self.renderer)
@@ -426,7 +386,7 @@ class PalletView(QtInteractor):
             return
         cell_id = self._step_picker.GetCellId()
         if self._step_mesh is not None and 0 <= cell_id < self._step_mesh.n_cells:
-            callback(int(self._step_mesh.cell_data["step_face_index"][cell_id]))
+            self._support_callback(int(self._step_mesh.cell_data["step_face_index"][cell_id]))
             # A modal validation message consumes the Qt mouse-release event.
             # End VTK's press state on the next event-loop turn so it cannot
             # interpret the following mouse move as camera rotation.

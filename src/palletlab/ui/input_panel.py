@@ -5,8 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit,
-                             QPushButton, QStackedWidget, QVBoxLayout, QWidget)
+from PyQt5.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from palletlab.core.models import DirectionInput
 from palletlab.core.validation import CalculationError
@@ -36,7 +35,6 @@ class NoWheelComboBox(QComboBox):
 
 class DirectionInputPanel(QGroupBox):
     changed = pyqtSignal()
-    measurement_requested = pyqtSignal(str)
 
     def __init__(self, title: str, description: str, distances: str, first: str, last: str,
                  parent: QWidget | None = None):
@@ -53,14 +51,6 @@ class DirectionInputPanel(QGroupBox):
         self.last = self._spin(float(last))
         self.margin_start = self._spin(100.0)
         self.margin_end = self._spin(100.0)
-        self._measurement_buttons = {
-            "start": QPushButton("Задать"),
-            "end": QPushButton("Задать"),
-        }
-        self._measurement_stacks = {
-            "start": self._measurement_stack(self.first, self._measurement_buttons["start"]),
-            "end": self._measurement_stack(self.last, self._measurement_buttons["end"]),
-        }
         self._support_positions_override: tuple[float, ...] | None = None
         self._model_input: DirectionInput | None = None
         layout = QVBoxLayout(self)
@@ -78,8 +68,10 @@ class DirectionInputPanel(QGroupBox):
         form.addRow("Высота", self.height)
         form.addRow("Ширина", self.width)
         form.addRow("Центры соседних опор", self.distances)
-        form.addRow("Габарит → первая опора", self._measurement_stacks["start"])
-        form.addRow("Последняя опора → габарит", self._measurement_stacks["end"])
+        self._first_label = QLabel("Габарит → первая опора")
+        self._last_label = QLabel("Последняя опора → габарит")
+        form.addRow(self._first_label, self.first)
+        form.addRow(self._last_label, self.last)
         form.addRow("Отступ в начале", self.margin_start)
         form.addRow("Отступ в конце", self.margin_end)
         layout.addLayout(form)
@@ -88,15 +80,6 @@ class DirectionInputPanel(QGroupBox):
             field.valueChanged.connect(self._position_data_changed)
         self.distances.textChanged.connect(self._position_data_changed)
         self._section_changed(self.section.currentText())
-
-    def _measurement_stack(self, field: QDoubleSpinBox, button: QPushButton) -> QStackedWidget:
-        """Use a selection action instead of editable edge distances for STEP models."""
-        stack = QStackedWidget()
-        stack.addWidget(field)
-        stack.addWidget(button)
-        button.clicked.connect(lambda _checked=False, side="start" if field is self.first else "end":
-                               self.measurement_requested.emit(side))
-        return stack
 
     @staticmethod
     def _spin(value: float) -> QDoubleSpinBox:
@@ -173,28 +156,13 @@ class DirectionInputPanel(QGroupBox):
         """Lock geometry-derived edge-to-support values for an imported model."""
         self._model_input = data
         locked = data is not None
-        for field in (self.first, self.last):
+        for field, label in ((self.first, self._first_label), (self.last, self._last_label)):
             field.blockSignals(True)
             if locked:
                 field.setValue(0.0)
-            field.setEnabled(not locked)
+            field.setVisible(not locked)
+            label.setVisible(not locked)
             field.blockSignals(False)
-        for side, stack in self._measurement_stacks.items():
-            stack.setCurrentIndex(1 if locked else 0)
-            self._measurement_buttons[side].setEnabled(True)
-            self._measurement_buttons[side].setText("Задать")
-
-    def set_measurement_action(self, side: str, *, active: bool, value: float | None = None) -> None:
-        """Reflect the two-click STEP-face measurement workflow in one button."""
-        button = self._measurement_buttons[side]
-        if active:
-            button.setText("Готово")
-            return
-        button.setText("Задать" if value is None else f"Задать · {value:g} мм")
-
-    def set_measurement_buttons_enabled(self, enabled: bool) -> None:
-        for button in self._measurement_buttons.values():
-            button.setEnabled(enabled)
 
     def reset_example(self, distances: str, first: float, last: float) -> None:
         self._support_positions_override = None

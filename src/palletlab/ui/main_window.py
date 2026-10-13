@@ -109,9 +109,6 @@ class MainWindow(QMainWindow):
         self._step_import_progress: QProgressDialog | None = None
         self._model_supports = ()
         self._model_reference_support_index: int | None = None
-        self._model_edge_measurements: dict[tuple[str, str], tuple[float, int, int]] = {}
-        self._active_model_measurement: tuple[str, str] | None = None
-        self._pending_model_faces: list[int] = []
         self.setWindowTitle(f"PalletLab {__version__} — расчёт поддонов")
         screen = QApplication.primaryScreen().availableGeometry()
         self.resize(min(1400, int(screen.width() * 0.92)), min(900, int(screen.height() * 0.90)))
@@ -363,12 +360,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         self.length_panel.changed.connect(self._schedule_recalculation)
         self.width_panel.changed.connect(self._schedule_recalculation)
-        self.length_panel.measurement_requested.connect(
-            lambda side: self._model_measurement_requested("length", side)
-        )
-        self.width_panel.measurement_requested.connect(
-            lambda side: self._model_measurement_requested("width", side)
-        )
         self.layer_buttons.buttonClicked.connect(self._layer_changed)
         self.rounding_buttons.buttonClicked.connect(self._rounding_changed)
         self.show_length_gaps.toggled.connect(self._refresh_dimension_annotations)
@@ -513,7 +504,7 @@ class MainWindow(QMainWindow):
         self.edit_distance_button.setChecked(False)
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
-        self._clear_model_measurements()
+        self._clear_model_supports()
         self._imported_step_model = None
         self.state.result = None
         self.view.clear_workspace()
@@ -579,7 +570,7 @@ class MainWindow(QMainWindow):
         self.edit_distance_button.setChecked(False)
         self.controller.deactivate_tool()
         self.state.result = None
-        self._clear_model_measurements()
+        self._clear_model_supports()
         self.view.prepare_step_model_rebuild(self._support_face_selected)
         self.toggle_model_button.setEnabled(True)
         self.toggle_model_button.setText("Скрыть 3D модель")
@@ -656,23 +647,19 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Выбор опоры", str(exc))
             self.statusBar().showMessage("Выберите плоскую горизонтальную нижнюю грань опоры.")
             return
-        self._clear_model_measurements()
+        self._clear_model_supports()
         self._model_supports = supports
         self._model_reference_support_index = face_index
         self._build_selected_model_pallet()
 
     def _build_selected_model_pallet(self) -> None:
-        """Recalculate a STEP-driven pallet, including any confirmed face measurements."""
+        """Recalculate a STEP-driven pallet from the detected support faces."""
         model = self._imported_step_model
         if model is None or not self._model_supports or self._model_reference_support_index is None:
             return
         try:
             from palletlab.importers.step_model import pallet_inputs_from_supports
             rounding_step = self.rounding_buttons.checkedId()
-            length_start = self._model_edge_measurements.get(("length", "start"))
-            length_end = self._model_edge_measurements.get(("length", "end"))
-            width_start = self._model_edge_measurements.get(("width", "start"))
-            width_end = self._model_edge_measurements.get(("width", "end"))
             length_input, width_input, placed_mesh, placed_edges = pallet_inputs_from_supports(
                 model,
                 self._model_supports,
@@ -686,10 +673,6 @@ class MainWindow(QMainWindow):
                 width_margin_end=self.width_panel.margin_end.value(),
                 round_pallet_size=rounding_step != 0,
                 rounding_step=rounding_step or 5,
-                length_edge_distances=(length_start[0] if length_start else None, length_end[0] if length_end else None),
-                width_edge_distances=(width_start[0] if width_start else None, width_end[0] if width_end else None),
-                length_origin=(self._model_axis_coordinate(model.faces[length_start[1]].point, 0) if length_start else None),
-                width_origin=(self._model_axis_coordinate(model.faces[width_start[1]].point, 1) if width_start else None),
                 reference_support_index=self._model_reference_support_index,
             )
         except ValueError as exc:
@@ -715,167 +698,14 @@ class MainWindow(QMainWindow):
         self.view.commit_step_support_selection(
             {face.index for face in self._model_supports}, self._model_reference_support_index
         )
-        self._refresh_measurement_buttons(length_input, width_input)
         self._update_scene_info(result)
         self.statusBar().showMessage(
             f"Найдено опорных граней: {len(self._model_supports)}. Поддон построен под установкой."
         )
 
-    def _model_measurement_requested(self, axis: str, side: str) -> None:
-        """Toggle a two-face measurement: a boundary plane and a support face."""
-        if self._imported_step_model is None or not self._model_supports:
-            return
-        key = (axis, side)
-        if self._active_model_measurement == key:
-            self._finish_model_measurement()
-            return
-        if self._active_model_measurement is not None:
-            return
-        self._active_model_measurement = key
-        self._pending_model_faces = []
-        panel = self.length_panel if axis == "length" else self.width_panel
-        panel.set_measurement_action(side, active=True)
-        self.length_panel.set_measurement_buttons_enabled(axis == "length")
-        self.width_panel.set_measurement_buttons_enabled(axis == "width")
-        self.view.begin_step_face_measurement(self._model_measurement_face_selected)
-        first_role = "границу габарита" if side == "start" else "нижнюю грань опоры"
-        self.statusBar().showMessage(f"Выберите {first_role} по {'оси X' if axis == 'length' else 'оси Y'}.")
-
-    def _model_measurement_face_selected(self, face_index: int) -> None:
-        active = self._active_model_measurement
-        model = self._imported_step_model
-        if active is None or model is None:
-            return
-        axis, side = active
-        role_order = ("boundary", "support") if side == "start" else ("support", "boundary")
-        role = role_order[len(self._pending_model_faces)]
-        face = model.faces[face_index]
-        coordinate = 0 if axis == "length" else 1
-        if role == "boundary":
-            try:
-                from palletlab.importers.step_model import boundary_face_axis
-                detected_axis = boundary_face_axis(model, self._model_reference_support_index, face_index)
-            except ValueError as exc:
-                QMessageBox.information(self, "Выбор габарита", str(exc))
-                return
-            if detected_axis != coordinate:
-                self._move_model_measurement_axis("length" if detected_axis == 0 else "width")
-                active = self._active_model_measurement
-                assert active is not None
-                axis, side = active
-                coordinate = detected_axis
-        support_indices = {item.index for item in self._model_supports}
-        if role == "support" and face_index not in support_indices:
-            QMessageBox.information(self, "Выбор опоры", "Выберите одну из нижних граней найденных опор.")
-            return
-        self._pending_model_faces.append(face_index)
-        self.view.set_step_measurement_face(axis, side, role, face_index)
-        if len(self._pending_model_faces) == 1:
-            next_role = role_order[1]
-            instruction = "нижнюю грань опоры" if next_role == "support" else "границу габарита"
-            self.statusBar().showMessage(f"Теперь выберите {instruction}, затем нажмите «Готово».")
-        else:
-            self.view.end_step_face_measurement()
-            self.statusBar().showMessage("Грани выбраны. Нажмите «Готово», чтобы применить отступ и перестроить поддон.")
-
-    def _move_model_measurement_axis(self, axis: str) -> None:
-        """Assign a vertical boundary face to its actual pallet axis."""
-        active = self._active_model_measurement
-        if active is None or active[0] == axis:
-            return
-        previous_axis, side = active
-        role_order = ("boundary", "support") if side == "start" else ("support", "boundary")
-        for index, selected_face in enumerate(self._pending_model_faces):
-            role = role_order[index]
-            self.view.set_step_measurement_face(previous_axis, side, role, None)
-            self.view.set_step_measurement_face(axis, side, role, selected_face)
-        self._active_model_measurement = (axis, side)
-        if self.state.length_input is not None and self.state.width_input is not None:
-            self._refresh_measurement_buttons(self.state.length_input, self.state.width_input)
-        panel = self.length_panel if axis == "length" else self.width_panel
-        panel.set_measurement_action(side, active=True)
-        self.length_panel.set_measurement_buttons_enabled(axis == "length")
-        self.width_panel.set_measurement_buttons_enabled(axis == "width")
-
-    def _finish_model_measurement(self) -> None:
-        active = self._active_model_measurement
-        model = self._imported_step_model
-        if active is None or model is None:
-            return
-        if len(self._pending_model_faces) != 2:
-            QMessageBox.information(self, "Измерение отступа", "Выберите обе грани перед подтверждением.")
-            return
-        axis, side = active
-        first, second = self._pending_model_faces
-        boundary_index, support_index = (first, second) if side == "start" else (second, first)
-        coordinate = 0 if axis == "length" else 1
-        try:
-            from palletlab.importers.step_model import edge_to_support_center_distance
-            support_positions = [self._model_axis_coordinate(face.point, coordinate)
-                                 for face in self._model_supports if face.point is not None]
-            expected = min(support_positions) if side == "start" else max(support_positions)
-            selected = model.faces[support_index].point
-            if selected is None or abs(self._model_axis_coordinate(selected, coordinate) - expected) > model.plane_tolerance:
-                raise ValueError("Для этого отступа выберите крайнюю опору в соответствующем направлении.")
-            distance = edge_to_support_center_distance(
-                model, boundary_index, support_index, coordinate, self._model_reference_support_index
-            )
-        except ValueError as exc:
-            QMessageBox.information(self, "Измерение отступа", str(exc))
-            self._cancel_model_measurement()
-            return
-        self._model_edge_measurements[(axis, side)] = (distance, boundary_index, support_index)
-        self._active_model_measurement = None
-        self._pending_model_faces = []
-        self.length_panel.set_measurement_buttons_enabled(True)
-        self.width_panel.set_measurement_buttons_enabled(True)
-        self._build_selected_model_pallet()
-
-    def _model_axis_coordinate(self, point, axis: int) -> float:
-        """Project a STEP point onto the pallet axes set by its support plane."""
-        if self._imported_step_model is None or self._model_reference_support_index is None:
-            raise ValueError("Сначала выберите опорную грань.")
-        from palletlab.importers.step_model import support_axis_coordinate
-        return support_axis_coordinate(self._imported_step_model, self._model_reference_support_index, point, axis)
-
-    def _cancel_model_measurement(self) -> None:
-        """Leave a face-selection attempt without altering confirmed offsets."""
-        active = self._active_model_measurement
-        if active is None:
-            return
-        axis, side = active
-        previous = self._model_edge_measurements.get(active)
-        if previous is None:
-            self.view.set_step_measurement_face(axis, side, "boundary", None)
-            self.view.set_step_measurement_face(axis, side, "support", None)
-        else:
-            _distance, boundary_index, support_index = previous
-            self.view.set_step_measurement_face(axis, side, "boundary", boundary_index)
-            self.view.set_step_measurement_face(axis, side, "support", support_index)
-        self.view.end_step_face_measurement()
-        self._active_model_measurement = None
-        self._pending_model_faces = []
-        self.length_panel.set_measurement_buttons_enabled(True)
-        self.width_panel.set_measurement_buttons_enabled(True)
-        if self.state.length_input is not None and self.state.width_input is not None:
-            self._refresh_measurement_buttons(self.state.length_input, self.state.width_input)
-        self.statusBar().showMessage("Выбор граней отменён.")
-
-    def _refresh_measurement_buttons(self, length_input, width_input) -> None:
-        for axis, panel, data in (("length", self.length_panel, length_input), ("width", self.width_panel, width_input)):
-            for side in ("start", "end"):
-                measurement = self._model_edge_measurements.get((axis, side))
-                panel.set_measurement_action(side, active=False, value=measurement[0] if measurement else None)
-
-    def _clear_model_measurements(self) -> None:
+    def _clear_model_supports(self) -> None:
         self._model_supports = ()
         self._model_reference_support_index = None
-        self._model_edge_measurements.clear()
-        self._active_model_measurement = None
-        self._pending_model_faces = []
-        self.view.clear_step_measurements()
-        self.length_panel.set_measurement_buttons_enabled(True)
-        self.width_panel.set_measurement_buttons_enabled(True)
 
     def _toggle_model_visibility(self) -> None:
         visible = self.view.toggle_step_model_visibility()
@@ -1244,14 +1074,6 @@ class MainWindow(QMainWindow):
             self._toggle_insertion_mode(True)
 
     def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self._active_model_measurement is not None:
-            self._finish_model_measurement()
-            event.accept()
-            return
-        if event.key() == Qt.Key_Escape and self._active_model_measurement is not None:
-            self._cancel_model_measurement()
-            event.accept()
-            return
         if (event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.delete_beam_button.isChecked()
                 and any(self._selected_for_deletion.values())):
             self._confirm_deletion()
@@ -1270,14 +1092,6 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def eventFilter(self, watched, event) -> bool:
-        if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
-                and self._active_model_measurement is not None):
-            self._finish_model_measurement()
-            return True
-        if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
-                and self._active_model_measurement is not None):
-            self._cancel_model_measurement()
-            return True
         if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
                 and self.delete_beam_button.isChecked() and any(self._selected_for_deletion.values())):
             self._confirm_deletion()

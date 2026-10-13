@@ -337,19 +337,6 @@ def support_axis_coordinate(model: ImportedStepModel, reference_index: int, poin
     return float(np.dot(point - origin, x_axis if axis == 0 else y_axis))
 
 
-def boundary_face_axis(model: ImportedStepModel, reference_index: int, face_index: int) -> int:
-    """Return the pallet axis perpendicular to a selected vertical boundary face."""
-    face = model.faces[face_index]
-    if face.point is None or face.normal is None:
-        raise ValueError("Грань габарита должна быть плоской.")
-    _origin, x_axis, y_axis, _z_axis = _support_frame(model, reference_index)
-    alignment = (abs(float(np.dot(face.normal, x_axis))), abs(float(np.dot(face.normal, y_axis))))
-    axis = int(np.argmax(alignment))
-    if alignment[axis] < HORIZONTAL_COSINE:
-        raise ValueError("Грань габарита должна быть вертикальной относительно плоскости опор.")
-    return axis
-
-
 def _support_frame_mesh(source: pv.PolyData, frame: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]) -> pv.PolyData:
     """Copy display geometry into the selected support plane's local frame."""
     origin, x_axis, y_axis, z_axis = frame
@@ -405,25 +392,6 @@ def _coalesced_beam_positions(values: list[float], tolerance: float, beam_width:
     return tuple(position for position, _coverage in selected)
 
 
-def edge_to_support_center_distance(
-    model: ImportedStepModel, boundary_index: int, support_index: int, axis: int, reference_index: int,
-) -> float:
-    """Measure a pallet-axis distance from a bounding plane to a foot centre."""
-    boundary = model.faces[boundary_index]
-    support = model.faces[support_index]
-    if boundary.point is None or boundary.normal is None:
-        raise ValueError("Грань габарита должна быть плоской.")
-    if support.point is None or support.normal is None:
-        raise ValueError("Грань опоры должна быть плоской.")
-    detected_axis = boundary_face_axis(model, reference_index, boundary_index)
-    if detected_axis != axis:
-        direction = "X" if axis == 0 else "Y"
-        raise ValueError(f"Грань габарита должна быть перпендикулярна оси {direction}.")
-    boundary_coordinate = support_axis_coordinate(model, reference_index, boundary.point, axis)
-    support_coordinate = support_axis_coordinate(model, reference_index, support.point, axis)
-    return float(math.floor(abs(support_coordinate - boundary_coordinate) + 0.5))
-
-
 def pallet_inputs_from_supports(
     model: ImportedStepModel,
     supports: tuple[StepFace, ...],
@@ -438,10 +406,6 @@ def pallet_inputs_from_supports(
     width_margin_end: float,
     round_pallet_size: bool,
     rounding_step: int,
-    length_edge_distances: tuple[float | None, float | None] | None = None,
-    width_edge_distances: tuple[float | None, float | None] | None = None,
-    length_origin: float | None = None,
-    width_origin: float | None = None,
     reference_support_index: int | None = None,
 ) -> tuple[DirectionInput, DirectionInput, pv.PolyData, pv.PolyData]:
     """Create editable pallet inputs and place the machine on its support plane.
@@ -487,25 +451,17 @@ def pallet_inputs_from_supports(
 
     def measured_positions(
         positions: tuple[float, ...], origin: float, size: float,
-        distances: tuple[float | None, float | None] | None,
     ) -> tuple[tuple[float, ...], float, float]:
         relative = tuple(value - positions[0] for value in positions)
         default_start = float(math.floor(positions[0] - origin + 0.5))
         default_end = float(math.floor(origin + size - positions[-1] + 0.5))
-        start, end = distances if distances is not None else (default_start, default_end)
-        start = default_start if start is None else start
-        end = default_end if end is None else end
-        if start < 0 or end < 0:
-            raise ValueError("Отступ от габарита до опоры не может быть отрицательным.")
-        return relative, float(start), float(end)
+        return relative, default_start, default_end
 
-    # The selected bounding planes replace the mesh bounding box only after a
-    # user measures them.  Until then, preserve the previous automatic flow.
     x_relative, x_first, x_last = measured_positions(
-        support_x, xmin if length_origin is None else length_origin, machine_length, length_edge_distances,
+        support_x, xmin, machine_length,
     )
     y_relative, y_first, y_last = measured_positions(
-        support_y, ymin if width_origin is None else width_origin, machine_width, width_edge_distances,
+        support_y, ymin, machine_width,
     )
 
     def direction(
@@ -541,10 +497,10 @@ def pallet_inputs_from_supports(
     def place(source: pv.PolyData) -> pv.PolyData:
         transformed = source.copy(deep=True)
         points = transformed.points.copy()
-        points[:, 0] = points[:, 0] - (xmin if length_origin is None else length_origin) + margin_x_start
+        points[:, 0] = points[:, 0] - xmin + margin_x_start
         # PalletView mirrors the pallet's Y coordinate for its technical-drawing
         # orientation, so mirror the imported machine in the same display space.
-        points[:, 1] = pallet_width - (points[:, 1] - (ymin if width_origin is None else width_origin) + margin_y_start)
+        points[:, 1] = pallet_width - (points[:, 1] - ymin + margin_y_start)
         points[:, 2] = points[:, 2] + length_beam_height + width_beam_height
         transformed.points = points
         return transformed
