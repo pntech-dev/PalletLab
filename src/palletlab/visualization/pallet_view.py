@@ -204,7 +204,10 @@ class PalletView(QtInteractor):
         self._remove_step_hover_face()
         self._step_model_visible = True
         self._add_step_model(render=False)
-        self.view_isometric()
+        # The imported model is the first visible scene, so fit it exactly
+        # once here.  Later transient actors (hover highlights and edges)
+        # must never silently alter a camera the user has already navigated.
+        self.view_vector((-1, -1, 1), viewup=(0, 0, 1))
         self.reset_camera(render=True)
         # The STEP preview is already a real scene.  Subsequent pallet renders
         # must preserve any zoom/rotation the user made while choosing a face.
@@ -323,6 +326,7 @@ class PalletView(QtInteractor):
         self._step_hover_actor = self.add_mesh(
             highlighted, color="#33b9ae", opacity=0.80, show_edges=True,
             edge_color="#147b75", line_width=2.0, pickable=False, name="step-hover-face",
+            reset_camera=False,
         )
 
     def _remove_step_hover_face(self) -> None:
@@ -364,6 +368,7 @@ class PalletView(QtInteractor):
             smooth_shading=False,
             pickable=True,
             name="step-model",
+            reset_camera=False,
         )
         self._step_picker.InitializePickList()
         self._step_picker.AddPickList(self._step_model_actor)
@@ -371,7 +376,7 @@ class PalletView(QtInteractor):
         if self._step_edges is not None and self._step_edges.n_cells:
             self._step_edge_actor = self.add_mesh(
                 self._step_edges, color="#536271", opacity=0.85,
-                line_width=1.35, pickable=False, name="step-model-edges",
+                line_width=1.35, pickable=False, name="step-model-edges", reset_camera=False,
             )
             self._step_edge_actor.SetVisibility(self._step_model_visible)
         if render:
