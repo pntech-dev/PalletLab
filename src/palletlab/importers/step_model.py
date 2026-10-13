@@ -38,7 +38,7 @@ REFERENCE_RGB = np.array((255, 176, 26), dtype=np.uint8)
 SUPPORT_RGB = np.array((230, 41, 51), dtype=np.uint8)
 PARALLEL_COSINE = math.cos(math.radians(0.5))
 HORIZONTAL_COSINE = math.cos(math.radians(2.0))
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -139,6 +139,27 @@ def _planar_face_geometry(face) -> tuple[np.ndarray | None, np.ndarray | None]:
     return np.array((location.X(), location.Y(), location.Z()), dtype=float), normal
 
 
+def _surface_centroid(points: np.ndarray, cells: list[int]) -> np.ndarray:
+    """Return the area-weighted centroid of tessellated face triangles.
+
+    A plane's origin is arbitrary in STEP.  In particular, it is not the
+    centre of a circular foot, so support coordinates must be derived from the
+    actual face surface instead.
+    """
+    weighted = np.zeros(3)
+    total_area = 0.0
+    for offset in range(0, len(cells), 4):
+        first, second, third = cells[offset + 1:offset + 4]
+        triangle = points[[first, second, third]]
+        area = float(np.linalg.norm(np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0]))) / 2.0
+        if area > 0:
+            weighted += area * triangle.mean(axis=0)
+            total_area += area
+    if total_area <= 0:
+        return points.mean(axis=0)
+    return weighted / total_area
+
+
 def _face_triangles(face) -> tuple[np.ndarray, list[int]] | None:
     location = TopLoc_Location()
     triangulation = BRep_Tool.Triangulation_s(face, location)
@@ -232,6 +253,10 @@ def load_step_model(filename: str | Path, progress=None) -> ImportedStepModel:
         if triangles is not None:
             face_points, face_cells = triangles
             point, normal = _planar_face_geometry(face)
+            if point is not None:
+                # Keep a point on the plane, but make it the real face centre
+                # rather than the arbitrary OpenCascade plane origin.
+                point = _surface_centroid(face_points, face_cells)
             faces.append(StepFace(index, point, normal))
             point_blocks.append(face_points)
             for offset in range(0, len(face_cells), 4):
@@ -302,6 +327,24 @@ def _snap_positions_to_millimetres(values: tuple[float, ...]) -> tuple[float, ..
     return tuple(float(value) for value in sorted({math.floor(value + 0.5) for value in values}))
 
 
+def edge_to_support_center_distance(
+    model: ImportedStepModel, boundary_index: int, support_index: int, axis: int,
+) -> float:
+    """Measure a pallet-axis distance from a bounding plane to a foot centre."""
+    boundary = model.faces[boundary_index]
+    support = model.faces[support_index]
+    if boundary.point is None or boundary.normal is None:
+        raise ValueError("Грань габарита должна быть плоской.")
+    if support.point is None or support.normal is None:
+        raise ValueError("Грань опоры должна быть плоской.")
+    if abs(float(boundary.normal[axis])) < HORIZONTAL_COSINE:
+        direction = "X" if axis == 0 else "Y"
+        raise ValueError(f"Грань габарита должна быть перпендикулярна оси {direction}.")
+    if abs(float(support.normal[2])) < HORIZONTAL_COSINE:
+        raise ValueError("Грань опоры должна быть горизонтальной.")
+    return float(math.floor(abs(float(support.point[axis] - boundary.point[axis])) + 0.5))
+
+
 def pallet_inputs_from_supports(
     model: ImportedStepModel,
     supports: tuple[StepFace, ...],
@@ -316,6 +359,10 @@ def pallet_inputs_from_supports(
     width_margin_end: float,
     round_pallet_size: bool,
     rounding_step: int,
+    length_edge_distances: tuple[float | None, float | None] | None = None,
+    width_edge_distances: tuple[float | None, float | None] | None = None,
+    length_origin: float | None = None,
+    width_origin: float | None = None,
 ) -> tuple[DirectionInput, DirectionInput, pv.PolyData, pv.PolyData]:
     """Create editable pallet inputs and place the machine on its support plane.
 
@@ -336,25 +383,45 @@ def pallet_inputs_from_supports(
     margin_x_end = max(length_margin_end, 2 * length_beam_width)
     margin_y_start = max(width_margin_start, 2 * width_beam_width)
     margin_y_end = max(width_margin_end, 2 * width_beam_width)
-    x_positions = _snap_positions_to_millimetres(_unique_positions(
-        [float(face.point[0] - xmin + margin_x_start) for face in supports if face.point is not None], tolerance
-    ))
-    y_positions = _snap_positions_to_millimetres(_unique_positions(
-        [float(face.point[1] - ymin + margin_y_start) for face in supports if face.point is not None], tolerance
-    ))
-    if not x_positions or not y_positions:
+    support_x = _unique_positions([float(face.point[0]) for face in supports if face.point is not None], tolerance)
+    support_y = _unique_positions([float(face.point[1]) for face in supports if face.point is not None], tolerance)
+    if not support_x or not support_y:
         raise ValueError("Не удалось определить координаты опор.")
 
+    def measured_positions(
+        positions: tuple[float, ...], origin: float, size: float,
+        distances: tuple[float | None, float | None] | None,
+    ) -> tuple[tuple[float, ...], float, float]:
+        relative = _snap_positions_to_millimetres(tuple(value - positions[0] for value in positions))
+        default_start = float(math.floor(positions[0] - origin + 0.5))
+        default_end = float(math.floor(origin + size - positions[-1] + 0.5))
+        start, end = distances if distances is not None else (default_start, default_end)
+        start = default_start if start is None else start
+        end = default_end if end is None else end
+        if start < 0 or end < 0:
+            raise ValueError("Отступ от габарита до опоры не может быть отрицательным.")
+        return relative, float(start), float(end)
+
+    # The selected bounding planes replace the mesh bounding box only after a
+    # user measures them.  Until then, preserve the previous automatic flow.
+    x_relative, x_first, x_last = measured_positions(
+        support_x, xmin if length_origin is None else length_origin, machine_length, length_edge_distances,
+    )
+    y_relative, y_first, y_last = measured_positions(
+        support_y, ymin if width_origin is None else width_origin, machine_width, width_edge_distances,
+    )
+
     def direction(
-        positions: tuple[float, ...], machine_size: float, beam_height: float, beam_width: float,
-        margin_start: float, margin_end: float,
+        relative_positions: tuple[float, ...], first_distance: float, last_distance: float,
+        beam_height: float, beam_width: float, margin_start: float, margin_end: float,
     ) -> DirectionInput:
+        positions = tuple(margin_start + first_distance + value for value in relative_positions)
         return DirectionInput(
             beam_height=beam_height,
             beam_width=beam_width,
-            support_distances=tuple(right - left for left, right in zip(positions, positions[1:])),
-            first_edge_to_support=positions[0] - margin_start,
-            last_support_to_edge=margin_start + machine_size - positions[-1],
+            support_distances=tuple(right - left for left, right in zip(relative_positions, relative_positions[1:])),
+            first_edge_to_support=first_distance,
+            last_support_to_edge=last_distance,
             margin_start=margin_start,
             margin_end=margin_end,
             round_pallet_size=round_pallet_size,
@@ -363,12 +430,12 @@ def pallet_inputs_from_supports(
         )
 
     length_input = direction(
-        x_positions, machine_length, length_beam_height, length_beam_width, margin_x_start, margin_x_end
+        x_relative, x_first, x_last, length_beam_height, length_beam_width, margin_x_start, margin_x_end
     )
     width_input = direction(
-        y_positions, machine_width, width_beam_height, width_beam_width, margin_y_start, margin_y_end
+        y_relative, y_first, y_last, width_beam_height, width_beam_width, margin_y_start, margin_y_end
     )
-    raw_width = machine_width + margin_y_start + margin_y_end
+    raw_width = width_input.first_edge_to_support + sum(width_input.support_distances) + width_input.last_support_to_edge + margin_y_start + margin_y_end
     pallet_width = (
         (round_to_fifty(raw_width) if rounding_step == 50 else round_up_to_five(raw_width))
         if round_pallet_size else raw_width
@@ -377,10 +444,10 @@ def pallet_inputs_from_supports(
     def place(source: pv.PolyData) -> pv.PolyData:
         transformed = source.copy(deep=True)
         points = transformed.points.copy()
-        points[:, 0] = points[:, 0] - xmin + margin_x_start
+        points[:, 0] = points[:, 0] - (xmin if length_origin is None else length_origin) + margin_x_start
         # PalletView mirrors the pallet's Y coordinate for its technical-drawing
         # orientation, so mirror the imported machine in the same display space.
-        points[:, 1] = pallet_width - (points[:, 1] - ymin + margin_y_start)
+        points[:, 1] = pallet_width - (points[:, 1] - (ymin if width_origin is None else width_origin) + margin_y_start)
         points[:, 2] = points[:, 2] - float(reference.point[2]) + length_beam_height + width_beam_height
         transformed.points = points
         return transformed
