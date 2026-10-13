@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from PyQt5.QtCore import QTimer
 import pyvista as pv
 from pyvistaqt import QtInteractor
 
@@ -323,6 +324,15 @@ class PalletView(QtInteractor):
         cell_id = self._step_picker.GetCellId()
         if self._step_mesh is not None and 0 <= cell_id < self._step_mesh.n_cells:
             callback(int(self._step_mesh.cell_data["step_face_index"][cell_id]))
+            # A modal validation message consumes the Qt mouse-release event.
+            # End VTK's press state on the next event-loop turn so it cannot
+            # interpret the following mouse move as camera rotation.
+            QTimer.singleShot(0, self._stop_step_pick_interaction)
+
+    def _stop_step_pick_interaction(self) -> None:
+        style = self.iren.interactor.GetInteractorStyle()
+        style.OnLeftButtonUp()
+        style.StopState()
 
     def update_dimension_annotations(
         self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True, *, render: bool = True

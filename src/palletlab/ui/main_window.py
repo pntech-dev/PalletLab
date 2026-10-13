@@ -688,8 +688,9 @@ class MainWindow(QMainWindow):
                 rounding_step=rounding_step or 5,
                 length_edge_distances=(length_start[0] if length_start else None, length_end[0] if length_end else None),
                 width_edge_distances=(width_start[0] if width_start else None, width_end[0] if width_end else None),
-                length_origin=(model.faces[length_start[1]].point[0] if length_start else None),
-                width_origin=(model.faces[width_start[1]].point[1] if width_start else None),
+                length_origin=(self._model_axis_coordinate(model.faces[length_start[1]].point, 0) if length_start else None),
+                width_origin=(self._model_axis_coordinate(model.faces[width_start[1]].point, 1) if width_start else None),
+                reference_support_index=self._model_reference_support_index,
             )
         except ValueError as exc:
             QMessageBox.information(self, "Построение по модели", str(exc))
@@ -750,9 +751,20 @@ class MainWindow(QMainWindow):
         role = role_order[len(self._pending_model_faces)]
         face = model.faces[face_index]
         coordinate = 0 if axis == "length" else 1
-        if role == "boundary" and (face.point is None or face.normal is None or abs(float(face.normal[coordinate])) < 0.99):
-            QMessageBox.information(self, "Выбор габарита", "Выберите плоскую грань габарита, перпендикулярную нужной оси.")
-            return
+        if role == "boundary":
+            try:
+                from palletlab.importers.step_model import edge_to_support_center_distance
+                if face.point is None or face.normal is None:
+                    raise ValueError("Грань габарита должна быть плоской.")
+                # Validate against the reference support now, so an incorrect
+                # boundary face never becomes part of a pending selection.
+                edge_to_support_center_distance(
+                    model, face_index, self._model_reference_support_index, coordinate,
+                    self._model_reference_support_index,
+                )
+            except ValueError as exc:
+                QMessageBox.information(self, "Выбор габарита", str(exc))
+                return
         support_indices = {item.index for item in self._model_supports}
         if role == "support" and face_index not in support_indices:
             QMessageBox.information(self, "Выбор опоры", "Выберите одну из нижних граней найденных опор.")
@@ -781,12 +793,15 @@ class MainWindow(QMainWindow):
         coordinate = 0 if axis == "length" else 1
         try:
             from palletlab.importers.step_model import edge_to_support_center_distance
-            support_positions = [face.point[coordinate] for face in self._model_supports if face.point is not None]
+            support_positions = [self._model_axis_coordinate(face.point, coordinate)
+                                 for face in self._model_supports if face.point is not None]
             expected = min(support_positions) if side == "start" else max(support_positions)
             selected = model.faces[support_index].point
-            if selected is None or abs(float(selected[coordinate]) - expected) > model.plane_tolerance:
+            if selected is None or abs(self._model_axis_coordinate(selected, coordinate) - expected) > model.plane_tolerance:
                 raise ValueError("Для этого отступа выберите крайнюю опору в соответствующем направлении.")
-            distance = edge_to_support_center_distance(model, boundary_index, support_index, coordinate)
+            distance = edge_to_support_center_distance(
+                model, boundary_index, support_index, coordinate, self._model_reference_support_index
+            )
         except ValueError as exc:
             QMessageBox.information(self, "Измерение отступа", str(exc))
             self._cancel_model_measurement()
@@ -797,6 +812,13 @@ class MainWindow(QMainWindow):
         self.length_panel.set_measurement_buttons_enabled(True)
         self.width_panel.set_measurement_buttons_enabled(True)
         self._build_selected_model_pallet()
+
+    def _model_axis_coordinate(self, point, axis: int) -> float:
+        """Project a STEP point onto the pallet axes set by its support plane."""
+        if self._imported_step_model is None or self._model_reference_support_index is None:
+            raise ValueError("Сначала выберите опорную грань.")
+        from palletlab.importers.step_model import support_axis_coordinate
+        return support_axis_coordinate(self._imported_step_model, self._model_reference_support_index, point, axis)
 
     def _cancel_model_measurement(self) -> None:
         """Leave a face-selection attempt without altering confirmed offsets."""

@@ -7,6 +7,7 @@ from palletlab.importers.step_model import (
     ImportedStepModel,
     StepFace,
     _surface_centroid,
+    coplanar_supports,
     edge_to_support_center_distance,
     pallet_inputs_from_supports,
 )
@@ -32,7 +33,41 @@ def test_edge_distance_uses_the_selected_support_face_centre():
         StepFace(1, np.array((123.6, 50, 0), dtype=float), np.array((0, 0, -1), dtype=float)),
     )
 
-    assert edge_to_support_center_distance(model, 0, 1, 0) == 124
+    assert edge_to_support_center_distance(model, 0, 1, 0, 1) == 124
+
+
+def test_support_detection_accepts_a_machine_laid_on_its_side():
+    vertical_support = StepFace(0, np.array((0, 50, 50), dtype=float), np.array((1, 0, 0), dtype=float))
+    same_plane_support = StepFace(1, np.array((0, 200, 50), dtype=float), np.array((1, 0, 0), dtype=float))
+    model = _model(vertical_support, same_plane_support)
+
+    assert coplanar_supports(model, 0) == (vertical_support, same_plane_support)
+
+
+def test_pallet_inputs_rotate_a_sideways_machine_onto_its_support_plane():
+    supports = (
+        StepFace(0, np.array((0, 50, 50), dtype=float), np.array((1, 0, 0), dtype=float)),
+        StepFace(1, np.array((0, 200, 50), dtype=float), np.array((1, 0, 0), dtype=float)),
+    )
+    model = _model(*supports)
+
+    _length, _width, placed_mesh, _edges = pallet_inputs_from_supports(
+        model,
+        supports,
+        length_beam_height=70,
+        length_beam_width=50,
+        width_beam_height=70,
+        width_beam_width=50,
+        length_margin_start=100,
+        length_margin_end=100,
+        width_margin_start=100,
+        width_margin_end=100,
+        round_pallet_size=False,
+        rounding_step=5,
+        reference_support_index=0,
+    )
+
+    assert placed_mesh.bounds[4] == 140
 
 
 def test_selected_boundary_distances_position_supports_from_that_boundary():

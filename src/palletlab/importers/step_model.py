@@ -38,7 +38,7 @@ REFERENCE_RGB = np.array((255, 176, 26), dtype=np.uint8)
 SUPPORT_RGB = np.array((230, 41, 51), dtype=np.uint8)
 PARALLEL_COSINE = math.cos(math.radians(0.5))
 HORIZONTAL_COSINE = math.cos(math.radians(2.0))
-CACHE_VERSION = 4
+CACHE_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -292,18 +292,58 @@ def load_step_model(filename: str | Path, progress=None) -> ImportedStepModel:
 
 
 def coplanar_supports(model: ImportedStepModel, reference_index: int) -> tuple[StepFace, ...]:
-    """Find planar B-Rep faces in the selected support plane."""
+    """Find planar B-Rep faces in the selected support plane, in any orientation."""
     reference = model.faces[reference_index]
     if reference.point is None or reference.normal is None:
         raise ValueError("Выберите плоскую нижнюю грань опоры.")
-    if abs(float(reference.normal[2])) < HORIZONTAL_COSINE:
-        raise ValueError("Грань опоры должна быть горизонтальной: поддон строится в плоскости XY.")
     return tuple(
         candidate for candidate in model.faces
         if candidate.point is not None and candidate.normal is not None
         and abs(float(np.dot(candidate.normal, reference.normal))) >= PARALLEL_COSINE
         and abs(float(np.dot(candidate.point - reference.point, reference.normal))) <= model.plane_tolerance
     )
+
+
+def _support_frame(model: ImportedStepModel, reference_index: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Build a stable pallet frame from the selected lower support plane.
+
+    STEP assemblies are often exported with an arbitrary global orientation.
+    The face normal nearest the machine centre becomes local +Z, while a
+    projected global axis provides repeatable local X/Y directions.
+    """
+    reference = model.faces[reference_index]
+    if reference.point is None or reference.normal is None:
+        raise ValueError("Выберите плоскую нижнюю грань опоры.")
+    origin = reference.point
+    normal = reference.normal / np.linalg.norm(reference.normal)
+    centre = np.array(((model.mesh.bounds[0] + model.mesh.bounds[1]) / 2,
+                       (model.mesh.bounds[2] + model.mesh.bounds[3]) / 2,
+                       (model.mesh.bounds[4] + model.mesh.bounds[5]) / 2))
+    # A lower face's CAD orientation is not dependable.  Always point local
+    # +Z into the assembly, so the pallet is built below the machine.
+    if float(np.dot(centre - origin, normal)) < 0:
+        normal *= -1.0
+    world_axes = np.eye(3)
+    anchor = world_axes[int(np.argmin(np.abs(world_axes @ normal)))]
+    x_axis = anchor - np.dot(anchor, normal) * normal
+    x_axis /= np.linalg.norm(x_axis)
+    y_axis = np.cross(normal, x_axis)
+    return origin, x_axis, y_axis, normal
+
+
+def support_axis_coordinate(model: ImportedStepModel, reference_index: int, point: np.ndarray, axis: int) -> float:
+    """Project a model point into the selected support plane's X or Y axis."""
+    origin, x_axis, y_axis, _normal = _support_frame(model, reference_index)
+    return float(np.dot(point - origin, x_axis if axis == 0 else y_axis))
+
+
+def _support_frame_mesh(source: pv.PolyData, frame: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]) -> pv.PolyData:
+    """Copy display geometry into the selected support plane's local frame."""
+    origin, x_axis, y_axis, z_axis = frame
+    transformed = source.copy(deep=True)
+    relative = transformed.points - origin
+    transformed.points = np.column_stack((relative @ x_axis, relative @ y_axis, relative @ z_axis))
+    return transformed
 
 
 def _unique_positions(values: list[float], tolerance: float) -> tuple[float, ...]:
@@ -328,7 +368,7 @@ def _snap_positions_to_millimetres(values: tuple[float, ...]) -> tuple[float, ..
 
 
 def edge_to_support_center_distance(
-    model: ImportedStepModel, boundary_index: int, support_index: int, axis: int,
+    model: ImportedStepModel, boundary_index: int, support_index: int, axis: int, reference_index: int,
 ) -> float:
     """Measure a pallet-axis distance from a bounding plane to a foot centre."""
     boundary = model.faces[boundary_index]
@@ -337,12 +377,13 @@ def edge_to_support_center_distance(
         raise ValueError("Грань габарита должна быть плоской.")
     if support.point is None or support.normal is None:
         raise ValueError("Грань опоры должна быть плоской.")
-    if abs(float(boundary.normal[axis])) < HORIZONTAL_COSINE:
+    _origin, x_axis, y_axis, _z_axis = _support_frame(model, reference_index)
+    if abs(float(np.dot(boundary.normal, x_axis if axis == 0 else y_axis))) < HORIZONTAL_COSINE:
         direction = "X" if axis == 0 else "Y"
         raise ValueError(f"Грань габарита должна быть перпендикулярна оси {direction}.")
-    if abs(float(support.normal[2])) < HORIZONTAL_COSINE:
-        raise ValueError("Грань опоры должна быть горизонтальной.")
-    return float(math.floor(abs(float(support.point[axis] - boundary.point[axis])) + 0.5))
+    boundary_coordinate = support_axis_coordinate(model, reference_index, boundary.point, axis)
+    support_coordinate = support_axis_coordinate(model, reference_index, support.point, axis)
+    return float(math.floor(abs(support_coordinate - boundary_coordinate) + 0.5))
 
 
 def pallet_inputs_from_supports(
@@ -363,6 +404,7 @@ def pallet_inputs_from_supports(
     width_edge_distances: tuple[float | None, float | None] | None = None,
     length_origin: float | None = None,
     width_origin: float | None = None,
+    reference_support_index: int | None = None,
 ) -> tuple[DirectionInput, DirectionInput, pv.PolyData, pv.PolyData]:
     """Create editable pallet inputs and place the machine on its support plane.
 
@@ -372,9 +414,20 @@ def pallet_inputs_from_supports(
     """
     if not supports:
         raise ValueError("Не найдены грани опор в выбранной плоскости.")
-    reference = supports[0]
+    reference = next((face for face in supports if face.index == reference_support_index), supports[0])
     assert reference.point is not None
-    xmin, xmax, ymin, ymax, _zmin, _zmax = model.mesh.bounds
+    frame = _support_frame(model, reference.index)
+    local_mesh = _support_frame_mesh(model.mesh, frame)
+    local_edges = _support_frame_mesh(model.edges, frame)
+    local_points = {
+        face.index: np.array((
+            support_axis_coordinate(model, reference.index, face.point, 0),
+            support_axis_coordinate(model, reference.index, face.point, 1),
+            float(np.dot(face.point - frame[0], frame[3])),
+        ))
+        for face in supports if face.point is not None
+    }
+    xmin, xmax, ymin, ymax, _zmin, _zmax = local_mesh.bounds
     machine_length, machine_width = xmax - xmin, ymax - ymin
     if machine_length <= 0 or machine_width <= 0:
         raise ValueError("STEP-модель не имеет конечных габаритов в плоскости поддона.")
@@ -383,8 +436,8 @@ def pallet_inputs_from_supports(
     margin_x_end = max(length_margin_end, 2 * length_beam_width)
     margin_y_start = max(width_margin_start, 2 * width_beam_width)
     margin_y_end = max(width_margin_end, 2 * width_beam_width)
-    support_x = _unique_positions([float(face.point[0]) for face in supports if face.point is not None], tolerance)
-    support_y = _unique_positions([float(face.point[1]) for face in supports if face.point is not None], tolerance)
+    support_x = _unique_positions([float(local_points[face.index][0]) for face in supports if face.index in local_points], tolerance)
+    support_y = _unique_positions([float(local_points[face.index][1]) for face in supports if face.index in local_points], tolerance)
     if not support_x or not support_y:
         raise ValueError("Не удалось определить координаты опор.")
 
@@ -448,12 +501,12 @@ def pallet_inputs_from_supports(
         # PalletView mirrors the pallet's Y coordinate for its technical-drawing
         # orientation, so mirror the imported machine in the same display space.
         points[:, 1] = pallet_width - (points[:, 1] - (ymin if width_origin is None else width_origin) + margin_y_start)
-        points[:, 2] = points[:, 2] - float(reference.point[2]) + length_beam_height + width_beam_height
+        points[:, 2] = points[:, 2] + length_beam_height + width_beam_height
         transformed.points = points
         return transformed
     return (
         length_input,
         width_input,
-        place(model.mesh),
-        place(model.edges),
+        place(local_mesh),
+        place(local_edges),
     )
