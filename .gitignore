@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+test_scripts/.step_cache/
 .codebase-memory/
 .mypy_cache/
 .coverage
