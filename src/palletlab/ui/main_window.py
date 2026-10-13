@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QSettings, QSignalBlocker, QTimer, Qt, pyqtSignal
+import json
+import os
+import sys
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from PyQt5.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSignalBlocker, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
-                             QMessageBox, QPushButton, QDoubleSpinBox, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
+                             QMessageBox, QPushButton, QDoubleSpinBox, QProgressDialog, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.controllers.pallet_controller import PalletController
 from palletlab.core.calculator import insertion_slots
@@ -20,6 +26,9 @@ from palletlab.ui.input_panel import DirectionInputPanel
 from palletlab.ui.update_dialog import check_for_updates
 from palletlab.version import __version__
 from palletlab.visualization.pallet_view import PalletView
+
+if TYPE_CHECKING:
+    from palletlab.importers.step_model import ImportedStepModel
 
 
 class InsertionGapSpinBox(QDoubleSpinBox):
@@ -92,6 +101,18 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = ProjectState()
         self._project_path: str | None = None
+        self._imported_step_model: ImportedStepModel | None = None
+        self._step_import_process: QProcess | None = None
+        self._step_import_path: str | None = None
+        self._step_import_output = ""
+        self._step_import_error: str | None = None
+        self._step_import_progress: QProgressDialog | None = None
+        self._model_supports = ()
+        self._model_reference_support_index: int | None = None
+        self._model_rebuild_timer = QTimer(self)
+        self._model_rebuild_timer.setSingleShot(True)
+        self._model_rebuild_timer.setInterval(300)
+        self._model_rebuild_timer.timeout.connect(self._build_selected_model_pallet)
         self.setWindowTitle(f"PalletLab {__version__} — расчёт поддонов")
         screen = QApplication.primaryScreen().availableGeometry()
         self.resize(min(1400, int(screen.width() * 0.92)), min(900, int(screen.height() * 0.90)))
@@ -237,6 +258,22 @@ class MainWindow(QMainWindow):
         view_title.setToolTip("Вращайте модель мышью, колёсиком меняйте масштаб.")
         title_block.addWidget(view_title)
         view_heading.addLayout(title_block)
+        self.build_from_model_button = QPushButton("Построить по модели")
+        self.build_from_model_button.setObjectName("buildFromModelButton")
+        self.build_from_model_button.setToolTip("Загрузить STEP-модель и выбрать нижнюю грань одной опоры.")
+        self.build_from_model_button.clicked.connect(self.build_from_model)
+        view_heading.addWidget(self.build_from_model_button)
+        self.rebuild_from_model_button = QPushButton("Перестроить по модели")
+        self.rebuild_from_model_button.setObjectName("rebuildFromModelButton")
+        self.rebuild_from_model_button.setToolTip("Удалить поддон и заново выбрать грань опоры уже загруженной модели.")
+        self.rebuild_from_model_button.setEnabled(False)
+        self.rebuild_from_model_button.clicked.connect(self.rebuild_from_model)
+        view_heading.addWidget(self.rebuild_from_model_button)
+        self.toggle_model_button = QPushButton("Скрыть 3D модель")
+        self.toggle_model_button.setObjectName("toggleModelButton")
+        self.toggle_model_button.setEnabled(False)
+        self.toggle_model_button.clicked.connect(self._toggle_model_visibility)
+        view_heading.addWidget(self.toggle_model_button)
         self.add_beam_button = QPushButton("＋ Добавить брус")
         self.add_beam_button.setObjectName("addBeamButton")
         self.add_beam_button.setCheckable(True)
@@ -425,6 +462,11 @@ class MainWindow(QMainWindow):
             QPushButton#editDistanceButton { border-color: #b47a22; color: #8a5b14; font-weight: 650; }
             QPushButton#editDistanceButton:hover { background: #fbf0da; }
             QPushButton#editDistanceButton:checked { background: #9a681b; border-color: #9a681b; color: #fff; }
+            QPushButton#buildFromModelButton { background: #255e64; border-color: #255e64; color: #fff; font-weight: 650; }
+            QPushButton#buildFromModelButton:hover { background: #1f4f54; border-color: #1f4f54; }
+            QPushButton#rebuildFromModelButton { border-color: #8aa7a3; color: #285e59; font-weight: 650; }
+            QPushButton#rebuildFromModelButton:hover { background: #e7f0ed; }
+            QPushButton#toggleModelButton { border-color: #4b7a76; color: #1f5c58; font-weight: 650; }
             QFrame#insertionEditor { background: #e7f0ed; border: 1px solid #b9d4cd; border-radius: 7px; }
             QLabel#insertionHint { color: #55706a; font-size: 11px; }
             QFrame#deletionEditor { background: #fbe9e7; border: 1px solid #edb7b1; border-radius: 7px; }
@@ -453,6 +495,237 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Параметры изменены — модель требует пересчёта.")
         else:
             self.statusBar().showMessage("Расчёт актуален.")
+
+    def build_from_model(self) -> None:
+        """Start the STEP-driven workflow and ask for one horizontal support face."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите 3D-модель установки", "", "STEP-модели (*.step *.stp)"
+        )
+        if not path:
+            return
+        self.add_beam_button.setChecked(False)
+        self.delete_beam_button.setChecked(False)
+        self.edit_distance_button.setChecked(False)
+        self._model_rebuild_timer.stop()
+        self.length_panel.set_model_driven_mode(None)
+        self.width_panel.set_model_driven_mode(None)
+        self._clear_model_supports()
+        self._imported_step_model = None
+        self.state.result = None
+        self.view.clear_workspace()
+        self.scene_info.setText("Загрузка 3D-модели…")
+        self.toggle_model_button.setEnabled(False)
+        self.build_from_model_button.setEnabled(False)
+        self.rebuild_from_model_button.setEnabled(False)
+        self.centralWidget().setEnabled(False)
+        self._step_import_progress = QProgressDialog("Подготовка загрузки…", None, 0, 100, self)
+        self._step_import_progress.setWindowTitle("Загрузка 3D-модели")
+        self._step_import_progress.setWindowModality(Qt.ApplicationModal)
+        self._step_import_progress.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self._step_import_progress.setCancelButton(None)
+        self._step_import_progress.setAutoClose(False)
+        self._step_import_progress.setMinimumDuration(0)
+        self._step_import_progress.show()
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.SeparateChannels)
+        process.readyReadStandardOutput.connect(self._read_step_import_output)
+        process.finished.connect(self._step_import_process_finished)
+        environment = QProcessEnvironment.systemEnvironment()
+        if not getattr(sys, "frozen", False):
+            source_root = str(Path(__file__).resolve().parents[2])
+            environment.insert("PYTHONPATH", source_root + os.pathsep + environment.value("PYTHONPATH"))
+        process.setProcessEnvironment(environment)
+        self._step_import_process = process
+        self._step_import_path = path
+        self._step_import_output = ""
+        self._step_import_error = None
+        self.statusBar().showMessage("Загрузка STEP-модели…")
+        arguments = ["--step-import", path] if getattr(sys, "frozen", False) else ["-m", "palletlab.importers.step_import_worker", path]
+        process.start(sys.executable, arguments)
+
+    def _update_step_import_progress(self, value: int, label: str) -> None:
+        if self._step_import_progress is not None:
+            self._step_import_progress.setValue(value)
+            self._step_import_progress.setLabelText(label)
+
+    def _step_import_loaded(self, model: ImportedStepModel) -> None:
+        self._imported_step_model = model
+        # A STEP import always uses support coordinates derived from the model;
+        # hide the manual gabarit-to-support fields before the user selects the
+        # first support face, not only after the pallet has been built.
+        self.length_panel.set_model_driven_mode(None, hide_model_offsets=True)
+        self.width_panel.set_model_driven_mode(None, hide_model_offsets=True)
+        self.rebuild_from_model_button.setEnabled(True)
+        self.toggle_model_button.setEnabled(True)
+        self.toggle_model_button.setText("Скрыть 3D модель")
+        self.view.show_step_model(model.mesh, model.edges, model.faces, self._support_face_selected)
+        self.statusBar().showMessage("Выберите левой кнопкой плоскую нижнюю грань любой опоры установки.")
+
+    def _show_support_selection_prompt(self) -> None:
+        """Give the user a clear next action after a STEP model becomes selectable."""
+        QMessageBox.information(
+            self,
+            "Выберите опору",
+            "Нажмите левой кнопкой мыши на плоскую нижнюю грань любой опоры установки.\n\n"
+            "PalletLab найдёт остальные опоры в той же плоскости и построит поддон.",
+        )
+
+    def rebuild_from_model(self) -> None:
+        """Discard only the pallet and repeat support selection for the loaded STEP model."""
+        model = self._imported_step_model
+        if model is None:
+            return
+        self.add_beam_button.setChecked(False)
+        self.delete_beam_button.setChecked(False)
+        self.edit_distance_button.setChecked(False)
+        self._model_rebuild_timer.stop()
+        self.controller.deactivate_tool()
+        self.state.result = None
+        self._clear_model_supports()
+        self.view.prepare_step_model_rebuild(self._support_face_selected)
+        self.toggle_model_button.setEnabled(True)
+        self.toggle_model_button.setText("Скрыть 3D модель")
+        self.scene_info.setText("Выберите нижнюю грань опоры, чтобы перестроить поддон.")
+        self.statusBar().showMessage("Выберите левой кнопкой плоскую нижнюю грань любой опоры установки.")
+        self._show_support_selection_prompt()
+
+    def _step_import_failed(self, message: str) -> None:
+        self.length_panel.set_model_driven_mode(None)
+        self.width_panel.set_model_driven_mode(None)
+        QMessageBox.warning(self, "Загрузка 3D-модели", message)
+        self.scene_info.setText("3D-модель не загружена.")
+        self.statusBar().showMessage("Не удалось загрузить 3D-модель.")
+
+    def _read_step_import_output(self) -> None:
+        process = self._step_import_process
+        if process is None:
+            return
+        self._step_import_output += bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        lines = self._step_import_output.split("\n")
+        self._step_import_output = lines.pop()
+        for line in lines:
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if message.get("kind") == "progress":
+                self._update_step_import_progress(int(message["value"]), str(message["label"]))
+            elif message.get("kind") == "error":
+                self._step_import_error = str(message.get("message", "Неизвестная ошибка импорта."))
+
+    def _step_import_process_finished(self, exit_code: int, exit_status) -> None:
+        process = self._step_import_process
+        show_selection_prompt = False
+        if process is not None:
+            self._read_step_import_output()
+        if exit_code == 0 and self._step_import_error is None and self._step_import_path is not None:
+            try:
+                from palletlab.importers.step_model import load_cached_step_model
+                model = load_cached_step_model(self._step_import_path)
+                if model is None:
+                    raise RuntimeError("Кэш модели не был создан.")
+                self._step_import_loaded(model)
+                show_selection_prompt = True
+            except Exception as exc:
+                self._step_import_failed(str(exc))
+        else:
+            detail = self._step_import_error
+            if not detail and process is not None:
+                detail = bytes(process.readAllStandardError()).decode("utf-8", errors="replace").strip()
+            self._step_import_failed(detail or "Процесс загрузки STEP-модели завершился с ошибкой.")
+        self._step_import_finished()
+        if show_selection_prompt:
+            self._show_support_selection_prompt()
+
+    def _step_import_finished(self) -> None:
+        if self._step_import_progress is not None:
+            self._step_import_progress.close()
+            self._step_import_progress.deleteLater()
+            self._step_import_progress = None
+        self.build_from_model_button.setEnabled(True)
+        self.centralWidget().setEnabled(True)
+        if self._step_import_process is not None:
+            self._step_import_process.deleteLater()
+        self._step_import_process = None
+        self._step_import_path = None
+
+    def _support_face_selected(self, face_index: int) -> None:
+        model = self._imported_step_model
+        if model is None:
+            return
+        try:
+            from palletlab.importers.step_model import coplanar_supports
+            supports = coplanar_supports(model, face_index)
+        except ValueError as exc:
+            QMessageBox.information(self, "Выбор опоры", str(exc))
+            self.statusBar().showMessage("Выберите плоскую горизонтальную нижнюю грань опоры.")
+            return
+        self._clear_model_supports()
+        self._model_supports = supports
+        self._model_reference_support_index = face_index
+        self._build_selected_model_pallet()
+
+    def _build_selected_model_pallet(self) -> None:
+        """Recalculate a STEP-driven pallet from the detected support faces."""
+        model = self._imported_step_model
+        if model is None or not self._model_supports or self._model_reference_support_index is None:
+            return
+        try:
+            from palletlab.importers.step_model import pallet_inputs_from_supports
+            rounding_step = self.rounding_buttons.checkedId()
+            length_input, width_input, placed_mesh, placed_edges = pallet_inputs_from_supports(
+                model,
+                self._model_supports,
+                length_beam_height=self.length_panel.height.value(),
+                length_beam_width=self.length_panel.width.value(),
+                width_beam_height=self.width_panel.height.value(),
+                width_beam_width=self.width_panel.width.value(),
+                length_margin_start=self.length_panel.margin_start.value(),
+                length_margin_end=self.length_panel.margin_end.value(),
+                width_margin_start=self.width_panel.margin_start.value(),
+                width_margin_end=self.width_panel.margin_end.value(),
+                round_pallet_size=rounding_step != 0,
+                rounding_step=rounding_step or 5,
+                reference_support_index=self._model_reference_support_index,
+            )
+        except ValueError as exc:
+            QMessageBox.information(self, "Построение по модели", str(exc))
+            self.statusBar().showMessage("Выберите корректные грани габарита и опоры.")
+            return
+        self.view.stage_step_model(placed_mesh, placed_edges)
+        result = self.controller.calculate(length_input, width_input, self.upper_layer())
+        if result is None:
+            # Keep the staged STEP actor and its picking callback alive: a
+            # non-support face can legitimately produce overlapping beams.
+            self.view.show_staged_step_model()
+            self.statusBar().showMessage("Поддон не построен. Выберите другую нижнюю грань опоры.")
+            return
+        # These values describe the just-detected supports.  Updating the
+        # display must not briefly schedule a manual rebuild or unhide the
+        # model-only form rows.
+        self.length_panel.apply_position_data(length_input, notify=False)
+        self.width_panel.apply_position_data(width_input, notify=False)
+        self.length_panel.set_model_driven_mode(length_input)
+        self.width_panel.set_model_driven_mode(width_input)
+        # ``apply_position_data`` intentionally notifies regular manual
+        # edits.  This calculation is already current, so prevent it from
+        # scheduling a second heavy VTK rebuild a moment later.
+        self.controller.stop_scheduled_recalculation()
+        self.view.commit_step_support_selection(
+            {face.index for face in self._model_supports}, self._model_reference_support_index
+        )
+        self._update_scene_info(result)
+        self.statusBar().showMessage(
+            f"Найдено опорных граней: {len(self._model_supports)}. Поддон построен под установкой."
+        )
+
+    def _clear_model_supports(self) -> None:
+        self._model_supports = ()
+        self._model_reference_support_index = None
+
+    def _toggle_model_visibility(self) -> None:
+        visible = self.view.toggle_step_model_visibility()
+        self.toggle_model_button.setText("Скрыть 3D модель" if visible else "Показать 3D модель")
 
     def export_to_solidworks(self) -> None:
         """Rebuild the visible pallet and export its exact current geometry."""
@@ -637,7 +910,21 @@ class MainWindow(QMainWindow):
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
+        if getattr(self, "_imported_step_model", None) is not None and getattr(self, "_model_supports", ()):
+            self.controller.stop_scheduled_recalculation()
+            self._set_stale(True)
+            self._model_rebuild_timer.start()
+            return
         self.controller.schedule_recalculation()
+
+    def _switch_model_pallet_to_manual_editing(self) -> None:
+        """Keep an imported model visible while manual beam edits take over."""
+        if not getattr(self, "_model_supports", ()):
+            return
+        self._model_rebuild_timer.stop()
+        self._clear_model_supports()
+        self.length_panel.set_model_driven_mode(None)
+        self.width_panel.set_model_driven_mode(None)
 
     def _layer_changed(self, *_args) -> None:
         self.controller.set_upper_layer(self.upper_layer())
@@ -746,9 +1033,14 @@ class MainWindow(QMainWindow):
             return
         axis, updated_input = update
         panel = self.length_panel if axis == "length" else self.width_panel
+        MainWindow._switch_model_pallet_to_manual_editing(self)
         panel.apply_position_data(updated_input)
         self.distance_editor.setVisible(False)
-        self.controller.recalculate_from_state()
+        result = self.controller.recalculate_from_state()
+        # Rebuilding the viewport removes the old pickable dimension actors.
+        # Keep the checked tool immediately usable by registering the new ones.
+        if result is not None and self.edit_distance_button.isChecked():
+            self._toggle_distance_editing(True)
         self.statusBar().showMessage("Расстояние обновлено. Выберите следующую размерную линию.")
 
     def _selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
@@ -766,11 +1058,15 @@ class MainWindow(QMainWindow):
         if updated_inputs is None:
             return
         deleted = sum(len(indices) for indices in self._selected_for_deletion.values())
+        MainWindow._switch_model_pallet_to_manual_editing(self)
         for axis, updated_input in updated_inputs.items():
             panel = self.length_panel if axis == "length" else self.width_panel
             panel.apply_position_data(updated_input)
-        self.delete_beam_button.setChecked(False)
-        self.controller.recalculate_from_state()
+        result = self.controller.recalculate_from_state()
+        # ``show_pallet`` recreates all beam actors, so restore deletion
+        # picking without forcing the user to toggle the tool off and on.
+        if result is not None and self.delete_beam_button.isChecked():
+            self._toggle_deletion_mode(True)
         self.statusBar().showMessage(f"Удалено брусьев: {deleted}.")
 
     def _start_insertion(self, slot: InsertionSlot) -> None:
@@ -801,11 +1097,21 @@ class MainWindow(QMainWindow):
             return
         axis, updated_input = update
         panel = self.length_panel if axis == "length" else self.width_panel
+        MainWindow._switch_model_pallet_to_manual_editing(self)
         panel.apply_position_data(updated_input)
         self.insertion_editor.setVisible(False)
-        self.controller.recalculate_from_state()
+        result = self.controller.recalculate_from_state()
+        # The viewport rebuild removes insertion markers together with the old
+        # beams. Re-register the markers while the tool remains checked.
+        if result is not None and self.add_beam_button.isChecked():
+            self._toggle_insertion_mode(True)
 
     def keyPressEvent(self, event) -> None:
+        if (event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.delete_beam_button.isChecked()
+                and any(self._selected_for_deletion.values())):
+            self._confirm_deletion()
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape and (self.add_beam_button.isChecked() or self.delete_beam_button.isChecked()
                                                or self.edit_distance_button.isChecked()):
             if self.add_beam_button.isChecked():
@@ -819,6 +1125,10 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def eventFilter(self, watched, event) -> bool:
+        if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and self.delete_beam_button.isChecked() and any(self._selected_for_deletion.values())):
+            self._confirm_deletion()
+            return True
         if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
                 and self.add_beam_button.isChecked() and self._pending_insertion is None):
             self.add_beam_button.setChecked(False)
@@ -888,6 +1198,8 @@ class MainWindow(QMainWindow):
         """Reflect an opened configuration in form controls without queuing rebuilds."""
         if state.length_input is None or state.width_input is None:
             return
+        self.length_panel.set_model_driven_mode(None)
+        self.width_panel.set_model_driven_mode(None)
         blockers = [QSignalBlocker(widget) for widget in (
             self.length_panel, self.width_panel, self.width_upper, self.length_upper,
             self.round_to_50, self.round_to_5, self.no_rounding, self.show_length_gaps,
@@ -908,6 +1220,13 @@ class MainWindow(QMainWindow):
         self._set_camera(camera_index)
 
     def reset_example(self) -> None:
+        self.length_panel.set_model_driven_mode(None)
+        self.width_panel.set_model_driven_mode(None)
+        self._imported_step_model = None
+        self.view.clear_step_model()
+        self.toggle_model_button.setEnabled(False)
+        self.toggle_model_button.setText("Скрыть 3D модель")
+        self.rebuild_from_model_button.setEnabled(False)
         self.length_panel.reset_example("1070 460 1300 499", 123, 552)
         self.width_panel.reset_example("560 720", 277, 179)
         self.width_upper.setChecked(True)

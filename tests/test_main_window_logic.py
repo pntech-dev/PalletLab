@@ -164,7 +164,7 @@ def test_confirm_deletion_updates_selected_axes_then_recalculates():
 
     assert length_panel.applied_data is not None
     assert length_panel.applied_data is LENGTH_INPUT
-    assert window.delete_beam_button.checked is False
+    assert window.delete_beam_button.checked is True
     assert recalculated == [True]
     assert status_bar.messages[-1] == "Удалено брусьев: 2."
 

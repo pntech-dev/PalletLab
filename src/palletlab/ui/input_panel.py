@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QLineEdit, QVBoxLayout, QWidget
 
@@ -50,6 +52,8 @@ class DirectionInputPanel(QGroupBox):
         self.margin_start = self._spin(100.0)
         self.margin_end = self._spin(100.0)
         self._support_positions_override: tuple[float, ...] | None = None
+        self._model_input: DirectionInput | None = None
+        self._model_offset_rows_removed = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 20, 16, 16)
         layout.setSpacing(10)
@@ -57,19 +61,21 @@ class DirectionInputPanel(QGroupBox):
         hint.setObjectName("sectionHint")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        form = QFormLayout()
-        form.setSpacing(8)
-        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        form.addRow("Сечение · высота × ширина", self.section)
-        form.addRow("Высота", self.height)
-        form.addRow("Ширина", self.width)
-        form.addRow("Центры соседних опор", self.distances)
-        form.addRow("Габарит → первая опора", self.first)
-        form.addRow("Последняя опора → габарит", self.last)
-        form.addRow("Отступ в начале", self.margin_start)
-        form.addRow("Отступ в конце", self.margin_end)
-        layout.addLayout(form)
+        self._form = QFormLayout()
+        self._form.setSpacing(8)
+        self._form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        self._form.addRow("Сечение · высота × ширина", self.section)
+        self._form.addRow("Высота", self.height)
+        self._form.addRow("Ширина", self.width)
+        self._form.addRow("Центры соседних опор", self.distances)
+        self._first_label = QLabel("Габарит → первая опора")
+        self._last_label = QLabel("Последняя опора → габарит")
+        self._form.addRow(self._first_label, self.first)
+        self._form.addRow(self._last_label, self.last)
+        self._form.addRow("Отступ в начале", self.margin_start)
+        self._form.addRow("Отступ в конце", self.margin_end)
+        layout.addLayout(self._form)
         self.section.currentTextChanged.connect(self._section_changed)
         for field in (self.height, self.width, self.first, self.last, self.margin_start, self.margin_end):
             field.valueChanged.connect(self._position_data_changed)
@@ -97,11 +103,23 @@ class DirectionInputPanel(QGroupBox):
         self.changed.emit()
 
     def _position_data_changed(self, *_args) -> None:
-        """Manual edits resume the normal distances-based calculation."""
+        """Notify the owner about an editable pallet parameter change."""
+        if self._model_input is not None:
+            # The host rebuilds a model-driven pallet from its detected support
+            # faces.  Do not discard those support coordinates merely because a
+            # user changes a beam section or an outer margin.
+            self.changed.emit()
+            return
         self._support_positions_override = None
         self.changed.emit()
 
     def values(self, round_pallet_size: bool = False, rounding_step: int = 5) -> DirectionInput:
+        if self._model_input is not None:
+            return replace(
+                self._model_input,
+                round_pallet_size=round_pallet_size,
+                rounding_step=rounding_step,
+            )
         raw = self.distances.text().strip().replace(",", ".")
         try:
             distances = tuple(float(token) for token in raw.split()) if raw else ()
@@ -122,7 +140,7 @@ class DirectionInputPanel(QGroupBox):
             support_positions=support_positions,
         )
 
-    def apply_position_data(self, data: DirectionInput) -> None:
+    def apply_position_data(self, data: DirectionInput, *, notify: bool = True) -> None:
         """Update only the position fields after an interactive 3D insertion."""
         fields = (self.distances, self.first, self.last, self.margin_start, self.margin_end)
         for field in fields:
@@ -135,7 +153,36 @@ class DirectionInputPanel(QGroupBox):
         for field in fields:
             field.blockSignals(False)
         self._support_positions_override = data.support_positions
-        self.changed.emit()
+        if notify:
+            self.changed.emit()
+
+    def set_model_driven_mode(self, data: DirectionInput | None, *, hide_model_offsets: bool = False) -> None:
+        """Show or hide geometry-derived offsets for the STEP-model workflow."""
+        self._model_input = data
+        locked = data is not None or hide_model_offsets
+        if locked and not self._model_offset_rows_removed:
+            # Hiding child widgets leaves QFormLayout's row spacing behind.
+            # Remove both rows so the adjacent controls use the regular gap.
+            self._form.takeRow(self.last)
+            self._form.takeRow(self.first)
+            self._first_label.hide()
+            self._last_label.hide()
+            self.first.hide()
+            self.last.hide()
+            self._model_offset_rows_removed = True
+        elif not locked and self._model_offset_rows_removed:
+            self._form.insertRow(4, self._first_label, self.first)
+            self._form.insertRow(5, self._last_label, self.last)
+            self._first_label.show()
+            self._last_label.show()
+            self.first.show()
+            self.last.show()
+            self._model_offset_rows_removed = False
+        if locked:
+            for field in (self.first, self.last):
+                field.blockSignals(True)
+                field.setValue(0.0)
+                field.blockSignals(False)
 
     def reset_example(self, distances: str, first: float, last: float) -> None:
         self._support_positions_override = None

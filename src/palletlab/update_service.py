@@ -10,7 +10,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-RELEASES_URL = "https://api.github.com/repos/pntech-dev/PalleteLab/releases"
+RELEASES_URL = "https://api.github.com/repos/pntech-dev/PalletLab/releases"
 VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)(-beta)?$")
 
 
