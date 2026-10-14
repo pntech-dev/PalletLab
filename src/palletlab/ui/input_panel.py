@@ -114,17 +114,28 @@ class DirectionInputPanel(QGroupBox):
         self.changed.emit()
 
     def values(self, round_pallet_size: bool = False, rounding_step: int = 5) -> DirectionInput:
-        if self._model_input is not None:
-            return replace(
-                self._model_input,
-                round_pallet_size=round_pallet_size,
-                rounding_step=rounding_step,
-            )
         raw = self.distances.text().strip().replace(",", ".")
         try:
             distances = tuple(float(token) for token in raw.split()) if raw else ()
         except ValueError as exc:
             raise CalculationError("Расстояния между опорами должны быть числами через пробел.") from exc
+        if self._model_input is not None:
+            # The hidden distances from the pallet edge to the first/last
+            # support are still obtained from the selected model faces.  The
+            # visible values, however, remain editable in the layer editor.
+            # Keeping ``support_positions`` here would make
+            # ``calculate_direction`` ignore those edits altogether.
+            return replace(
+                self._model_input,
+                beam_height=self.height.value(),
+                beam_width=self.width.value(),
+                support_distances=distances,
+                margin_start=self.margin_start.value(),
+                margin_end=self.margin_end.value(),
+                support_positions=None,
+                round_pallet_size=round_pallet_size,
+                rounding_step=rounding_step,
+            )
         support_positions = self._support_positions_override
         # With no inter-support distances, zero values on both sides mean the
         # user intentionally removed every internal support.  Keep only the

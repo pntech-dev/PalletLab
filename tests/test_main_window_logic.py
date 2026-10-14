@@ -10,8 +10,10 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 from palletlab.core.calculator import build_pallet, calculate_direction, insertion_slots
-from palletlab.core.models import DirectionInput
+from palletlab.core.models import DirectionInput, LayerInput
 from palletlab.core.project_state import ProjectState
 from palletlab.ui.main_window import MainWindow
 
@@ -74,6 +76,27 @@ def test_auto_recalculation_is_delegated_to_the_controller():
     MainWindow._schedule_recalculation(window)
 
     assert scheduled == [True, True]
+
+
+def test_layer_edit_synchronizes_the_parallel_layer_envelope():
+    changed = replace(LENGTH_INPUT, margin_end=LENGTH_INPUT.margin_end + 250)
+    peer_panel = _Panel(LENGTH_INPUT)
+    window = SimpleNamespace(
+        _layer_envelope_source="top",
+        _layer_panels={"length": peer_panel},
+    )
+
+    layers = MainWindow._synchronize_layer_envelopes(window, [
+        LayerInput("length", "length", LENGTH_INPUT),
+        LayerInput("width", "width", WIDTH_INPUT),
+        LayerInput("top", "length", changed),
+    ])
+
+    length_layer = next(layer for layer in layers if layer.layer_id == "length")
+    assert calculate_direction(length_layer.direction).raw_pallet_size == pytest.approx(
+        calculate_direction(changed).raw_pallet_size
+    )
+    assert peer_panel.applied_data == length_layer.direction
 
 
 def test_calculate_rebuilds_model_from_current_panels():

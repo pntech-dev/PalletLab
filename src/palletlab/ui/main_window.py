@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -205,6 +206,7 @@ class MainWindow(QMainWindow):
         self._layer_rebuild_timer.setSingleShot(True)
         self._layer_rebuild_timer.setInterval(300)
         self._layer_rebuild_timer.timeout.connect(self._calculate_layer_stack)
+        self._layer_envelope_source: str | None = None
         self._manual_supports: list[tuple[str, int, str]] = []
         self.width_upper = QPushButton("Вдоль ширины")
         self.length_upper = QPushButton("Вдоль длины")
@@ -769,14 +771,47 @@ class MainWindow(QMainWindow):
         self._layer_rebuild_timer.stop()
         try:
             layers = self._read_layer_inputs()
+            layers = self._synchronize_layer_envelopes(layers)
         except CalculationError as exc:
             self._set_stale(True)
             self._handle_calculation_error(exc, show_error)
             return None
+        finally:
+            # A later recalculation caused by reordering, loading or a tool
+            # action must not reuse an old field-edit source.
+            self._layer_envelope_source = None
         result = self.controller.calculate_layers(layers, show_error=show_error)
         if result is not None:
             self._restore_active_tool_after_rebuild()
         return result
+
+    def _synchronize_layer_envelopes(self, layers: list[LayerInput]) -> list[LayerInput]:
+        """Keep same-axis layers on the envelope changed in the editor.
+
+        Beam grids in parallel layers may differ, but their common pallet
+        dimension may not.  When a user edits one grid, retain every other
+        grid and adjust only its dependent end margin by the envelope delta.
+        """
+        source_id = self._layer_envelope_source
+        source = next((layer for layer in layers if layer.layer_id == source_id), None)
+        if source is None:
+            return layers
+        target_size = calculate_direction(source.direction).raw_pallet_size
+        synchronized: list[LayerInput] = []
+        for layer in layers:
+            if layer.axis != source.axis or layer.layer_id == source.layer_id:
+                synchronized.append(layer)
+                continue
+            current_size = calculate_direction(layer.direction).raw_pallet_size
+            direction = replace(layer.direction, margin_end=layer.direction.margin_end + target_size - current_size)
+            # Validate before applying it to the visible form; otherwise a
+            # failed edit could leave the UI and project state out of sync.
+            calculate_direction(direction)
+            panel = self._layer_panels.get(layer.layer_id)
+            if panel is not None:
+                MainWindow._apply_interactive_position_update(self, panel, direction)
+            synchronized.append(LayerInput(layer.layer_id, layer.axis, direction))
+        return synchronized
 
     def _restore_active_tool_after_rebuild(self) -> None:
         """Re-register viewport affordances cleared with the old pallet actors."""
@@ -1227,6 +1262,12 @@ class MainWindow(QMainWindow):
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
+        sender_method = getattr(self, "sender", None)
+        sender = sender_method() if callable(sender_method) else None
+        for layer_id, panel in getattr(self, "_layer_panels", {}).items():
+            if sender is panel:
+                self._layer_envelope_source = layer_id
+                break
         if len(getattr(self, "_layer_order", ())) > 2:
             self._set_stale(True)
             self._layer_rebuild_timer.start()
