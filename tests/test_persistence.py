@@ -5,7 +5,7 @@ import json
 import pytest
 
 from palletlab.controllers.pallet_controller import PalletController
-from palletlab.core.models import BeamSection, DirectionInput
+from palletlab.core.models import BeamSection, DirectionInput, LayerInput
 from palletlab.core.persistence import ProjectPersistenceError, load_project, project_from_dict, save_project
 from palletlab.core.project_state import ProjectState
 
@@ -42,12 +42,51 @@ def test_project_json_round_trip_preserves_configuration_not_transient_state(tmp
     assert restored.active_tool == "none"
     assert restored.selected_for_deletion == {"length": set(), "width": set()}
     assert restored.beam_sections == {("length", 2): BeamSection(100, 75)}
-    assert json.loads(path.read_text(encoding="utf-8"))["format_version"] == 2
+    assert restored.layers == [
+        LayerInput("width", "width", state.width_input), LayerInput("length", "length", state.length_input)
+    ]
+    assert restored.layer_sections == {("length", 2): BeamSection(100, 75)}
+    assert json.loads(path.read_text(encoding="utf-8"))["format_version"] == 3
 
 
 def test_project_json_rejects_unknown_or_invalid_format():
     with pytest.raises(ProjectPersistenceError):
         project_from_dict({"format_version": 99})
+
+
+def test_version_two_project_is_migrated_to_an_ordered_layer_stack(tmp_path):
+    state = _state()
+    path = tmp_path / "project.json"
+    save_project(path, state)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["format_version"] = 2
+    raw["pallet"].pop("layers")
+    raw["pallet"].pop("layer_sections")
+    raw["pallet"].pop("multi_layer_mode")
+
+    restored = project_from_dict(raw)
+
+    assert [layer.layer_id for layer in restored.layers] == ["width", "length"]
+    assert not restored.multi_layer_mode
+
+
+def test_multilayer_stack_and_its_sections_round_trip(tmp_path):
+    state = _state()
+    state.layers = [
+        LayerInput("bottom", "length", state.length_input),
+        LayerInput("middle", "width", state.width_input),
+        LayerInput("top", "length", state.length_input),
+    ]
+    state.layer_sections[("middle", 1)] = BeamSection(100, 75)
+    state.multi_layer_mode = True
+    path = tmp_path / "project.json"
+
+    save_project(path, state)
+    restored = load_project(path)
+
+    assert [layer.layer_id for layer in restored.layers] == ["bottom", "middle", "top"]
+    assert restored.layer_sections == {("middle", 1): BeamSection(100, 75)}
+    assert restored.multi_layer_mode
 
 
 class _Signal:

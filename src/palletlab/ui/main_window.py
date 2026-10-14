@@ -13,10 +13,10 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, Q
                              QMessageBox, QPushButton, QDoubleSpinBox, QProgressDialog, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.controllers.pallet_controller import PalletController
-from palletlab.core.calculator import insertion_slots
+from palletlab.core.calculator import calculate_direction, insertion_slots_for_direction
 from palletlab.core.formatting import format_mm
 from palletlab.core.materials import MATERIALS, get_material, pallet_mass_kg
-from palletlab.core.models import BeamSection, InsertionSlot, PalletAxis
+from palletlab.core.models import BeamSection, InsertionSlot, LayerInput, PalletAxis
 from palletlab.core.project_state import ProjectState
 from palletlab.core.validation import CalculationError
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
@@ -92,6 +92,31 @@ class BeamSectionDialog(QDialog):
         return BeamSection(self.height.value(), self.width.value())
 
 
+class ManualBeamDialog(BeamSectionDialog):
+    """Parameters of one beam placed between two selected supports."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Новый брус")
+        self.layout().insertWidget(1, QLabel("Расстояние задаёт положение бруса вдоль выбранных опор."))
+        self.reference = QComboBox()
+        self.reference.addItem("От базовой точки (0)", False)
+        self.reference.addItem("От выбранной грани", True)
+        self.distance = QDoubleSpinBox()
+        self.distance.setRange(-1_000_000, 1_000_000)
+        self.distance.setDecimals(3)
+        self.distance.setSuffix(" мм")
+        self.pick_reference = QPushButton("Выбрать грань объекта")
+        self.pick_reference.setVisible(False)
+        form = QFormLayout()
+        form.addRow("Точка отсчёта", self.reference)
+        form.addRow("Расстояние", self.distance)
+        form.addRow("", self.pick_reference)
+        self.layout().insertLayout(2, form)
+        self.reference.currentIndexChanged.connect(lambda: self.pick_reference.setVisible(bool(self.reference.currentData())))
+        self.pick_reference.clicked.connect(lambda: self.done(2))
+
+
 class MainWindow(QMainWindow):
     # Transitional aliases keep the existing event handlers stable while their
     # data is now owned by ProjectState. They will disappear with the
@@ -129,19 +154,19 @@ class MainWindow(QMainWindow):
         return self.state.pending_distance
 
     @_pending_distance.setter
-    def _pending_distance(self, value: tuple[PalletAxis, int] | None) -> None:
+    def _pending_distance(self, value: tuple[str, int] | None) -> None:
         self.state.pending_distance = value
 
     @property
-    def _selected_for_deletion(self) -> dict[PalletAxis, set[int]]:
+    def _selected_for_deletion(self) -> dict[str, set[int]]:
         return self.state.selected_for_deletion
 
     @_selected_for_deletion.setter
-    def _selected_for_deletion(self, value: dict[PalletAxis, set[int]]) -> None:
+    def _selected_for_deletion(self, value: dict[str, set[int]]) -> None:
         self.state.selected_for_deletion = value
 
     @property
-    def _selected_for_section(self) -> dict[PalletAxis, set[int]]:
+    def _selected_for_section(self) -> dict[str, set[int]]:
         return self.state.selected_for_section
 
     def __init__(self) -> None:
@@ -166,6 +191,21 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 650)
         self.length_panel = DirectionInputPanel("01  Длина", "Центры опор задаются по оси X. Эти координаты определяют поперечные брусья.", "1070 460 1300 499", "123", "552")
         self.width_panel = DirectionInputPanel("02  Ширина", "Центры опор задаются по оси Y. Эти координаты определяют продольные брусья.", "560 720", "277", "179")
+        self.top_length_panel = DirectionInputPanel("03  Длина", "Центры опор задаются по оси X. Эти координаты определяют поперечные брусья.", "1070 460 1300 499", "123", "552")
+        self._layer_order = ["length", "width", "layer-1"]
+        self._layer_panels: dict[str, DirectionInputPanel] = {
+            "length": self.length_panel, "width": self.width_panel, "layer-1": self.top_length_panel,
+        }
+        self._layer_axes: dict[str, PalletAxis] = {"length": "length", "width": "width", "layer-1": "length"}
+        # Reordering cards must never destroy a reusable DirectionInputPanel.
+        # Keep detached wrappers alive for the window lifetime; there are only
+        # a few of them and this avoids Qt deleting a child queued for reuse.
+        self._retired_layer_cards: list[QFrame] = []
+        self._layer_rebuild_timer = QTimer(self)
+        self._layer_rebuild_timer.setSingleShot(True)
+        self._layer_rebuild_timer.setInterval(300)
+        self._layer_rebuild_timer.timeout.connect(self._calculate_layer_stack)
+        self._manual_supports: list[tuple[str, int, str]] = []
         self.width_upper = QPushButton("Вдоль ширины")
         self.length_upper = QPushButton("Вдоль длины")
         self.layer_buttons = QButtonGroup(self)
@@ -225,11 +265,15 @@ class MainWindow(QMainWindow):
         note.setObjectName("paneHint")
         note.setWordWrap(True)
         controls_layout.addWidget(note)
-        controls_layout.addWidget(self.length_panel)
-        controls_layout.addWidget(self.width_panel)
-        layer_card = QFrame()
-        layer_card.setObjectName("layerCard")
-        layer_layout = QVBoxLayout(layer_card)
+        self.layer_stack_card = QFrame()
+        self.layer_stack_card.setObjectName("layerStackCard")
+        self.layer_stack_layout = QVBoxLayout(self.layer_stack_card)
+        self.layer_stack_layout.setContentsMargins(0, 0, 0, 0)
+        self.layer_stack_layout.setSpacing(10)
+        controls_layout.addWidget(self.layer_stack_card)
+        self.layer_card = QFrame()
+        self.layer_card.setObjectName("layerCard")
+        layer_layout = QVBoxLayout(self.layer_card)
         layer_layout.setContentsMargins(16, 14, 16, 14)
         layer_layout.addWidget(QLabel("Верхний слой"))
         layer_hint = QLabel("Выберите, какая группа брусьев лежит сверху.")
@@ -240,7 +284,7 @@ class MainWindow(QMainWindow):
         choices.addWidget(self.width_upper)
         choices.addWidget(self.length_upper)
         layer_layout.addLayout(choices)
-        controls_layout.addWidget(layer_card)
+        controls_layout.addWidget(self.layer_card)
         controls_layout.addStretch()
         scroll = QScrollArea()
         scroll.setObjectName("parametersScroll")
@@ -397,7 +441,7 @@ class MainWindow(QMainWindow):
         distance_layout.setSpacing(6)
         distance_layout.addWidget(QLabel("Новое расстояние:"))
         self.distance_value = InsertionGapSpinBox()
-        self.distance_value.setRange(0, 1_000_000)
+        self.distance_value.setRange(-1_000_000, 1_000_000)
         self.distance_value.setDecimals(2)
         self.distance_value.setSuffix(" мм")
         self.distance_value.setMinimumWidth(120)
@@ -426,8 +470,10 @@ class MainWindow(QMainWindow):
         splitter.setSizes([420, 980])
         root_layout.addWidget(splitter, 1)
         self.setCentralWidget(root)
+        self._rebuild_layer_cards()
         self.length_panel.changed.connect(self._schedule_recalculation)
         self.width_panel.changed.connect(self._schedule_recalculation)
+        self.top_length_panel.changed.connect(self._schedule_recalculation)
         self.layer_buttons.buttonClicked.connect(self._layer_changed)
         self.rounding_buttons.buttonClicked.connect(self._rounding_changed)
         self.show_length_gaps.toggled.connect(self._refresh_dimension_annotations)
@@ -438,6 +484,11 @@ class MainWindow(QMainWindow):
         self.edit_distance_button.installEventFilter(self)
         self.change_section_button.installEventFilter(self)
         self.view.installEventFilter(self)
+        # The editor of QDoubleSpinBox is a child QLineEdit and receives key
+        # events before the spin box itself on some Qt styles.  Watch both so
+        # Enter always commits a chosen insertion slot.
+        self.insertion_gap.installEventFilter(self)
+        self.insertion_gap.lineEdit().installEventFilter(self)
 
     def _header(self) -> QFrame:
         header = QFrame()
@@ -572,6 +623,175 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Параметры изменены — модель требует пересчёта.")
         else:
             self.statusBar().showMessage("Расчёт актуален.")
+
+    @staticmethod
+    def _layer_description(axis: PalletAxis) -> str:
+        return (
+            "Центры брусьев задаются по оси X. Брусья слоя идут поперёк ширины."
+            if axis == "length" else
+            "Центры брусьев задаются по оси Y. Брусья слоя идут вдоль длины."
+        )
+
+    def _rebuild_layer_cards(self) -> None:
+        """Render the ordered layer stack while retaining each panel's values."""
+        while self.layer_stack_layout.count():
+            item = self.layer_stack_layout.takeAt(0)
+            card = item.widget()
+            if card is not None:
+                # The input panel is reused in the freshly ordered card.  Qt
+                # destroys child widgets with their old parent unless it is
+                # explicitly detached first.
+                panel = card.findChild(DirectionInputPanel)
+                if panel is not None:
+                    panel.setParent(None)
+                card.hide()
+                card.setParent(None)
+                self._retired_layer_cards.append(card)
+        for position, layer_id in enumerate(self._layer_order):
+            axis = self._layer_axes[layer_id]
+            panel = self._layer_panels[layer_id]
+            panel.setTitle(f"{position + 1:02d}  Слой · {'длина' if axis == 'length' else 'ширина'}")
+            card = QFrame()
+            card.setObjectName("layerCard")
+            layout = QVBoxLayout(card)
+            layout.setContentsMargins(8, 6, 8, 8)
+            header = QHBoxLayout()
+            direction = "по длине" if axis == "length" else "по ширине"
+            header.addWidget(QLabel(f"Слой {position + 1} · {direction}"), 1)
+            up = QPushButton("↑")
+            up.setToolTip("Поднять слой")
+            up.setEnabled(position > 0)
+            up.clicked.connect(lambda _checked=False, identifier=layer_id: self._move_layer(identifier, -1))
+            header.addWidget(up)
+            down = QPushButton("↓")
+            down.setToolTip("Опустить слой")
+            down.setEnabled(position < len(self._layer_order) - 1)
+            down.clicked.connect(lambda _checked=False, identifier=layer_id: self._move_layer(identifier, 1))
+            header.addWidget(down)
+            remove = QPushButton("×")
+            remove.setToolTip("Удалить слой")
+            remove.setEnabled(len(self._layer_order) > 2)
+            remove.clicked.connect(lambda _checked=False, identifier=layer_id: self._remove_layer(identifier))
+            header.addWidget(remove)
+            layout.addLayout(header)
+            layout.addWidget(panel)
+            self.layer_stack_layout.addWidget(card)
+        add = QPushButton("＋ Добавить слой")
+        add.setObjectName("addLayerButton")
+        add.clicked.connect(self._add_layer)
+        self.layer_stack_layout.addWidget(add)
+        self._sync_layer_mode()
+
+    def _add_layer(self) -> None:
+        self._layer_rebuild_timer.stop()
+        axis: PalletAxis = "length" if self._layer_axes[self._layer_order[-1]] == "width" else "width"
+        number = 1
+        while f"layer-{number}" in self._layer_panels:
+            number += 1
+        layer_id = f"layer-{number}"
+        source_id = next((identifier for identifier in self._layer_order if self._layer_axes[identifier] == axis), self._layer_order[-1])
+        source = self._layer_panels[source_id]
+        panel = DirectionInputPanel("", self._layer_description(axis), "", "100", "100")
+        try:
+            panel.apply_position_data(source.values(self.rounding_buttons.checkedId() != 0, self.rounding_buttons.checkedId() or 5), notify=False)
+            panel.section.setCurrentText(source.section.currentText())
+        except CalculationError:
+            pass
+        panel.changed.connect(self._schedule_recalculation)
+        self._layer_order.append(layer_id)
+        self._layer_axes[layer_id] = axis
+        self._layer_panels[layer_id] = panel
+        self._rebuild_layer_cards()
+        self._calculate_layer_stack()
+
+    def _remove_layer(self, layer_id: str) -> None:
+        if len(self._layer_order) <= 2:
+            return
+        self._layer_rebuild_timer.stop()
+        remaining = [identifier for identifier in self._layer_order if identifier != layer_id]
+        if not any(self._layer_axes[identifier] == "length" for identifier in remaining) or not any(
+            self._layer_axes[identifier] == "width" for identifier in remaining
+        ):
+            self.statusBar().showMessage("В поддоне должен остаться хотя бы один слой по каждой оси.")
+            return
+        panel = self._layer_panels.pop(layer_id)
+        panel.setParent(None)
+        panel.hide()
+        self._layer_axes.pop(layer_id)
+        self._layer_order = remaining
+        self.state.layer_sections = {
+            key: section for key, section in self.state.layer_sections.items() if key[0] != layer_id
+        }
+        self._rebuild_layer_cards()
+        self._calculate_layer_stack()
+
+    def _move_layer(self, layer_id: str, shift: int) -> None:
+        current = self._layer_order.index(layer_id)
+        target = current + shift
+        if not 0 <= target < len(self._layer_order):
+            return
+        self._layer_rebuild_timer.stop()
+        self._layer_order[current], self._layer_order[target] = self._layer_order[target], self._layer_order[current]
+        self._rebuild_layer_cards()
+        self._calculate_layer_stack()
+
+    def _read_layer_inputs(self) -> list[LayerInput]:
+        rounding_step = self.rounding_buttons.checkedId()
+        return [
+            LayerInput(layer_id, self._layer_axes[layer_id], self._layer_panels[layer_id].values(
+                rounding_step != 0, rounding_step or 5,
+            ))
+            for layer_id in self._layer_order
+        ]
+
+    @staticmethod
+    def _panel_for_layer(owner, layer_id: str) -> DirectionInputPanel:
+        """Resolve a layer editor and retain compatibility with the two-panel UI."""
+        panel = getattr(owner, "_layer_panels", {}).get(layer_id)
+        if panel is not None:
+            return panel
+        return owner.length_panel if layer_id == "length" else owner.width_panel
+
+    @staticmethod
+    def _apply_interactive_position_update(owner, panel: DirectionInputPanel, data) -> None:
+        """Synchronise form fields without queuing a second pallet rebuild."""
+        timer = getattr(owner, "_layer_rebuild_timer", None)
+        if timer is not None:
+            timer.stop()
+        try:
+            panel.apply_position_data(data, notify=False)
+        except TypeError:
+            # Lightweight non-Qt test doubles intentionally expose the old
+            # single-argument API.
+            panel.apply_position_data(data)
+
+    def _calculate_layer_stack(self, *, show_error: bool = False):
+        self._layer_rebuild_timer.stop()
+        try:
+            layers = self._read_layer_inputs()
+        except CalculationError as exc:
+            self._set_stale(True)
+            self._handle_calculation_error(exc, show_error)
+            return None
+        result = self.controller.calculate_layers(layers, show_error=show_error)
+        if result is not None:
+            self._restore_active_tool_after_rebuild()
+        return result
+
+    def _restore_active_tool_after_rebuild(self) -> None:
+        """Re-register viewport affordances cleared with the old pallet actors."""
+        if self.add_beam_button.isChecked():
+            self._toggle_insertion_mode(True)
+        elif self.delete_beam_button.isChecked():
+            self._toggle_deletion_mode(True)
+        elif self.edit_distance_button.isChecked():
+            self._toggle_distance_editing(True)
+        elif self.change_section_button.isChecked():
+            self._toggle_section_editing(True)
+
+    def _sync_layer_mode(self) -> None:
+        multilayer = len(self._layer_order) > 2
+        self.layer_card.setVisible(not multilayer)
 
     def build_from_model(self) -> None:
         """Start the STEP-driven workflow and ask for one horizontal support face."""
@@ -1007,6 +1227,10 @@ class MainWindow(QMainWindow):
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
+        if len(getattr(self, "_layer_order", ())) > 2:
+            self._set_stale(True)
+            self._layer_rebuild_timer.start()
+            return
         if getattr(self, "_imported_step_model", None) is not None and getattr(self, "_model_supports", ()):
             self.controller.stop_scheduled_recalculation()
             self._set_stale(True)
@@ -1054,6 +1278,7 @@ class MainWindow(QMainWindow):
             self.controller.deactivate_tool()
             self._cancel_pending_insertion()
             self.view.disable_insertion_mode()
+            self.view.disable_support_face_selection()
             return
         if self.delete_beam_button.isChecked():
             self.delete_beam_button.setChecked(False)
@@ -1064,14 +1289,76 @@ class MainWindow(QMainWindow):
         if self._last_result is None:
             self.add_beam_button.setChecked(False)
             return
-        slots = insertion_slots(self._last_result, "length") + insertion_slots(self._last_result, "width")
-        if not slots:
-            self.statusBar().showMessage("Нет промежутков, в которые помещается ещё один брус.")
-            self.add_beam_button.setChecked(False)
-            return
-        self.controller.enable_insertion_mode(slots, self._start_insertion)
+        self._manual_supports.clear()
+        self.view.enable_support_face_selection(self._manual_support_selected)
         self.controller.activate_tool("insertion")
-        self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
+        self.statusBar().showMessage("Выберите верхние или нижние грани двух параллельных брусьев.")
+
+    def _manual_support_selected(self, layer_id: str, index: int, face: str) -> None:
+        key = (layer_id, index, face)
+        if key in self._manual_supports:
+            return
+        self._manual_supports.append(key)
+        if len(self._manual_supports) == 1:
+            self.statusBar().showMessage("Выберите такую же (верхнюю или нижнюю) грань второй параллельной опоры.")
+            return
+        first, second = self._manual_supports
+        beams = {(beam.layer_id, beam.layer_index): beam for beam in self._last_result.beams_3d}
+        first_key, second_key = first[:2], second[:2]
+        if (first_key not in beams or second_key not in beams or first[2] != second[2]
+                or beams[first_key].orientation != beams[second_key].orientation):
+            self._manual_supports.clear()
+            self.statusBar().showMessage("Выберите одинаковые верхние или нижние грани двух параллельных брусьев.")
+            return
+        self.view.disable_support_face_selection()
+        self._open_manual_beam_dialog(first, second)
+
+    def _open_manual_beam_dialog(
+        self, first: tuple[str, int, str], second: tuple[str, int, str],
+        reference: tuple[str, int, str] | None = None, dialog: ManualBeamDialog | None = None,
+    ) -> None:
+        dialog = dialog or ManualBeamDialog(self)
+        if reference is not None:
+            dialog.pick_reference.setText(f"Грань выбрана: {reference[0]} · брус {reference[1] + 1}")
+        answer = dialog.exec_()
+        if answer == 2:
+            self.statusBar().showMessage("Выберите грань объекта для точки отсчёта.")
+            self.view.enable_beam_face_selection(
+                lambda layer_id, index, face: self._manual_reference_selected(first, second, (layer_id, index, face), dialog)
+            )
+            return
+        if answer == QDialog.Accepted:
+            selected_reference = reference[:2] if reference is not None and dialog.reference.currentData() else None
+            result = self.controller.add_manual_beam(
+                first[:2], second[:2], dialog.distance.value(), dialog.section(),
+                reference_support=selected_reference,
+                reference_face=reference[2] if selected_reference is not None else None,
+                first_face=first[2], second_face=second[2],
+            )
+            if result is not None:
+                self.statusBar().showMessage("Брус добавлен. Выберите две следующие опоры.")
+        self._manual_supports.clear()
+        if self.add_beam_button.isChecked():
+            self.view.enable_support_face_selection(self._manual_support_selected)
+
+    def _manual_reference_selected(
+        self, first: tuple[str, int, str], second: tuple[str, int, str], reference: tuple[str, int, str], dialog: ManualBeamDialog,
+    ) -> None:
+        beams = {(beam.layer_id, beam.layer_index): beam for beam in self._last_result.beams_3d}
+        support = beams.get(first[:2])
+        if support is None:
+            self._manual_supports.clear()
+            return
+        required_faces = ("x_min", "x_max") if support.orientation == "length" else ("y_min", "y_max")
+        if reference[2] not in required_faces:
+            axis = "X" if support.orientation == "length" else "Y"
+            self.statusBar().showMessage(f"Выберите боковую грань, перпендикулярную оси {axis}.")
+            self.view.enable_beam_face_selection(
+                lambda layer_id, index, face: self._manual_reference_selected(first, second, (layer_id, index, face), dialog)
+            )
+            return
+        self.view.disable_support_face_selection()
+        self._open_manual_beam_dialog(first, second, reference, dialog)
 
     def _toggle_deletion_mode(self, enabled: bool) -> None:
         if not enabled:
@@ -1135,8 +1422,8 @@ class MainWindow(QMainWindow):
         self.controller.activate_tool("section_editing")
         self.statusBar().showMessage("Выберите один или несколько брусьев, затем нажмите «Изменить…».")
 
-    def _start_distance_edit(self, axis: PalletAxis, beam_index: int, value: float) -> None:
-        self.controller.begin_distance_edit(axis, beam_index)
+    def _start_distance_edit(self, layer_id: str, beam_index: int, value: float) -> None:
+        self.controller.begin_distance_edit(layer_id, beam_index)
         self.distance_value.blockSignals(True)
         self.distance_value.setValue(value)
         self.distance_value.blockSignals(False)
@@ -1155,10 +1442,11 @@ class MainWindow(QMainWindow):
         update = self.controller.confirm_distance_edit(self.distance_value.value())
         if update is None:
             return
-        axis, updated_input = update
-        panel = self.length_panel if axis == "length" else self.width_panel
-        MainWindow._switch_model_pallet_to_manual_editing(self)
-        panel.apply_position_data(updated_input)
+        layer_id, updated_input = update
+        if updated_input is not None:
+            panel = MainWindow._panel_for_layer(self, layer_id)
+            MainWindow._switch_model_pallet_to_manual_editing(self)
+            MainWindow._apply_interactive_position_update(self, panel, updated_input)
         self.distance_editor.setVisible(False)
         result = self.controller.recalculate_from_state()
         # Rebuilding the viewport removes the old pickable dimension actors.
@@ -1167,12 +1455,12 @@ class MainWindow(QMainWindow):
             self._toggle_distance_editing(True)
         self.statusBar().showMessage("Расстояние обновлено. Выберите следующую размерную линию.")
 
-    def _selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
-        self.controller.set_deletion_selection(axis, index, selected)
+    def _selection_changed(self, layer_id: str, index: int, selected: bool) -> None:
+        self.controller.set_deletion_selection(layer_id, index, selected)
         self._update_deletion_editor()
 
-    def _section_selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
-        self.controller.set_section_selection(axis, index, selected)
+    def _section_selection_changed(self, layer_id: str, index: int, selected: bool) -> None:
+        self.controller.set_section_selection(layer_id, index, selected)
         self._update_section_editor()
 
     def _update_section_editor(self) -> None:
@@ -1207,9 +1495,12 @@ class MainWindow(QMainWindow):
             return
         deleted = sum(len(indices) for indices in self._selected_for_deletion.values())
         MainWindow._switch_model_pallet_to_manual_editing(self)
-        for axis, updated_input in updated_inputs.items():
-            panel = self.length_panel if axis == "length" else self.width_panel
-            panel.apply_position_data(updated_input)
+        timer = getattr(self, "_layer_rebuild_timer", None)
+        if timer is not None:
+            timer.stop()
+        for layer_id, updated_input in updated_inputs.items():
+            panel = MainWindow._panel_for_layer(self, layer_id)
+            MainWindow._apply_interactive_position_update(self, panel, updated_input)
         result = self.controller.recalculate_from_state()
         # ``show_pallet`` recreates all beam actors, so restore deletion
         # picking without forcing the user to toggle the tool off and on.
@@ -1243,10 +1534,10 @@ class MainWindow(QMainWindow):
         update = self.controller.confirm_insertion(self.insertion_gap.value())
         if update is None:
             return
-        axis, updated_input = update
-        panel = self.length_panel if axis == "length" else self.width_panel
+        layer_id, updated_input = update
+        panel = MainWindow._panel_for_layer(self, layer_id)
         MainWindow._switch_model_pallet_to_manual_editing(self)
-        panel.apply_position_data(updated_input)
+        MainWindow._apply_interactive_position_update(self, panel, updated_input)
         self.insertion_editor.setVisible(False)
         result = self.controller.recalculate_from_state()
         # The viewport rebuild removes insertion markers together with the old
@@ -1280,6 +1571,11 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def eventFilter(self, watched, event) -> bool:
+        if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and self._pending_insertion is not None
+                and watched in (self.insertion_gap, self.insertion_gap.lineEdit())):
+            self._confirm_insertion()
+            return True
         if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
                 and self.delete_beam_button.isChecked() and any(self._selected_for_deletion.values())):
             self._confirm_deletion()
@@ -1324,6 +1620,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Невозможная геометрия", str(error))
 
     def calculate(self, *, show_error: bool = True):
+        if len(getattr(self, "_layer_order", ())) > 2:
+            return self._calculate_layer_stack(show_error=show_error)
         try:
             length_input, width_input, upper_layer = self._read_calculation_inputs()
         except CalculationError as exc:
@@ -1362,6 +1660,8 @@ class MainWindow(QMainWindow):
         """Reflect an opened configuration in form controls without queuing rebuilds."""
         if state.length_input is None or state.width_input is None:
             return
+        if state.multi_layer_mode and len(state.layers) > 2:
+            self._restore_layer_stack(state.layers)
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
         blockers = [QSignalBlocker(widget) for widget in (
@@ -1384,17 +1684,57 @@ class MainWindow(QMainWindow):
         self._set_camera(camera_index)
 
     def reset_example(self) -> None:
+        for button in (self.add_beam_button, self.delete_beam_button, self.edit_distance_button, self.change_section_button):
+            button.setChecked(False)
+        self.controller.deactivate_tool()
+        self.controller.cancel_insertion()
+        self.controller.cancel_distance_edit()
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
         self._imported_step_model = None
         self.state.beam_sections.clear()
+        self.state.layer_sections.clear()
+        self.state.manual_beams.clear()
+        self.controller.clear_deletion_selection()
         self.controller.clear_section_selection()
         self.view.clear_step_model()
         self._set_model_controls_visible(False)
+        self._restore_layer_stack([
+            LayerInput("length", "length", self.length_panel.values()),
+            LayerInput("width", "width", self.width_panel.values()),
+            LayerInput("layer-1", "length", self.top_length_panel.values()),
+        ])
         self.length_panel.reset_example("1070 460 1300 499", 123, 552)
         self.width_panel.reset_example("560 720", 277, 179)
+        self.top_length_panel.reset_example("1070 460 1300 499", 123, 552)
         self.width_upper.setChecked(True)
         self.calculate()
+
+    def _restore_layer_stack(self, layers: list[LayerInput]) -> None:
+        """Replace dynamic layer cards from a saved multilayer project."""
+        expected_layer_ids = {layer.layer_id for layer in layers}
+        for layer_id in list(self._layer_panels):
+            if layer_id not in ("length", "width") and layer_id not in expected_layer_ids:
+                # A layer card can still own this widget while a layout update
+                # is pending.  Do not queue it for deletion: Qt may then delete
+                # the panel after it has been added to a newly rebuilt card.
+                panel = self._layer_panels.pop(layer_id)
+                panel.setParent(None)
+                panel.hide()
+        self._layer_order = []
+        self._layer_axes = {}
+        for position, layer in enumerate(layers):
+            panel = self._layer_panels.get(layer.layer_id)
+            if panel is None:
+                panel = DirectionInputPanel("", self._layer_description(layer.axis), "", "100", "100")
+                panel.changed.connect(self._schedule_recalculation)
+                self._layer_panels[layer.layer_id] = panel
+            panel.apply_position_data(layer.direction, notify=False)
+            self._layer_order.append(layer.layer_id)
+            self._layer_axes[layer.layer_id] = layer.axis
+            if layer.layer_id == "layer-1":
+                self.top_length_panel = panel
+        self._rebuild_layer_cards()
 
     def upper_layer(self) -> str:
         return "length" if self.length_upper.isChecked() else "width"

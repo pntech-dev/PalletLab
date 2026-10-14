@@ -3,10 +3,10 @@ from dataclasses import replace
 
 import pytest
 
-from palletlab.core.calculator import (build_pallet, calculate_direction, delete_beams_input, insert_beam, insert_beam_input,
+from palletlab.core.calculator import (build_multilayer_pallet, build_pallet, calculate_direction, delete_beams_input, insert_beam, insert_beam_input,
                                        insertion_slots, pallet_bounds)
 from palletlab.core.calculator import set_beam_face_distance_input
-from palletlab.core.models import BeamSection, DirectionInput
+from palletlab.core.models import BeamSection, DirectionInput, LayerDefinition
 from palletlab.core.validation import CalculationError
 from palletlab.visualization.pallet_view import PalletView
 
@@ -146,6 +146,40 @@ def test_changed_edge_sections_stay_flush_with_the_pallet_boundary():
     assert edge_beams[1].x + edge_beams[1].size_x / 2 == pytest.approx(result.pallet_length)
 
 
+def test_multilayer_calculator_places_arbitrary_layers_in_bottom_to_top_order():
+    length = calculate_direction(LENGTH_EXAMPLE)
+    width = calculate_direction(WIDTH_EXAMPLE)
+    result = build_multilayer_pallet((
+        LayerDefinition("bottom", "length", length),
+        LayerDefinition("middle", "width", width),
+        LayerDefinition("top", "length", length),
+    ))
+
+    assert len(result.layers) == 3
+    assert [(layer.layer_id, layer.base_z, layer.top_z) for layer in result.layers] == [
+        ("bottom", 0, 70), ("middle", 70, 140), ("top", 140, 210),
+    ]
+    assert result.pallet_height == 210
+    assert {beam.layer_id for beam in result.beams_3d} == {"bottom", "middle", "top"}
+
+
+def test_multilayer_first_layer_aligns_shorter_beams_to_its_bearing_plane():
+    length = calculate_direction(LENGTH_EXAMPLE)
+    width = calculate_direction(WIDTH_EXAMPLE)
+    sections = tuple(
+        BeamSection(100 if index == 0 else 70, 50) for index in range(len(length.beam_centers))
+    )
+    result = build_multilayer_pallet((
+        LayerDefinition("bottom", "length", length, sections),
+        LayerDefinition("top", "width", width),
+    ))
+
+    bottom = result.beams_3d[:len(length.beam_centers)]
+    top = result.beams_3d[len(length.beam_centers):]
+    assert {round(beam.z + beam.size_z / 2, 6) for beam in bottom} == {100}
+    assert all(beam.z - beam.size_z / 2 == pytest.approx(100) for beam in top)
+
+
 def test_interactive_beam_insertion_uses_a_face_gap_and_updates_the_existing_input_model():
     length = calculate_direction(LENGTH_EXAMPLE)
     width = calculate_direction(WIDTH_EXAMPLE)
@@ -206,11 +240,17 @@ def test_empty_support_data_with_zero_edge_distances_means_only_edge_beams():
     assert result.beam_centers == pytest.approx((25, 175))
 
 
-@pytest.mark.parametrize("beam_indices", [(0,), (-1,), (6,)])
-def test_interactive_deletion_rejects_edge_beams(beam_indices):
+@pytest.mark.parametrize("beam_indices", [(0,), (6,)])
+def test_interactive_deletion_allows_edge_beams(beam_indices):
     direction = calculate_direction(LENGTH_EXAMPLE)
-    with pytest.raises(CalculationError, match="Крайние"):
-        delete_beams_input(LENGTH_EXAMPLE, direction, beam_indices)
+    updated = delete_beams_input(LENGTH_EXAMPLE, direction, beam_indices)
+    assert updated.hidden_beam_indices == beam_indices
+
+
+def test_interactive_deletion_rejects_a_nonexistent_beam():
+    direction = calculate_direction(LENGTH_EXAMPLE)
+    with pytest.raises(CalculationError, match="несуществующий"):
+        delete_beams_input(LENGTH_EXAMPLE, direction, (-1,))
 
 
 def test_editing_a_displayed_distance_moves_its_internal_beam_and_updates_input_data():
