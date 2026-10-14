@@ -6,7 +6,8 @@ therefore update it independently from the form and the 3D viewport.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field, fields
 from typing import Literal
 
 from .models import BeamKey, BeamSection, DirectionInput, InsertionSlot, LayerBeamKey, LayerInput, ManualBeamInput, PalletAxis, PalletResult
@@ -70,3 +71,56 @@ class ProjectState:
         self.layer_sections = {
             key: section for key, section in self.layer_sections.items() if key[0] in layer_ids
         }
+
+
+@dataclass
+class ProjectHistory:
+    """Bounded undo/redo history for editable project data only."""
+
+    limit: int = 50
+    undo_stack: list[ProjectState] = field(default_factory=list)
+    redo_stack: list[ProjectState] = field(default_factory=list)
+
+    @staticmethod
+    def snapshot(state: ProjectState) -> ProjectState:
+        """Copy persistent edit data without viewport results or tool state."""
+        copied = deepcopy(state)
+        copied.result = None
+        copied.active_tool = "none"
+        copied.pending_insertion = None
+        copied.pending_distance = None
+        copied.selected_for_deletion = {"length": set(), "width": set()}
+        copied.selected_for_section = {"length": set(), "width": set()}
+        return copied
+
+    @staticmethod
+    def _restore(state: ProjectState, snapshot: ProjectState) -> None:
+        for item in fields(ProjectState):
+            setattr(state, item.name, deepcopy(getattr(snapshot, item.name)))
+
+    def record(self, snapshot: ProjectState) -> None:
+        """Record the state from immediately before one completed action."""
+        if self.undo_stack and self.undo_stack[-1] == snapshot:
+            return
+        self.undo_stack.append(snapshot)
+        if len(self.undo_stack) > self.limit:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+
+    def undo(self, state: ProjectState) -> bool:
+        if not self.undo_stack:
+            return False
+        self.redo_stack.append(self.snapshot(state))
+        self._restore(state, self.undo_stack.pop())
+        return True
+
+    def redo(self, state: ProjectState) -> bool:
+        if not self.redo_stack:
+            return False
+        self.undo_stack.append(self.snapshot(state))
+        self._restore(state, self.redo_stack.pop())
+        return True
+
+    def clear(self) -> None:
+        self.undo_stack.clear()
+        self.redo_stack.clear()

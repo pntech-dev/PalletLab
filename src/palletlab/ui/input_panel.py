@@ -92,7 +92,7 @@ class DirectionInputPanel(QGroupBox):
         widget.setSuffix(" мм")
         return widget
 
-    def _section_changed(self, name: str) -> None:
+    def _section_changed(self, name: str, *, notify: bool = True) -> None:
         dimensions = SECTIONS[name]
         custom = dimensions is None
         self.height.setEnabled(custom)
@@ -100,7 +100,8 @@ class DirectionInputPanel(QGroupBox):
         if dimensions:
             self.height.setValue(dimensions[0])
             self.width.setValue(dimensions[1])
-        self.changed.emit()
+        if notify:
+            self.changed.emit()
 
     def _position_data_changed(self, *_args) -> None:
         """Notify the owner about an editable pallet parameter change."""
@@ -166,6 +167,22 @@ class DirectionInputPanel(QGroupBox):
         self._support_positions_override = data.support_positions
         if notify:
             self.changed.emit()
+
+    def apply_direction_data(self, data: DirectionInput, *, notify: bool = True) -> None:
+        """Restore section and position values together without edit signals."""
+        matching_section = next(
+            (name for name, dimensions in SECTIONS.items() if dimensions == (data.beam_height, data.beam_width)),
+            "Свой размер",
+        )
+        for field in (self.section, self.height, self.width):
+            field.blockSignals(True)
+        self.section.setCurrentText(matching_section)
+        self.height.setValue(data.beam_height)
+        self.width.setValue(data.beam_width)
+        for field in (self.section, self.height, self.width):
+            field.blockSignals(False)
+        self._section_changed(matching_section, notify=False)
+        self.apply_position_data(data, notify=notify)
 
     def set_model_driven_mode(self, data: DirectionInput | None, *, hide_model_offsets: bool = False) -> None:
         """Show or hide geometry-derived offsets for the STEP-model workflow."""

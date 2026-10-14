@@ -10,15 +10,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSignalBlocker, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
-                             QMessageBox, QPushButton, QDoubleSpinBox, QProgressDialog, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
+                             QMessageBox, QPushButton, QDoubleSpinBox, QProgressDialog, QRadioButton, QScrollArea, QShortcut, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.controllers.pallet_controller import PalletController
 from palletlab.core.calculator import calculate_direction, insertion_slots_for_direction
 from palletlab.core.formatting import format_mm
 from palletlab.core.materials import MATERIALS, get_material, pallet_mass_kg
 from palletlab.core.models import BeamSection, InsertionSlot, LayerInput, PalletAxis
-from palletlab.core.project_state import ProjectState
+from palletlab.core.project_state import ProjectHistory, ProjectState
 from palletlab.core.validation import CalculationError
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
 from palletlab.exporters.solidworks import SolidWorksExportError, SolidWorksMaterialLibraryError, SolidWorksTemplateError, available_materials, export_pallet
@@ -173,6 +174,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.state = ProjectState()
+        self._history = ProjectHistory()
+        self._pending_history_snapshot: ProjectState | None = None
+        self._history_restoring = False
         self._project_path: str | None = None
         self._imported_step_model: ImportedStepModel | None = None
         self._step_import_process: QProcess | None = None
@@ -239,6 +243,12 @@ class MainWindow(QMainWindow):
         self.camera_combo.addItem("Спереди", "front")
         self.camera_combo.addItem("Сбоку", "side")
         self._build_ui()
+        self._undo_shortcut = QShortcut(QKeySequence.Undo, self)
+        self._undo_shortcut.setContext(Qt.ApplicationShortcut)
+        self._undo_shortcut.activated.connect(self.undo)
+        self._redo_shortcut = QShortcut(QKeySequence("Ctrl+U"), self)
+        self._redo_shortcut.setContext(Qt.ApplicationShortcut)
+        self._redo_shortcut.activated.connect(self.redo)
         self._set_stale(False)
         self.calculate()
         QTimer.singleShot(1500, self._check_for_updates)
@@ -685,6 +695,7 @@ class MainWindow(QMainWindow):
         self._sync_layer_mode()
 
     def _add_layer(self) -> None:
+        MainWindow._begin_history_transaction(self)
         self._layer_rebuild_timer.stop()
         axis: PalletAxis = "length" if self._layer_axes[self._layer_order[-1]] == "width" else "width"
         number = 1
@@ -709,11 +720,13 @@ class MainWindow(QMainWindow):
     def _remove_layer(self, layer_id: str) -> None:
         if len(self._layer_order) <= 2:
             return
+        MainWindow._begin_history_transaction(self)
         self._layer_rebuild_timer.stop()
         remaining = [identifier for identifier in self._layer_order if identifier != layer_id]
         if not any(self._layer_axes[identifier] == "length" for identifier in remaining) or not any(
             self._layer_axes[identifier] == "width" for identifier in remaining
         ):
+            MainWindow._discard_history_transaction(self)
             self.statusBar().showMessage("В поддоне должен остаться хотя бы один слой по каждой оси.")
             return
         panel = self._layer_panels.pop(layer_id)
@@ -732,6 +745,7 @@ class MainWindow(QMainWindow):
         target = current + shift
         if not 0 <= target < len(self._layer_order):
             return
+        MainWindow._begin_history_transaction(self)
         self._layer_rebuild_timer.stop()
         self._layer_order[current], self._layer_order[target] = self._layer_order[target], self._layer_order[current]
         self._rebuild_layer_cards()
@@ -782,6 +796,7 @@ class MainWindow(QMainWindow):
             self._layer_envelope_source = None
         result = self.controller.calculate_layers(layers, show_error=show_error)
         if result is not None:
+            MainWindow._commit_history_transaction(self)
             self._restore_active_tool_after_rebuild()
         return result
 
@@ -823,6 +838,64 @@ class MainWindow(QMainWindow):
             self._toggle_distance_editing(True)
         elif self.change_section_button.isChecked():
             self._toggle_section_editing(True)
+
+    @staticmethod
+    def _begin_history_transaction(owner) -> None:
+        """Remember the state before one user-confirmed edit."""
+        if not hasattr(owner, "_history") or getattr(owner, "_history_restoring", False):
+            return
+        if getattr(owner, "_pending_history_snapshot", None) is not None:
+            return
+        owner._pending_history_snapshot = owner._history.snapshot(owner.state)
+
+    @staticmethod
+    def _commit_history_transaction(owner) -> None:
+        if not hasattr(owner, "_history") or getattr(owner, "_history_restoring", False):
+            return
+        snapshot = getattr(owner, "_pending_history_snapshot", None)
+        if snapshot is None:
+            return
+        owner._history.record(snapshot)
+        owner._pending_history_snapshot = None
+
+    @staticmethod
+    def _discard_history_transaction(owner) -> None:
+        if hasattr(owner, "_pending_history_snapshot"):
+            owner._pending_history_snapshot = None
+
+    def undo(self) -> None:
+        self._restore_history(self._history.undo, "Отменено последнее изменение.")
+
+    def redo(self) -> None:
+        self._restore_history(self._history.redo, "Повторено отменённое изменение.")
+
+    def _restore_history(self, operation, message: str) -> None:
+        """Restore an edit snapshot and rebuild the palette from its data."""
+        self._layer_rebuild_timer.stop()
+        self._model_rebuild_timer.stop()
+        MainWindow._discard_history_transaction(self)
+        if not operation(self.state):
+            self.statusBar().showMessage("Нет изменений для отмены." if message.startswith("Отмен") else "Нет изменений для повтора.")
+            return
+        self._history_restoring = True
+        try:
+            for button in (self.add_beam_button, self.delete_beam_button, self.edit_distance_button, self.change_section_button):
+                button.setChecked(False)
+            self.controller.deactivate_tool()
+            self.controller.cancel_insertion()
+            self.controller.cancel_distance_edit()
+            self._clear_model_supports()
+            self._set_model_controls_visible(False)
+            self.length_panel.set_model_driven_mode(None)
+            self.width_panel.set_model_driven_mode(None)
+            self._apply_loaded_project(self.state)
+            result = self.controller.recalculate_from_state(show_error=False)
+        finally:
+            self._history_restoring = False
+        if result is None:
+            self.statusBar().showMessage("Не удалось восстановить состояние поддона.")
+            return
+        self.statusBar().showMessage(message)
 
     def _sync_layer_mode(self) -> None:
         multilayer = len(self._layer_order) > 2
@@ -1234,6 +1307,8 @@ class MainWindow(QMainWindow):
         self.view.clear_step_model()
         self._set_model_controls_visible(False)
         self._project_path = path
+        self._history.clear()
+        MainWindow._discard_history_transaction(self)
         self.statusBar().showMessage(f"Проект открыт: {path}")
 
     def export_to_kompas(self) -> None:
@@ -1262,6 +1337,7 @@ class MainWindow(QMainWindow):
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
+        MainWindow._begin_history_transaction(self)
         sender_method = getattr(self, "sender", None)
         sender = sender_method() if callable(sender_method) else None
         for layer_id, panel in getattr(self, "_layer_panels", {}).items():
@@ -1370,6 +1446,7 @@ class MainWindow(QMainWindow):
             return
         if answer == QDialog.Accepted:
             selected_reference = reference[:2] if reference is not None and dialog.reference.currentData() else None
+            MainWindow._begin_history_transaction(self)
             result = self.controller.add_manual_beam(
                 first[:2], second[:2], dialog.distance.value(), dialog.section(),
                 reference_support=selected_reference,
@@ -1377,7 +1454,10 @@ class MainWindow(QMainWindow):
                 first_face=first[2], second_face=second[2],
             )
             if result is not None:
+                MainWindow._commit_history_transaction(self)
                 self.statusBar().showMessage("Брус добавлен. Выберите две следующие опоры.")
+            else:
+                MainWindow._discard_history_transaction(self)
         self._manual_supports.clear()
         if self.add_beam_button.isChecked():
             self.view.enable_support_face_selection(self._manual_support_selected)
@@ -1480,8 +1560,10 @@ class MainWindow(QMainWindow):
         self.edit_distance_button.setFocus()
 
     def _confirm_distance_edit(self) -> None:
+        MainWindow._begin_history_transaction(self)
         update = self.controller.confirm_distance_edit(self.distance_value.value())
         if update is None:
+            MainWindow._discard_history_transaction(self)
             return
         layer_id, updated_input = update
         if updated_input is not None:
@@ -1490,6 +1572,10 @@ class MainWindow(QMainWindow):
             MainWindow._apply_interactive_position_update(self, panel, updated_input)
         self.distance_editor.setVisible(False)
         result = self.controller.recalculate_from_state()
+        if result is not None:
+            MainWindow._commit_history_transaction(self)
+        else:
+            MainWindow._discard_history_transaction(self)
         # Rebuilding the viewport removes the old pickable dimension actors.
         # Keep the checked tool immediately usable by registering the new ones.
         if result is not None and self.edit_distance_button.isChecked():
@@ -1518,8 +1604,13 @@ class MainWindow(QMainWindow):
         if dialog.exec_() != QDialog.Accepted:
             return
         changed = sum(len(indices) for indices in self._selected_for_section.values())
+        MainWindow._begin_history_transaction(self)
         MainWindow._switch_model_pallet_to_manual_editing(self)
         result = self.controller.apply_section_change(dialog.section())
+        if result is not None:
+            MainWindow._commit_history_transaction(self)
+        else:
+            MainWindow._discard_history_transaction(self)
         if result is not None and self.change_section_button.isChecked():
             self._toggle_section_editing(True)
             self.statusBar().showMessage(f"Сечение изменено у брусьев: {changed}.")
@@ -1531,8 +1622,10 @@ class MainWindow(QMainWindow):
         self.confirm_deletion_button.setEnabled(count > 0)
 
     def _confirm_deletion(self) -> None:
+        MainWindow._begin_history_transaction(self)
         updated_inputs = self.controller.confirm_deletion()
         if updated_inputs is None:
+            MainWindow._discard_history_transaction(self)
             return
         deleted = sum(len(indices) for indices in self._selected_for_deletion.values())
         MainWindow._switch_model_pallet_to_manual_editing(self)
@@ -1543,6 +1636,10 @@ class MainWindow(QMainWindow):
             panel = MainWindow._panel_for_layer(self, layer_id)
             MainWindow._apply_interactive_position_update(self, panel, updated_input)
         result = self.controller.recalculate_from_state()
+        if result is not None:
+            MainWindow._commit_history_transaction(self)
+        else:
+            MainWindow._discard_history_transaction(self)
         # ``show_pallet`` recreates all beam actors, so restore deletion
         # picking without forcing the user to toggle the tool off and on.
         if result is not None and self.delete_beam_button.isChecked():
@@ -1572,8 +1669,10 @@ class MainWindow(QMainWindow):
         self.add_beam_button.setFocus()
 
     def _confirm_insertion(self) -> None:
+        MainWindow._begin_history_transaction(self)
         update = self.controller.confirm_insertion(self.insertion_gap.value())
         if update is None:
+            MainWindow._discard_history_transaction(self)
             return
         layer_id, updated_input = update
         panel = MainWindow._panel_for_layer(self, layer_id)
@@ -1581,6 +1680,10 @@ class MainWindow(QMainWindow):
         MainWindow._apply_interactive_position_update(self, panel, updated_input)
         self.insertion_editor.setVisible(False)
         result = self.controller.recalculate_from_state()
+        if result is not None:
+            MainWindow._commit_history_transaction(self)
+        else:
+            MainWindow._discard_history_transaction(self)
         # The viewport rebuild removes insertion markers together with the old
         # beams. Re-register the markers while the tool remains checked.
         if result is not None and self.add_beam_button.isChecked():
@@ -1651,7 +1754,12 @@ class MainWindow(QMainWindow):
         )
 
     def _material_changed(self, _index: int) -> None:
-        self.state.material_id = self.material_combo.currentData()
+        material_id = self.material_combo.currentData()
+        if material_id == self.state.material_id:
+            return
+        MainWindow._begin_history_transaction(self)
+        self.state.material_id = material_id
+        MainWindow._commit_history_transaction(self)
         if self._last_result is not None:
             self._update_scene_info(self._last_result)
 
@@ -1708,12 +1816,12 @@ class MainWindow(QMainWindow):
         blockers = [QSignalBlocker(widget) for widget in (
             self.length_panel, self.width_panel, self.width_upper, self.length_upper,
             self.round_to_50, self.round_to_5, self.no_rounding, self.show_length_gaps,
-            self.show_width_gaps, self.camera_combo,
+            self.show_width_gaps, self.camera_combo, self.material_combo,
         )]
         material_index = self.material_combo.findData(state.material_id)
         self.material_combo.setCurrentIndex(max(0, material_index))
-        self.length_panel.apply_position_data(state.length_input)
-        self.width_panel.apply_position_data(state.width_input)
+        self.length_panel.apply_direction_data(state.length_input, notify=False)
+        self.width_panel.apply_direction_data(state.width_input, notify=False)
         self.length_upper.setChecked(state.upper_layer == "length")
         self.width_upper.setChecked(state.upper_layer == "width")
         {50: self.round_to_50, 5: self.round_to_5, 0: self.no_rounding}[state.rounding_step].setChecked(True)
@@ -1725,6 +1833,7 @@ class MainWindow(QMainWindow):
         self._set_camera(camera_index)
 
     def reset_example(self) -> None:
+        MainWindow._begin_history_transaction(self)
         for button in (self.add_beam_button, self.delete_beam_button, self.edit_distance_button, self.change_section_button):
             button.setChecked(False)
         self.controller.deactivate_tool()
@@ -1770,7 +1879,7 @@ class MainWindow(QMainWindow):
                 panel = DirectionInputPanel("", self._layer_description(layer.axis), "", "100", "100")
                 panel.changed.connect(self._schedule_recalculation)
                 self._layer_panels[layer.layer_id] = panel
-            panel.apply_position_data(layer.direction, notify=False)
+            panel.apply_direction_data(layer.direction, notify=False)
             self._layer_order.append(layer.layer_id)
             self._layer_axes[layer.layer_id] = layer.axis
             if layer.layer_id == "layer-1":
