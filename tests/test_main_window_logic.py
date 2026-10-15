@@ -14,7 +14,7 @@ import pytest
 
 from palletlab.core.calculator import build_pallet, calculate_direction, insertion_slots
 from palletlab.core.models import DirectionInput, LayerInput
-from palletlab.core.project_state import ProjectState
+from palletlab.core.project_state import ProjectHistory, ProjectState
 from palletlab.ui.main_window import MainWindow
 
 
@@ -75,6 +75,107 @@ def test_auto_recalculation_is_delegated_to_the_controller():
     MainWindow._schedule_recalculation(window)
     MainWindow._schedule_recalculation(window)
 
+    assert scheduled == [True, True]
+
+
+def test_successful_deferred_calculation_closes_its_history_transaction():
+    """A later action must not be combined with a completed field edit."""
+    state = ProjectState()
+    history = ProjectHistory()
+    window = SimpleNamespace(
+        state=state,
+        _history=history,
+        _history_restoring=False,
+        _pending_history_snapshot=None,
+        _update_scene_info=lambda _result: None,
+    )
+
+    MainWindow._begin_history_transaction(window)
+    state.material_id = "history-test-material"
+    MainWindow._calculation_succeeded(window, _pallet_result())
+
+    assert window._pending_history_snapshot is None
+    assert len(history.undo_stack) == 1
+    assert history.undo(state)
+    assert state.material_id != "history-test-material"
+
+
+def test_dimension_visibility_is_written_to_project_state():
+    refreshed = []
+    state = ProjectState()
+    history = ProjectHistory()
+    window = SimpleNamespace(
+        state=state,
+        _history=history,
+        _history_restoring=False,
+        _pending_history_snapshot=None,
+        show_length_gaps=_Toggle(False),
+        show_width_gaps=_Toggle(True),
+        _refresh_dimension_annotations=lambda: refreshed.append(True),
+    )
+
+    MainWindow._dimension_visibility_changed(window)
+
+    assert state.show_length_dimensions is False
+    assert state.show_width_dimensions is True
+    assert refreshed == [True]
+    assert history.undo(state)
+    assert state.show_length_dimensions is True
+
+
+def test_camera_change_is_a_complete_undoable_project_edit():
+    state = ProjectState()
+    history = ProjectHistory()
+    camera_calls = []
+    window = SimpleNamespace(
+        state=state,
+        _history=history,
+        _history_restoring=False,
+        _pending_history_snapshot=None,
+        camera_combo=SimpleNamespace(itemData=lambda _index: "top"),
+        view=SimpleNamespace(
+            camera_isometric=lambda: camera_calls.append("isometric"),
+            camera_top=lambda: camera_calls.append("top"),
+            camera_front=lambda: camera_calls.append("front"),
+            camera_side=lambda: camera_calls.append("side"),
+        ),
+    )
+
+    MainWindow._set_camera(window, 1)
+
+    assert state.camera == "top"
+    assert camera_calls == ["top"]
+    assert history.undo(state)
+    assert state.camera == "isometric"
+
+
+def test_layer_and_rounding_changes_snapshot_state_before_controller_mutates_it():
+    state = ProjectState()
+    history = ProjectHistory()
+    scheduled = []
+    window = SimpleNamespace(
+        state=state,
+        _history=history,
+        _history_restoring=False,
+        _pending_history_snapshot=None,
+        controller=SimpleNamespace(
+            set_upper_layer=lambda layer: setattr(state, "upper_layer", layer),
+            set_rounding_step=lambda step: setattr(state, "rounding_step", step),
+        ),
+        upper_layer=lambda: "length",
+        rounding_buttons=SimpleNamespace(checkedId=lambda: 5),
+        _schedule_recalculation=lambda: scheduled.append(True),
+    )
+
+    MainWindow._layer_changed(window)
+    MainWindow._commit_history_transaction(window)
+    MainWindow._rounding_changed(window)
+    MainWindow._commit_history_transaction(window)
+
+    assert history.undo(state)
+    assert state.rounding_step == 50
+    assert history.undo(state)
+    assert state.upper_layer == "width"
     assert scheduled == [True, True]
 
 

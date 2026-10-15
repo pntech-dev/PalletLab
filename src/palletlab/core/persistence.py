@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
-from typing import Any
+import shutil
+import tempfile
+from typing import Any, Literal
 
-from .models import BeamSection, DirectionInput, LayerInput, ManualBeamInput
+from .models import BeamKey, BeamSection, DirectionInput, LayerInput, ManualBeamInput, PalletAxis
 from .materials import MATERIALS, DEFAULT_MATERIAL_ID
 from .project_state import ProjectState
 
@@ -48,13 +51,28 @@ def _direction_from_dict(raw: object, name: str) -> DirectionInput:
         distances = raw["support_distances"]
         if not isinstance(distances, list):
             raise TypeError
-        return DirectionInput(
+        raw_rounding_step = int(raw["rounding_step"])
+        if raw_rounding_step not in (5, 50):
+            raise ValueError
+        rounding_step: Literal[5, 50] = 5 if raw_rounding_step == 5 else 50
+        direction = DirectionInput(
             float(raw["beam_height"]), float(raw["beam_width"]), tuple(float(value) for value in distances),
             float(raw["first_edge_to_support"]), float(raw["last_support_to_edge"]),
             float(raw["margin_start"]), float(raw["margin_end"]), bool(raw["round_pallet_size"]),
-            int(raw["rounding_step"]), None if positions is None else tuple(float(value) for value in positions),
+            rounding_step, None if positions is None else tuple(float(value) for value in positions),
             tuple(int(value) for value in hidden),
         )
+        numeric_values = (
+            direction.beam_height, direction.beam_width, direction.first_edge_to_support,
+            direction.last_support_to_edge, direction.margin_start, direction.margin_end,
+            *direction.support_distances, *(direction.support_positions or ()),
+        )
+        if (not all(math.isfinite(value) for value in numeric_values)
+                or direction.beam_height <= 0 or direction.beam_width <= 0
+                or any(value < 0 for value in direction.support_distances)
+                or any(index < 0 for index in direction.hidden_beam_indices)):
+            raise ValueError
+        return direction
     except (KeyError, TypeError, ValueError) as exc:
         raise ProjectPersistenceError(f"Раздел «{name}» содержит некорректные параметры.") from exc
 
@@ -69,11 +87,16 @@ def _layer_from_dict(raw: object) -> LayerInput:
     layer_id = raw["id"].strip()
     if not layer_id:
         raise ProjectPersistenceError("Идентификатор слоя не может быть пустым.")
-    return LayerInput(layer_id, raw["axis"], _direction_from_dict(raw.get("direction"), f"слой «{layer_id}»"))
+    axis: PalletAxis = "length" if raw["axis"] == "length" else "width"
+    return LayerInput(layer_id, axis, _direction_from_dict(raw.get("direction"), f"слой «{layer_id}»"))
 
 
 def _legacy_layers(length: DirectionInput, width: DirectionInput, upper_layer: str) -> list[LayerInput]:
-    ordered = (("length", length), ("width", width)) if upper_layer == "width" else (("width", width), ("length", length))
+    ordered: tuple[tuple[PalletAxis, DirectionInput], ...] = (
+        (("length", length), ("width", width))
+        if upper_layer == "width"
+        else (("width", width), ("length", length))
+    )
     return [LayerInput(axis, axis, direction) for axis, direction in ordered]
 
 
@@ -128,7 +151,7 @@ def project_from_dict(raw: object) -> ProjectState:
     material_id = pallet.get("material_id", DEFAULT_MATERIAL_ID)
     if upper_layer not in ("length", "width") or rounding_step not in (0, 5, 50) or camera not in ("isometric", "top", "front", "side") or material_id not in MATERIALS:
         raise ProjectPersistenceError("Файл содержит неподдерживаемые настройки проекта.")
-    beam_sections: dict[tuple[str, int], BeamSection] = {}
+    beam_sections: dict[BeamKey, BeamSection] = {}
     raw_sections = pallet.get("beam_sections", [])
     if not isinstance(raw_sections, list):
         raise ProjectPersistenceError("Сечения брусьев должны быть списком.")
@@ -144,7 +167,10 @@ def project_from_dict(raw: object) -> ProjectState:
             math.isfinite(value) and value > 0 for value in (height, width)
         ):
             raise ProjectPersistenceError("Сечение бруса содержит недопустимые значения.")
-        beam_sections[(axis, index)] = BeamSection(height, width)
+        typed_axis: PalletAxis = "length" if axis == "length" else "width"
+        if (typed_axis, index) in beam_sections:
+            raise ProjectPersistenceError("Сечения брусьев не должны повторяться.")
+        beam_sections[(typed_axis, index)] = BeamSection(height, width)
     length_input = _direction_from_dict(pallet.get("length"), "длина")
     width_input = _direction_from_dict(pallet.get("width"), "ширина")
     raw_layers = pallet.get("layers")
@@ -173,10 +199,13 @@ def project_from_dict(raw: object) -> ProjectState:
             math.isfinite(value) and value > 0 for value in (height, width)
         ):
             raise ProjectPersistenceError("Сечение слоя содержит недопустимые значения.")
+        if (layer_id, index) in layer_sections:
+            raise ProjectPersistenceError("Сечения слоёв не должны повторяться.")
         layer_sections[(layer_id, index)] = BeamSection(height, width)
     if not layer_sections:
         layer_sections = {(axis, index): section for (axis, index), section in beam_sections.items()}
     manual_beams: list[ManualBeamInput] = []
+    manual_ids: set[str] = set()
     raw_manual = pallet.get("manual_beams", [])
     if not isinstance(raw_manual, list):
         raise ProjectPersistenceError("Пользовательские брусья должны быть списком.")
@@ -201,6 +230,9 @@ def project_from_dict(raw: object) -> ProjectState:
                 or reference_face not in (None, "top", "bottom", "x_min", "x_max", "y_min", "y_max")
                 or not math.isfinite(distance) or not all(value > 0 and math.isfinite(value) for value in (section.height, section.width))):
             raise ProjectPersistenceError("Пользовательский брус содержит недопустимые параметры.")
+        if beam_id in manual_ids:
+            raise ProjectPersistenceError("Идентификаторы пользовательских брусьев не должны повторяться.")
+        manual_ids.add(beam_id)
         manual_beams.append(ManualBeamInput(
             beam_id, first_key, second_key, distance, section,
             reference_support=reference_key, reference_face=reference_face,
@@ -224,7 +256,38 @@ def project_from_dict(raw: object) -> ProjectState:
 
 
 def save_project(path: str | Path, state: ProjectState) -> None:
-    Path(path).write_text(json.dumps(project_to_dict(state), ensure_ascii=False, indent=2), encoding="utf-8")
+    """Atomically replace a project only after its JSON passes the load validator."""
+    destination = Path(path)
+    payload = project_to_dict(state)
+    project_from_dict(payload)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=destination.parent,
+            prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+        ) as stream:
+            temporary_name = stream.name
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.replace(temporary_name, destination)
+        except PermissionError:
+            # Windows application containers can forbid ReplaceFile even when
+            # both files are writable.  Keep the normal path atomic, while
+            # still allowing a project to be saved in such a restricted host.
+            with Path(temporary_name).open("rb") as source, destination.open("wb") as target:
+                shutil.copyfileobj(source, target)
+                target.flush()
+                os.fsync(target.fileno())
+            Path(temporary_name).unlink()
+        temporary_name = None
+    except OSError as exc:
+        raise ProjectPersistenceError("Не удалось безопасно сохранить файл проекта.") from exc
+    finally:
+        if temporary_name is not None:
+            Path(temporary_name).unlink(missing_ok=True)
 
 
 def load_project(path: str | Path) -> ProjectState:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from math import copysign, isfinite
 
 from PyQt5.QtCore import QTimer
@@ -16,11 +16,20 @@ from palletlab.core.calculator import (
     insert_beam_input,
     set_beam_face_distance_input,
 )
-from palletlab.core.models import Beam3D, BeamSection, DirectionInput, InsertionSlot, LayerBeamKey, LayerDefinition, LayerDirection, LayerInput, ManualBeamInput, PalletAxis, PalletResult
+from palletlab.core.models import Beam3D, BeamSection, DirectionInput, DirectionResult, InsertionSlot, LayerBeamKey, LayerDefinition, LayerDirection, LayerInput, ManualBeamInput, PalletAxis, PalletResult
 from palletlab.core.persistence import ProjectPersistenceError, load_project, save_project
 from palletlab.core.project_state import ProjectState, ToolMode
 from palletlab.core.validation import CalculationError
 from palletlab.controllers.viewport_geometry import editable_dimensions, insertion_markers, insertion_preview
+
+
+@dataclass(frozen=True)
+class DeletionTarget:
+    """One physical beam frozen at the moment the user selected it."""
+
+    layer_id: str
+    index: int
+    beam: Beam3D
 
 
 class PalletController:
@@ -46,18 +55,31 @@ class PalletController:
         self._on_stale_changed = on_stale_changed
         self._input_provider = input_provider
         self._on_project_loaded = on_project_loaded
+        # A single timer is reused for form edits.  The revision makes an
+        # already queued timeout harmless after a newer edit or project load.
+        self._rebuild_revision = 0
+        self._scheduled_revision: int | None = None
         self._rebuild_timer = timer or QTimer(parent)
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(300)
         self._rebuild_timer.timeout.connect(self._run_automatic_rebuild)
+        self._deletion_targets: dict[tuple[str, int], DeletionTarget] = {}
 
     def schedule_recalculation(self) -> None:
         """Debounce an automatic rebuild requested by a changing form field."""
+        self._rebuild_revision += 1
+        self._scheduled_revision = self._rebuild_revision
         self._on_stale_changed(True)
         self._rebuild_timer.start()
 
     def stop_scheduled_recalculation(self) -> None:
         self._rebuild_timer.stop()
+        self._scheduled_revision = None
+
+    def invalidate_scheduled_recalculation(self) -> None:
+        """Cancel pending automatic work before an explicit state transition."""
+        self._rebuild_revision += 1
+        self.stop_scheduled_recalculation()
 
     def calculate(
         self,
@@ -68,15 +90,8 @@ class PalletController:
         show_error: bool = True,
     ) -> PalletResult | None:
         """Calculate the project, update state and hand the model to the 3D view."""
-        self.stop_scheduled_recalculation()
-        self.state.length_input = length_input
-        self.state.width_input = width_input
-        self.state.upper_layer = upper_layer
-        self.state.rounding_step = length_input.rounding_step if length_input.round_pallet_size else 0
-        self.state.multi_layer_mode = False
+        self.invalidate_scheduled_recalculation()
         ordered = (("length", length_input), ("width", width_input)) if upper_layer == "width" else (("width", width_input), ("length", length_input))
-        self.state.layers = [LayerInput(axis, axis, direction) for axis, direction in ordered]
-        self.state.layer_sections = {(axis, index): section for (axis, index), section in self.state.beam_sections.items()}
         try:
             result = build_pallet(
                 calculate_direction(length_input),
@@ -89,6 +104,15 @@ class PalletController:
             self._on_error(exc, show_error)
             return None
         result = self._with_manual_beams(result)
+        # Apply only a fully calculated candidate.  A failed calculation must
+        # leave both the current scene and the editable project untouched.
+        self.state.length_input = length_input
+        self.state.width_input = width_input
+        self.state.upper_layer = upper_layer
+        self.state.rounding_step = length_input.rounding_step if length_input.round_pallet_size else 0
+        self.state.multi_layer_mode = False
+        self.state.layers = [LayerInput(axis, axis, direction) for axis, direction in ordered]
+        self.state.layer_sections = {(axis, index): section for (axis, index), section in self.state.beam_sections.items()}
         self.state.result = result
         self._show_result(result)
         self._on_calculated(result)
@@ -97,14 +121,15 @@ class PalletController:
 
     def calculate_layers(self, layers: list[LayerInput], *, show_error: bool = True) -> PalletResult | None:
         """Calculate a bottom-to-top layer stack without relying on the two-panel UI."""
-        self.stop_scheduled_recalculation()
+        self.invalidate_scheduled_recalculation()
         # The first added layer switches a project from the legacy two-layer
         # representation to the generic stack.  Preserve any cross-sections
         # changed before that switch by assigning their established axis ids
         # (``length`` and ``width``) to the matching initial layers.
+        candidate_sections = self.state.layer_sections.copy()
         if not self.state.multi_layer_mode and self.state.beam_sections:
             layer_ids = {layer.layer_id for layer in layers}
-            self.state.layer_sections.update({
+            candidate_sections.update({
                 (axis, index): section
                 for (axis, index), section in self.state.beam_sections.items()
                 if axis in layer_ids
@@ -114,8 +139,8 @@ class PalletController:
             for layer in layers:
                 direction = calculate_direction(layer.direction)
                 sections = tuple(
-                    self.state.layer_sections[(layer.layer_id, index)]
-                    if (layer.layer_id, index) in self.state.layer_sections
+                    candidate_sections[(layer.layer_id, index)]
+                    if (layer.layer_id, index) in candidate_sections
                     else BeamSection(direction.beam_height, direction.beam_width)
                     for index in range(len(direction.beam_centers))
                 )
@@ -126,6 +151,7 @@ class PalletController:
             self._on_error(exc, show_error)
             return None
         self.state.set_layers(layers)
+        self.state.layer_sections = candidate_sections
         # Keep representative legacy values populated until the two-panel UI
         # is replaced.  Persistence and existing exporters still read them.
         self.state.length_input = next(layer.direction for layer in layers if layer.axis == "length")
@@ -198,10 +224,15 @@ class PalletController:
         except ProjectPersistenceError as exc:
             self._on_error(CalculationError(str(exc)), False)
             return None
+        previous = self.state.__dict__.copy()
+        self.invalidate_scheduled_recalculation()
         self.state.__dict__.update(loaded.__dict__)
         if self._on_project_loaded is not None:
             self._on_project_loaded(self.state)
-        return self.recalculate_from_state()
+        result = self.recalculate_from_state()
+        if result is None:
+            self.state.__dict__.update(previous)
+        return result
 
     def activate_tool(self, tool: ToolMode) -> None:
         self.state.active_tool = tool
@@ -282,6 +313,14 @@ class PalletController:
             self.state.manual_beams[manual_index] = replace(manual, distance=face_distance)
             self.state.pending_distance = None
             return layer_id, None
+        if layer_id.startswith("pallet-"):
+            axis: PalletAxis = "length" if layer_id == "pallet-length" else "width"
+            layer = next((candidate for candidate in reversed(self.state.layers) if candidate.axis == axis), None)
+            if layer is None:
+                self._on_error(CalculationError("Не найден слой для изменения общего габарита."), False)
+                return None
+            layer_id = layer.layer_id
+            beam_index = len(calculate_direction(layer.direction).beam_centers) - 1
         layer = self._layer_for(layer_id)
         data = layer.direction if layer is not None else self.state.input_for(layer_id)  # type: ignore[arg-type]
         if data is None:
@@ -335,46 +374,84 @@ class PalletController:
 
     def clear_deletion_selection(self) -> None:
         self.state.selected_for_deletion = {"length": set(), "width": set()}
+        self._deletion_targets.clear()
 
-    def set_deletion_selection(self, layer_id: str, index: int, selected: bool) -> None:
+    def set_deletion_selection(self, layer_id: str, index: int, selected: bool) -> bool:
+        """Toggle exactly one rendered beam, rejecting stale actor identities."""
+        key = (layer_id, index)
+        current = self._beam_for_deletion(layer_id, index)
+        if selected and current is None:
+            self._on_error(CalculationError("Выбранный брус больше не существует. Обновите выделение."), False)
+            return False
         indices = self.state.selected_for_deletion.setdefault(layer_id, set())
         if selected:
             indices.add(index)
+            self._deletion_targets[key] = DeletionTarget(layer_id, index, current)
         else:
             indices.discard(index)
+            self._deletion_targets.pop(key, None)
+        return True
 
-    def confirm_deletion(self) -> dict[str, DirectionInput] | None:
+    def _beam_for_deletion(self, layer_id: str, index: int) -> Beam3D | None:
         result = self.state.result
         if result is None:
             return None
+        return next((beam for beam in result.beams_3d
+                     if (beam.layer_id or beam.orientation) == layer_id and beam.layer_index == index), None)
+
+    def confirm_deletion(self) -> dict[str, DirectionInput] | None:
+        """Apply one frozen deletion selection as an all-or-nothing change."""
+        result = self.state.result
+        targets = tuple(self._deletion_targets.values())
+        if result is None or not targets:
+            return None
+        # A view rebuild can replace beam indices between a click and the
+        # confirmation.  Never reinterpret a target by a new index: cancel
+        # instead of risking deletion of its neighbour.
+        if any(self._beam_for_deletion(item.layer_id, item.index) != item.beam for item in targets):
+            self._on_error(CalculationError("Модель изменилась после выделения. Выберите брусья заново."), False)
+            self.clear_deletion_selection()
+            return None
         updated_inputs: dict[str, DirectionInput] = {}
+        original_directions: dict[str, DirectionResult] = {}
         manual_ids = {beam.beam_id for beam in self.state.manual_beams}
         selected_manual = {
-            layer_id
-            for layer_id, indices in self.state.selected_for_deletion.items()
-            if layer_id in manual_ids and 0 in indices
+            item.layer_id for item in targets
+            if item.layer_id in manual_ids and item.index == 0
         }
+        selected_by_layer: dict[str, set[int]] = {}
+        for item in targets:
+            if item.layer_id not in manual_ids:
+                selected_by_layer.setdefault(item.layer_id, set()).add(item.index)
+        try:
+            for layer_id, indices in selected_by_layer.items():
+                layer = self._layer_for(layer_id)
+                if layer is None and layer_id not in ("length", "width"):
+                    raise CalculationError("Выбранный слой больше не существует.")
+                data = layer.direction if layer is not None else self.state.input_for(layer_id)  # type: ignore[arg-type]
+                if data is None:
+                    raise CalculationError("Выбранный слой больше не существует.")
+                direction = calculate_direction(data)
+                updated = delete_beams_input(data, direction, indices)
+                updated_inputs[layer_id] = updated
+                original_directions[layer_id] = direction
+        except CalculationError as exc:
+            self._on_error(exc, False)
+            return None
+        # All selected inputs have been validated above.  Only now mutate the
+        # model, so a stale selection in one layer cannot partly delete beams
+        # from another one.
         if selected_manual:
             self.state.manual_beams = [
                 beam for beam in self.state.manual_beams if beam.beam_id not in selected_manual
             ]
-        try:
-            for layer_id, indices in self.state.selected_for_deletion.items():
-                if not indices or layer_id in manual_ids:
-                    continue
-                layer = self._layer_for(layer_id)
-                data = layer.direction if layer is not None else self.state.input_for(layer_id)  # type: ignore[arg-type]
-                if data is None:
-                    continue
-                direction = calculate_direction(data)
-                updated = delete_beams_input(data, direction, indices)
-                self._replace_layer_input(layer_id, updated)
-                internal_indices = {index for index in indices if 0 < index < len(direction.beam_centers) - 1}
-                self._reindex_sections_after_deletion(layer_id, internal_indices)
-                updated_inputs[layer_id] = updated
-        except CalculationError as exc:
-            self._on_error(exc, False)
-            return None
+        for layer_id, updated in updated_inputs.items():
+            selected = selected_by_layer[layer_id]
+            self._replace_layer_input(layer_id, updated)
+            direction = original_directions[layer_id]
+            internal_indices = {index for index in selected if 0 < index < len(direction.beam_centers) - 1}
+            self._reindex_sections_after_deletion(layer_id, internal_indices)
+        self.clear_deletion_selection()
         return updated_inputs
 
     def clear_section_selection(self) -> None:
@@ -432,7 +509,6 @@ class PalletController:
             LayerInput(layer.layer_id, layer.axis, data if layer.layer_id == layer_id else layer.direction)
             for layer in self.state.layers
         ]
-        layer = self._layer_for(layer_id)
         if layer_id in ("length", "width"):
             self.state.set_input(layer_id, data)  # type: ignore[arg-type]
 
@@ -481,6 +557,26 @@ class PalletController:
         reference_face: str | None = None, first_face: str = "top", second_face: str = "top",
     ) -> PalletResult | None:
         """Store one explicitly supported beam and rebuild the pallet view."""
+        current = self.state.result
+        supports = {(beam.layer_id, beam.layer_index): beam for beam in current.beams_3d} if current else {}
+        first, second = supports.get(first_support), supports.get(second_support)
+        reference = supports.get(reference_support) if reference_support is not None else None
+        valid_faces = {"top", "bottom"}
+        if (first is None or second is None or first is second
+                or first.orientation != second.orientation
+                or first_face not in valid_faces or second_face not in valid_faces
+                or first_face != second_face
+                or not isfinite(distance)
+                or not isfinite(section.height) or not isfinite(section.width)
+                or section.height <= 0 or section.width <= 0
+                or (reference_support is not None and reference is None)):
+            self._on_error(CalculationError("Ручной брус должен опираться на две разные параллельные грани с корректным сечением."), False)
+            return None
+        if reference is not None:
+            allowed_faces = {"x_min", "x_max"} if first.orientation == "length" else {"y_min", "y_max"}
+            if reference_face not in allowed_faces:
+                self._on_error(CalculationError("Для ручного бруса выбрана грань неподходящего направления."), False)
+                return None
         number = 1
         known = {beam.beam_id for beam in self.state.manual_beams}
         while f"manual-{number}" in known:
@@ -585,6 +681,10 @@ class PalletController:
         return beam.y + distance + half_offset
 
     def _run_automatic_rebuild(self) -> None:
+        scheduled_revision = self._scheduled_revision
+        self._scheduled_revision = None
+        if scheduled_revision is None or scheduled_revision != self._rebuild_revision:
+            return
         if self._input_provider is None:
             return
         try:

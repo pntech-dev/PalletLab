@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+import shutil
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -43,6 +44,7 @@ def export_pallet(result: PalletResult, parent_directory: str | Path, material_i
     try:
         return _export(api, result, output, get_material(material_id))
     except Exception as exc:
+        shutil.rmtree(output, ignore_errors=True)
         raise KompasExportError(str(exc)) from exc
     finally:
         api["pythoncom"].CoUninitialize()

@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree
 
@@ -77,6 +78,7 @@ def export_pallet(
 ) -> Path:
     """Create the native parts and assembly; return the newly-created folder."""
     api = _load_solidworks_api()
+    api["pythoncom"].CoInitialize()
     try:
         material = get_material(material_id)
         library = _validate_material_library(material_library, material_name)
@@ -85,6 +87,8 @@ def export_pallet(
         raise
     except Exception as exc:
         raise SolidWorksExportError(str(exc)) from exc
+    finally:
+        api["pythoncom"].CoUninitialize()
 
 
 def _load_solidworks_api() -> dict[str, object]:
@@ -134,22 +138,25 @@ def _export(api: dict[str, object], result: PalletResult, parent_directory: Path
     templates = _resolve_templates(api, sw, configured_templates)
     _ensure_material_library_is_configured(api, sw, material_library)
     output = create_output_directory(parent_directory, result)
+    try:
+        groups: dict[tuple[str, float, float, float], list[Beam3D]] = defaultdict(list)
+        for beam in result.beams_3d:
+            groups[(beam.orientation, beam.size_x, beam.size_y, beam.size_z)].append(beam)
 
-    groups: dict[tuple[str, float, float, float], list[Beam3D]] = defaultdict(list)
-    for beam in result.beams_3d:
-        groups[(beam.orientation, beam.size_x, beam.size_y, beam.size_z)].append(beam)
+        parts: dict[tuple[str, float, float, float], Path] = {}
+        for index, (key, beams) in enumerate(groups.items(), start=1):
+            orientation, size_x, size_y, size_z = key
+            length, cross_width = (size_y, size_x) if orientation == "width" else (size_x, size_y)
+            filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(cross_width)}x{_format_number(size_z)}.SLDPRT"
+            _create_beam(api, sw, templates.part, material, material_library, material_name, length, cross_width, size_z, filename)
+            parts[key] = filename
 
-    parts: dict[tuple[str, float, float, float], Path] = {}
-    for index, (key, beams) in enumerate(groups.items(), start=1):
-        orientation, size_x, size_y, size_z = key
-        length, cross_width = (size_y, size_x) if orientation == "width" else (size_x, size_y)
-        filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(cross_width)}x{_format_number(size_z)}.SLDPRT"
-        _create_beam(api, sw, templates.part, material, material_library, material_name, length, cross_width, size_z, filename)
-        parts[key] = filename
-
-    assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
-    _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
-    return output
+        assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
+        _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
+        return output
+    except Exception:
+        shutil.rmtree(output, ignore_errors=True)
+        raise
 
 
 def _resolve_templates(api: dict[str, object], sw, configured_templates) -> TemplatePaths:

@@ -383,6 +383,81 @@ def test_dimension_chain_uses_faces_of_the_uppermost_parallel_layer():
     assert errors == []
 
 
+def test_dimension_chain_falls_back_to_a_parallel_layer_when_top_edge_beams_are_hidden():
+    controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
+    result = controller.calculate_layers([
+        LayerInput("bottom", "length", LENGTH_INPUT),
+        LayerInput("middle", "width", WIDTH_INPUT),
+        LayerInput("top", "length", LENGTH_INPUT),
+    ])
+    assert result is not None
+
+    top_beam_count = len(calculate_direction(LENGTH_INPUT).beam_centers)
+    controller.set_deletion_selection("top", 0, True)
+    controller.set_deletion_selection("top", top_beam_count - 1, True)
+    assert controller.confirm_deletion() is not None
+    updated = controller.recalculate_from_state()
+
+    assert updated is not None
+    dimensions = editable_dimensions(updated)
+    assert {item.layer_id for item in dimensions if item.axis == "length"} == {"bottom"}
+    assert errors == []
+
+
+def test_pallet_length_dimension_remains_when_no_cross_beam_chain_survives():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+    # One of two extreme transverse beams is hidden, leaving no editable
+    # cross-beam interval while the longitudinal layer stays visible.
+    state.length_input = DirectionInput(
+        70, 50, (), 0, 0, 100, 100, support_positions=(), hidden_beam_indices=(0,),
+    )
+    updated = controller.recalculate_from_state()
+
+    assert updated is not None
+    dimensions = editable_dimensions(updated)
+    length_dimension = next(item for item in dimensions if item.layer_id == "pallet-length")
+    assert length_dimension.value == pytest.approx(updated.pallet_length)
+    assert length_dimension.editable
+    assert errors == []
+
+
+def test_pallet_length_dimension_remains_when_hidden_edges_leave_internal_cross_beams():
+    controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
+    result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")
+    assert result is not None
+    direction = calculate_direction(LENGTH_INPUT)
+
+    controller.set_deletion_selection("length", 0, True)
+    controller.set_deletion_selection("length", len(direction.beam_centers) - 1, True)
+    assert controller.confirm_deletion() is not None
+    updated = controller.recalculate_from_state()
+
+    assert updated is not None
+    dimensions = editable_dimensions(updated)
+    length_dimension = next(item for item in dimensions if item.layer_id == "pallet-length")
+    assert length_dimension.value == pytest.approx(updated.pallet_length)
+    assert length_dimension.editable
+    assert errors == []
+
+
+def test_envelope_dimension_edits_the_last_physical_beam_of_its_axis():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+    original = state.length_input
+    state.length_input = DirectionInput(
+        70, 50, (), 0, 0, 100, 100, support_positions=(), hidden_beam_indices=(0,),
+    )
+    assert controller.recalculate_from_state() is not None
+
+    controller.begin_distance_edit("pallet-length", 0)
+    assert controller.confirm_distance_edit(1000) is not None
+
+    assert state.length_input is not None
+    assert state.length_input.margin_end != original.margin_end
+    assert errors == []
+
+
 def test_section_tool_changes_a_manually_added_beam():
     controller, state, _view, _timer, _calculated, errors, _stale = _controller()
     assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
@@ -408,6 +483,18 @@ def test_manual_beam_can_be_selected_and_deleted():
     assert errors == []
 
 
+def test_invalid_manual_beam_is_rejected_without_changing_the_project():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+
+    assert controller.add_manual_beam(
+        ("width", 0), ("width", 0), 100, BeamSection(70, 50),
+    ) is None
+
+    assert state.manual_beams == []
+    assert errors
+
+
 def test_edge_beam_can_be_deleted_without_changing_the_pallet_envelope():
     controller, state, _view, _timer, _calculated, errors, _stale = _controller()
     result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")
@@ -421,6 +508,26 @@ def test_edge_beam_can_be_deleted_without_changing_the_pallet_envelope():
     assert not any(beam.layer_id == "length" and beam.layer_index == 0 for beam in updated.beams_3d)
     assert updated.pallet_length == result.pallet_length
     assert errors == []
+
+
+def test_deletion_is_atomic_and_clears_only_its_confirmed_selection():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+    original = state.length_input
+    controller.set_deletion_selection("length", 1, True)
+    assert not controller.set_deletion_selection("removed-layer", 0, True)
+
+    assert controller.confirm_deletion() is not None
+    assert state.length_input != original
+    assert state.selected_for_deletion == {"length": set(), "width": set()}
+
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+    controller.set_deletion_selection("length", 1, True)
+    state.result = None
+    assert controller.confirm_deletion() is None
+    assert state.length_input == LENGTH_INPUT
+
+    assert errors
 
 
 def test_invalid_distance_edit_does_not_leave_an_unusable_zero_support_spacing():
@@ -485,6 +592,35 @@ def test_controller_debounces_automatic_recalculation():
     assert timer.starts == 2
     assert stale == [True, True, False]
     assert state.result is not None
+
+
+def test_invalid_calculation_keeps_the_previous_project_and_scene():
+    controller, state, view, _timer, calculated, errors, _stale = _controller()
+    original = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")
+    assert original is not None
+
+    invalid = DirectionInput(70, 50, (30,), 100, 100, 100, 100)
+
+    assert controller.calculate(invalid, WIDTH_INPUT, "width", show_error=False) is None
+    assert state.length_input == LENGTH_INPUT
+    assert state.result is original
+    assert [rendered[0] for rendered in view.rendered] == [original]
+    assert calculated == [original]
+    assert errors
+
+
+def test_cancelled_automatic_rebuild_cannot_apply_stale_form_values():
+    requests = [(LENGTH_INPUT, WIDTH_INPUT, "width")]
+    controller, state, view, timer, _calculated, _errors, _stale = _controller(
+        input_provider=lambda: requests.pop(),
+    )
+
+    controller.schedule_recalculation()
+    controller.invalidate_scheduled_recalculation()
+    timer.timeout.callback()
+
+    assert state.result is None
+    assert view.rendered == []
 
 
 def test_controller_handles_insert_delete_and_distance_edits_through_project_state():

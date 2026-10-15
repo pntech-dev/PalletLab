@@ -78,3 +78,34 @@ def test_history_is_limited_and_a_new_edit_clears_redo():
     assert history.undo(state)
     history.record(history.snapshot(state))
     assert history.redo_stack == []
+
+
+def test_history_keeps_fifty_distinct_actions():
+    state = ProjectState(length_input=_input())
+    history = ProjectHistory()
+
+    for spacing in range(501, 551):
+        history.record(history.snapshot(state))
+        state.length_input = DirectionInput(70, 50, (spacing,), 100, 100, 100, 100)
+
+    assert len(history.undo_stack) == 50
+    for _ in range(50):
+        assert history.undo(state)
+    assert not history.undo(state)
+    assert state.length_input == _input()
+
+
+def test_history_records_each_successful_change_as_a_separate_undo_step():
+    state = ProjectState(length_input=_input())
+    history = ProjectHistory()
+
+    history.record(history.snapshot(state))
+    state.length_input = DirectionInput(70, 50, (600,), 100, 100, 100, 100)
+    history.record(history.snapshot(state))
+    state.material_id = "spruce"
+
+    assert history.undo(state)
+    assert state.material_id != "spruce"
+    assert state.length_input.support_distances == (600,)
+    assert history.undo(state)
+    assert state.length_input == _input()

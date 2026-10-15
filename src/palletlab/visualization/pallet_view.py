@@ -10,7 +10,7 @@ import pyvista as pv
 from pyvistaqt import QtInteractor
 
 from palletlab.core.formatting import format_mm
-from palletlab.core.models import PalletAxis, PalletResult
+from palletlab.core.models import InsertionSlot, PalletAxis, PalletResult
 from palletlab.controllers.viewport_geometry import EditableDimension, InsertionMarker, PreviewBox, beam_faces, editable_dimensions
 
 
@@ -24,6 +24,7 @@ class PalletView(QtInteractor):
         self._axes_added = False
         self._annotation_actors: list[object] = []
         self._annotation_segments: list[pv.PolyData] | None = None
+        self._annotation_key: tuple[object, bool, bool, object] | None = None
         self._insertion_slots: dict[object, InsertionMarker] = {}
         self._insertion_visual_actors: list[object] = []
         self._insertion_callback: Callable[[object], None] | None = None
@@ -34,8 +35,12 @@ class PalletView(QtInteractor):
         # (axis, index) key becomes ambiguous as soon as two layers share an
         # axis, so every editor uses the physical layer identity.
         self._beam_actors: dict[object, tuple[str, PalletAxis, int]] = {}
+        # Physical geometry keyed by its stable layer/index identity.  It lets
+        # a normal recalculation replace only beams that actually changed.
+        self._beam_actor_by_key: dict[tuple[str, int], object] = {}
+        self._beam_specs: dict[tuple[str, int], object] = {}
         self._beam_counts: dict[str, int] = {}
-        self._deletion_callback: Callable[[str, int, bool], None] | None = None
+        self._deletion_callback: Callable[[str, int, bool], bool] | None = None
         self._deletion_mode = False
         self._selected_deletion_actors: set[object] = set()
         self._hovered_deletion_actor = None
@@ -59,6 +64,7 @@ class PalletView(QtInteractor):
         self._step_edges: pv.PolyData | None = None
         self._step_model_actor = None
         self._step_edge_actor = None
+        self._rendered_step_mesh: pv.PolyData | None = None
         self._step_model_visible = True
         self._step_faces = ()
         self._support_callback: Callable[[int], None] | None = None
@@ -110,29 +116,16 @@ class PalletView(QtInteractor):
         dimensions: tuple[EditableDimension, ...] | None = None,
     ) -> None:
         camera_position = self.camera_position if self._has_model else None
-        # Keep the STEP actor in the renderer.  Clearing the complete scene
-        # made a large translucent model flash on every pallet recalculation.
-        self._clear_pallet_actors()
+        # Keep the STEP actor and unchanged pallet beams in the renderer.
+        # Recreating the complete scene made large models flash while also
+        # discarding a camera position the user had already chosen.
+        if self._has_beam_changes(result):
+            self._clear_interaction_overlays()
+        self._sync_beam_actors(result)
         self._beam_counts = {}
         for beam in result.beams_3d:
             layer_id = beam.layer_id or beam.orientation
             self._beam_counts[layer_id] = max(self._beam_counts.get(layer_id, 0), beam.layer_index + 1)
-        for beam_index, beam in enumerate(result.beams_3d):
-            cube = self._beam_cube(result, beam)
-            color = "#b7791f" if beam.orientation == "length" else "#8b5a2b"
-            actor = self.add_mesh(
-                cube,
-                color=color,
-                show_edges=True,
-                edge_color="#4a2c12",
-                smooth_shading=False,
-                pickable=True,
-                name=f"pallet-beam-{beam_index}",
-                reset_camera=False,
-            )
-            layer_id = beam.layer_id or beam.orientation
-            axis: PalletAxis = "length" if beam.orientation == "width" else "width"
-            self._beam_actors[actor] = (layer_id, axis, beam.layer_index)
         self.update_dimension_annotations(result, show_length_gaps, show_width_gaps, render=False, dimensions=dimensions)
         self._ensure_axes()
         self._sync_step_model_actor()
@@ -143,18 +136,86 @@ class PalletView(QtInteractor):
             self.render()
         self._has_model = True
 
-    def _clear_pallet_actors(self) -> None:
-        """Replace pallet-only actors without disturbing the STEP preview."""
+    def _sync_beam_actors(self, result: PalletResult) -> bool:
+        """Keep unchanged beam actors and replace only changed geometry."""
+        desired = self._desired_beam_specs(result)
+        changed_keys = self._changed_beam_keys(self._beam_specs, desired)
+        changed = False
+        for key, actor in tuple(self._beam_actor_by_key.items()):
+            if key not in changed_keys:
+                continue
+            self.remove_actor(actor, render=False)
+            self._beam_actor_by_key.pop(key, None)
+            self._beam_specs.pop(key, None)
+            self._beam_actors.pop(actor, None)
+            changed = True
+        for beam in result.beams_3d:
+            key = (beam.layer_id or beam.orientation, beam.layer_index)
+            if key in self._beam_actor_by_key:
+                continue
+            cube = self._beam_cube(result, beam)
+            color = "#b7791f" if beam.orientation == "length" else "#8b5a2b"
+            actor = self.add_mesh(
+                cube, color=color, show_edges=True, edge_color="#4a2c12",
+                # A global enumerate index changes as soon as any preceding
+                # beam is removed.  PyVista treats a repeated ``name`` as a
+                # replacement, which used to make an unselected beam vanish
+                # while the actor registry still referenced it.  This name is
+                # the same stable identity used by the registry instead.
+                smooth_shading=False, pickable=True,
+                name=self._beam_actor_name(key), reset_camera=False,
+            )
+            axis: PalletAxis = "length" if beam.orientation == "width" else "width"
+            self._beam_actor_by_key[key] = actor
+            self._beam_specs[key] = beam
+            self._beam_actors[actor] = (key[0], axis, beam.layer_index)
+            changed = True
+        return changed
+
+    @staticmethod
+    def _beam_actor_name(key: tuple[str, int]) -> str:
+        """Return an actor name invariant under insertions in other layers."""
+        layer_id, index = key
+        return f"pallet-beam-{layer_id}-{index}"
+
+    @staticmethod
+    def _desired_beam_specs(result: PalletResult) -> dict[tuple[str, int], object]:
+        return {
+            (beam.layer_id or beam.orientation, beam.layer_index): beam
+            for beam in result.beams_3d
+        }
+
+    def _has_beam_changes(self, result: PalletResult) -> bool:
+        return bool(self._changed_beam_keys(self._beam_specs, self._desired_beam_specs(result)))
+
+    @staticmethod
+    def _changed_beam_keys(previous: dict[tuple[str, int], object], desired: dict[tuple[str, int], object]) -> set[tuple[str, int]]:
+        """Return only actor identities whose geometry was added, removed or changed."""
+        return {
+            key for key in previous.keys() | desired.keys()
+            if previous.get(key) != desired.get(key)
+        }
+
+    def _clear_interaction_overlays(self) -> None:
+        """Remove transient picking actors before changed beams are replaced."""
         self.disable_insertion_mode(render=False)
         self.disable_deletion_mode(render=False)
         self.disable_section_editing(render=False)
         self.disable_distance_editing(render=False)
+        self.disable_support_face_selection(render=False)
+
+    def _clear_pallet_actors(self) -> None:
+        """Replace pallet-only actors without disturbing the STEP preview."""
+        self._clear_interaction_overlays()
         self._remove_actors(list(self._beam_actors))
         self._beam_actors.clear()
+        self._beam_actor_by_key.clear()
+        self._beam_specs.clear()
         self._remove_actors(self._annotation_actors)
         self.remove_actor("length-dimension-labels-points", render=False)
         self.remove_actor("width-dimension-labels-points", render=False)
         self._annotation_segments = None
+        self._annotation_key = None
 
     def _ensure_axes(self) -> None:
         if self._axes_added:
@@ -163,16 +224,23 @@ class PalletView(QtInteractor):
         self._axes_added = True
 
     def clear_workspace(self) -> None:
-        """Remove the pallet and any imported machine before a new STEP import."""
-        self.clear()
-        self._annotation_actors.clear()
-        self._beam_actors.clear()
+        """Remove scene objects without resetting the renderer's lighting palette."""
+        # ``QtInteractor.clear`` recreates renderer state.  That subtly changes
+        # the apparent timber colours after Reset even though every beam has
+        # the same RGB value.  Remove only our actors so a reset looks exactly
+        # like the pallet that was already on screen.
+        self._clear_pallet_actors()
+        self.remove_actor("step-model", render=False)
+        self.remove_actor("step-model-edges", render=False)
+        self._remove_step_hover_face()
+        self._annotation_key = None
         self._distance_actors.clear()
         self._distance_visual_actors.clear()
         self._step_mesh = None
         self._step_edges = None
         self._step_model_actor = None
         self._step_edge_actor = None
+        self._rendered_step_mesh = None
         self._step_faces = ()
         self._support_callback = None
         self._support_face_indices.clear()
@@ -181,7 +249,6 @@ class PalletView(QtInteractor):
         self._hovered_step_face_index = None
         self._step_hover_actor = None
         self._has_model = False
-        self._axes_added = False
         self._ensure_axes()
         self.render()
 
@@ -193,6 +260,7 @@ class PalletView(QtInteractor):
         self._step_edges = None
         self._step_model_actor = None
         self._step_edge_actor = None
+        self._rendered_step_mesh = None
         self._step_faces = ()
         self._support_callback = None
         self._support_face_indices.clear()
@@ -205,8 +273,7 @@ class PalletView(QtInteractor):
 
     def prepare_step_model_rebuild(self, callback: Callable[[int], None]) -> None:
         """Remove only pallet geometry and re-enable support picking on the visible model."""
-        self._remove_actors(list(self._beam_actors))
-        self._beam_actors.clear()
+        self._clear_pallet_actors()
         self._beam_counts = {"length": 0, "width": 0}
         self._remove_actors(self._annotation_actors)
         self.remove_actor("length-dimension-labels-points", render=False)
@@ -420,12 +487,15 @@ class PalletView(QtInteractor):
                 line_width=1.35, pickable=False, name="step-model-edges", reset_camera=False,
             )
             self._step_edge_actor.SetVisibility(self._step_model_visible)
+        self._rendered_step_mesh = self._step_mesh
         if render:
             self.render()
 
     def _sync_step_model_actor(self) -> None:
         """Refresh STEP geometry without rendering an intermediate empty scene."""
         if self._step_mesh is None:
+            return
+        if self._step_model_actor is not None and self._rendered_step_mesh is self._step_mesh:
             return
         # Recreating the two actors is more reliable than changing a VTK
         # mapper's input in place: the latter can lose PyVista's opacity and
@@ -459,6 +529,11 @@ class PalletView(QtInteractor):
         dimensions: tuple[EditableDimension, ...] | None = None,
     ) -> None:
         """Refresh only the distance annotations, leaving beam geometry intact."""
+        key = (result, show_length_gaps, show_width_gaps, dimensions)
+        if key == self._annotation_key:
+            if render:
+                self.render()
+            return
         self._remove_actors(self._annotation_actors)
         # ``add_point_labels`` owns an additional ``<name>-points`` actor.
         # It is not returned to us, so remove it by name when hiding or
@@ -469,6 +544,7 @@ class PalletView(QtInteractor):
             self._add_length_gap_dimensions(result, dimensions)
         if show_width_gaps:
             self._add_width_gap_dimensions(result, dimensions)
+        self._annotation_key = key
         if render:
             self.render()
 
@@ -521,7 +597,7 @@ class PalletView(QtInteractor):
         if render:
             self.render()
 
-    def enable_deletion_mode(self, callback: Callable[[str, int, bool], None]) -> None:
+    def enable_deletion_mode(self, callback: Callable[[str, int, bool], bool]) -> None:
         """Make only internal beams clickable and show selected ones in red."""
         self.disable_insertion_mode(render=False)
         self._deletion_mode = True
@@ -557,8 +633,15 @@ class PalletView(QtInteractor):
         self._set_deletion_color(actor, selected)
         if not selected and actor == self._hovered_deletion_actor:
             self._set_deletion_hover_color(actor)
-        if self._deletion_callback:
-            self._deletion_callback(layer_id, index, selected)
+        if self._deletion_callback and not self._deletion_callback(layer_id, index, selected):
+            # The controller declined a stale identity.  Restore the actor
+            # immediately so the red visual selection never disagrees with
+            # the exact transaction that will be confirmed.
+            if selected:
+                self._selected_deletion_actors.remove(actor)
+            else:
+                self._selected_deletion_actors.add(actor)
+            self._set_deletion_color(actor, selected=not selected)
         self.render()
 
     def _click_insertion(self, *_args) -> None:
@@ -642,7 +725,7 @@ class PalletView(QtInteractor):
         self.enable_support_face_selection(callback)
         self._support_pick_all_faces = True
 
-    def disable_support_face_selection(self) -> None:
+    def disable_support_face_selection(self, *, render: bool = True) -> None:
         was_active = self._support_pick_mode
         if self._hovered_support_actor is not None:
             self._restore_support_actor(self._hovered_support_actor)
@@ -657,7 +740,8 @@ class PalletView(QtInteractor):
             # its corresponding mouse-release event.  End the pending press
             # explicitly so the next mouse move cannot rotate the pallet.
             QTimer.singleShot(0, self._stop_left_button_interaction)
-        self.render()
+        if render:
+            self.render()
 
     def _click_support_face(self, *_args) -> None:
         if not self._support_pick_mode:
@@ -917,13 +1001,14 @@ class PalletView(QtInteractor):
         actor.GetProperty().SetColor(*color)
         actor.GetProperty().SetOpacity(0.95 if selected else 0.14)
 
-    def show_insertion_preview(self, preview: PreviewBox) -> None:
+    def show_insertion_preview(self, preview: PreviewBox, *, render: bool = True) -> None:
         """Draw a translucent candidate beam without committing it to the model."""
         self.clear_insertion_preview()
         cube = pv.Cube(center=preview.center, x_length=preview.size[0], y_length=preview.size[1], z_length=preview.size[2])
         self.add_mesh(cube, color="#23908a", opacity=0.46, show_edges=True, edge_color="#155854",
                       name="insertion-preview")
-        self.render()
+        if render:
+            self.render()
 
     def clear_insertion_preview(self) -> None:
         self.remove_actor("insertion-preview", render=False)
@@ -962,7 +1047,7 @@ class PalletView(QtInteractor):
         for actor in self._insertion_slots:
             actor.GetProperty().SetOpacity(0.6 if actor == hovered else 0.35)
         if hovered:
-            self.show_insertion_preview(self._insertion_slots[hovered].preview)
+            self.show_insertion_preview(self._insertion_slots[hovered].preview, render=False)
         else:
             self.clear_insertion_preview()
         self.render()

@@ -6,7 +6,7 @@ import pytest
 
 from palletlab.controllers.pallet_controller import PalletController
 from palletlab.core.models import BeamSection, DirectionInput, LayerInput
-from palletlab.core.persistence import ProjectPersistenceError, load_project, project_from_dict, save_project
+from palletlab.core.persistence import ProjectPersistenceError, load_project, project_from_dict, project_to_dict, save_project
 from palletlab.core.project_state import ProjectState
 
 
@@ -122,3 +122,26 @@ def test_controller_opens_saved_project_and_rebuilds_it(tmp_path):
     assert result is state.result
     assert loaded == [state]
     assert state.camera == "top"
+
+
+def test_save_replaces_a_project_atomically_after_validation(tmp_path):
+    path = tmp_path / "project.json"
+    path.write_text('{"previous": true}', encoding="utf-8")
+
+    save_project(path, _state())
+
+    assert project_from_dict(json.loads(path.read_text(encoding="utf-8"))).material_id == "spruce"
+    assert not list(tmp_path.glob(".project.json.*.tmp"))
+
+
+def test_project_rejects_duplicate_manual_beam_ids():
+    raw = project_to_dict(_state())
+    beam = {
+        "id": "manual-1", "first": ["length", 0], "second": ["width", 0],
+        "distance": 100, "height": 50, "width": 50, "reference": None,
+        "reference_face": None, "first_face": "top", "second_face": "top",
+    }
+    raw["pallet"]["manual_beams"] = [beam, beam.copy()]
+
+    with pytest.raises(ProjectPersistenceError, match="не должны повторяться"):
+        project_from_dict(raw)

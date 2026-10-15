@@ -109,15 +109,19 @@ def editable_dimensions(
         layer_id for layer_id, beams in layer_beams.items()
         if not layer_id.startswith("manual-") and len(beams) > 1
     )
-    # Show one clear dimension chain per axis.  When a stack contains several
-    # parallel layers, the uppermost physical layer is the one a user sees and
-    # edits first; its actual faces must therefore drive the annotations.
+    # Show one clear dimension chain per axis.  Prefer a parallel layer whose
+    # visible outer faces still cover the pallet envelope.  An upper layer can
+    # have both edge beams deliberately hidden; in that case its remaining
+    # beams must not make the dimensions disappear while a lower parallel
+    # layer still provides the real outer faces.
     visible_layer_by_axis: dict[PalletAxis, str] = {}
     for layer_id in dimension_layers:
         beams = layer_beams[layer_id]
         axis: PalletAxis = "length" if beams[0].orientation == "width" else "width"
         current = visible_layer_by_axis.get(axis)
-        if current is None or max(beam.z for beam in beams) > max(beam.z for beam in layer_beams[current]):
+        if current is None or _dimension_layer_priority(result, beams, axis) > _dimension_layer_priority(
+            result, layer_beams[current], axis,
+        ):
             visible_layer_by_axis[axis] = layer_id
     for layer_id in dimension_layers:
         beams = layer_beams[layer_id]
@@ -140,8 +144,61 @@ def editable_dimensions(
                 start_point, end_point = (-offset * index, _display_y(result, base), result.pallet_height + 2), (-offset * index, _display_y(result, end), result.pallet_height + 2)
             value = end - base
             handles.append(EditableDimension(layer_id, axis, beams[index].layer_index, value, start_point, end_point))
+    # The calculated pallet envelope remains meaningful after every beam of
+    # one direction is hidden.  Do not make its overall length/width vanish
+    # merely because there is no longer a same-direction chain to edit: the
+    # perpendicular beams still make the physical pallet and its dimensions
+    # visible.  This fallback is deliberately read-only because it has no
+    # surviving beam index to move.
+    for axis in ("length", "width"):
+        if result.beams_3d and _needs_envelope_dimension(result, axis, handles):
+            handles.append(_envelope_dimension(result, axis))
     handles.extend(_manual_beam_dimensions(result, manual_beams, handles))
     return _arrange_base_dimensions(result, tuple(handles))
+
+
+def _envelope_dimension(result: PalletResult, axis: PalletAxis) -> EditableDimension:
+    """Return an editable overall size when a visible chain is absent.
+
+    The controller maps this synthetic dimension back to the last physical
+    beam of the appropriate layer, so users can still change the maximum
+    pallet length or width after an outer beam was hidden.
+    """
+    offset = max(50.0, result.pallet_width * 0.045)
+    z = result.pallet_height + 2
+    if axis == "length":
+        start, end = (0.0, _display_y(result, -offset), z), (result.pallet_length, _display_y(result, -offset), z)
+    else:
+        start, end = (-offset, _display_y(result, 0.0), z), (-offset, _display_y(result, result.pallet_width), z)
+    return EditableDimension(f"pallet-{axis}", axis, 0, result.pallet_length if axis == "length" else result.pallet_width,
+                             start, end, editable=True)
+
+
+def _needs_envelope_dimension(
+    result: PalletResult, axis: PalletAxis, dimensions: list[EditableDimension],
+) -> bool:
+    """Keep the overall size if hidden edge beams shortened every chain."""
+    envelope = result.pallet_length if axis == "length" else result.pallet_width
+    tolerance = max(1e-6, envelope * 1e-9)
+    return not any(
+        dimension.axis == axis
+        and abs(dimension.value - envelope) <= tolerance
+        and dimension.start_extension is None
+        for dimension in dimensions
+    )
+
+
+def _dimension_layer_priority(result: PalletResult, beams: tuple, axis: PalletAxis) -> tuple[bool, float]:
+    """Rank a dimension source by envelope coverage, then visible height."""
+    faces = (
+        tuple((beam.x - beam.size_x / 2, beam.x + beam.size_x / 2) for beam in beams)
+        if axis == "length"
+        else tuple((beam.y - beam.size_y / 2, beam.y + beam.size_y / 2) for beam in beams)
+    )
+    envelope = result.pallet_length if axis == "length" else result.pallet_width
+    tolerance = max(1e-6, envelope * 1e-9)
+    covers_envelope = faces[0][0] <= tolerance and faces[-1][1] >= envelope - tolerance
+    return covers_envelope, max(beam.z for beam in beams)
 
 
 def _arrange_base_dimensions(

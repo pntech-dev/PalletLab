@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import tempfile
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,29 +52,48 @@ def find_newer_release(raw: object, current_version: str) -> Release | None:
     return max(newer, key=lambda release: version_key(release.version), default=None)
 
 
+def _request(url_or_request, *, timeout: int, attempts: int = 3):
+    """Open a short-lived HTTP request with bounded retries for transient failures."""
+    last_error: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            return urllib.request.urlopen(url_or_request, timeout=timeout)
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep(0.3 * (attempt + 1))
+    raise RuntimeError("Сервер обновлений временно недоступен.") from last_error
+
+
 def fetch_newer_release(current_version: str) -> Release | None:
     request = urllib.request.Request(RELEASES_URL, headers={"Accept": "application/vnd.github+json", "User-Agent": "PalletLab"})
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with _request(request, timeout=10) as response:
         return find_newer_release(json.load(response), current_version)
 
 
 def download_verified(release: Release, progress) -> Path:
-    with urllib.request.urlopen(release.checksum_url, timeout=15) as response:
+    with _request(release.checksum_url, timeout=15) as response:
         expected = response.read().decode("utf-8").split()[0].lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise RuntimeError("Сервер обновлений вернул некорректную контрольную сумму.")
     target = Path(tempfile.mkdtemp(prefix="palletlab-update-")) / f"PalletLab-{release.version}-update.zip"
     request = urllib.request.Request(release.package_url, headers={"User-Agent": "PalletLab"})
-    with urllib.request.urlopen(request, timeout=30) as response, target.open("wb") as stream:
-        total = int(response.headers.get("Content-Length", 0))
-        received = 0
-        while chunk := response.read(1024 * 1024):
-            stream.write(chunk)
-            received += len(chunk)
-            progress(received, total)
-    actual = _sha256_file(target)
-    if actual.lower() != expected:
+    try:
+        with _request(request, timeout=30) as response, target.open("wb") as stream:
+            total = int(response.headers.get("Content-Length", 0))
+            received = 0
+            while chunk := response.read(1024 * 1024):
+                stream.write(chunk)
+                received += len(chunk)
+                progress(received, total)
+        actual = _sha256_file(target)
+        if actual.lower() != expected:
+            raise RuntimeError("Проверка целостности обновления не пройдена.")
+        return target
+    except Exception:
         target.unlink(missing_ok=True)
-        raise RuntimeError("Проверка целостности обновления не пройдена.")
-    return target
+        target.parent.rmdir()
+        raise
 
 
 def _sha256_file(path: Path) -> str:

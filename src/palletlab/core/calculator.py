@@ -371,11 +371,7 @@ def build_pallet(
     upper_layer: LayerDirection = "width",
     section_overrides: Mapping[BeamKey, BeamSection] | None = None,
 ) -> PalletResult:
-    """Turn two already-calculated directions into real 3D beam boxes.
-
-    Input coordinates are the only positioning source: length-axis centres make
-    beams spanning Y, while width-axis centres make beams spanning X.
-    """
+    """Adapt the legacy two-direction API to the canonical layer builder."""
     if upper_layer not in ("length", "width"):
         raise CalculationError("Верхний слой должен быть задан как 'length' или 'width'.")
     overrides = section_overrides or {}
@@ -387,53 +383,10 @@ def build_pallet(
         raise CalculationError("Изменённое сечение относится к брусу, которого больше нет.")
     length_sections = tuple(_section_for("length", index, length, overrides) for index in range(len(length.beam_centers)))
     width_sections = tuple(_section_for("width", index, width, overrides) for index in range(len(width.beam_centers)))
-    length_centres = _centres_for_sections(length, length_sections)
-    width_centres = _centres_for_sections(width, width_sections)
-    _validate_sections(length, length_sections, length_centres)
-    _validate_sections(width, width_sections, width_centres)
-
-    lower = "width" if upper_layer == "length" else "length"
-    lower_direction = width if lower == "width" else length
-    lower_sections = width_sections if lower == "width" else length_sections
-    lower_height = max(
-        section.height for index, section in enumerate(lower_sections)
-        if index not in lower_direction.hidden_beam_indices
-    )
-    # A layer is a bearing plane.  Beams with a smaller height are therefore
-    # lifted inside their own lower layer so their *upper* faces remain flush
-    # with the highest beam.  Keeping them on Z=0 would leave a visible and
-    # structural gap below every beam of the next layer.
-    z_length = lower_height if lower == "width" else 0.0
-    z_width = lower_height if lower == "length" else 0.0
-    beams: list[Beam3D] = []
-    # Length-result centres lie on X: these beams span the full pallet width.
-    for index, (x, section) in enumerate(zip(length_centres, length_sections)):
-        if index in length.hidden_beam_indices:
-            continue
-        beam_z = z_length + section.height / 2 if lower != "length" else lower_height - section.height / 2
-        beams.append(Beam3D(x, width.pallet_size / 2, beam_z,
-                            section.width, width.pallet_size, section.height, "width", "length", index))
-    # Width-result centres lie on Y: these beams span the full pallet length.
-    for index, (y, section) in enumerate(zip(width_centres, width_sections)):
-        if index in width.hidden_beam_indices:
-            continue
-        beam_z = z_width + section.height / 2 if lower != "width" else lower_height - section.height / 2
-        beams.append(Beam3D(length.pallet_size / 2, y, beam_z,
-                            length.pallet_size, section.width, section.height, "length", "width", index))
-    upper_direction = length if upper_layer == "length" else width
-    upper_sections = length_sections if upper_layer == "length" else width_sections
-    result = PalletResult(
-        length, width, length.pallet_size, width.pallet_size,
-        lower_height + max(
-            section.height for index, section in enumerate(upper_sections)
-            if index not in upper_direction.hidden_beam_indices
-        ), upper_layer, tuple(beams),
-    )
-    bounds = pallet_bounds(result.beams_3d)
-    if not (math.isclose(bounds[1] - bounds[0], result.pallet_length, abs_tol=EPSILON)
-            and math.isclose(bounds[3] - bounds[2], result.pallet_width, abs_tol=EPSILON)):
-        raise CalculationError("3D-геометрия не совпадает с рассчитанным габаритом поддона.")
-    return result
+    length_layer = LayerDefinition("length", "length", length, length_sections)
+    width_layer = LayerDefinition("width", "width", width, width_sections)
+    ordered_layers = (length_layer, width_layer) if upper_layer == "width" else (width_layer, length_layer)
+    return build_multilayer_pallet(ordered_layers)
 
 
 def pallet_bounds(beams: Iterable[Beam3D]) -> tuple[float, float, float, float, float, float]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,7 +39,11 @@ REFERENCE_RGB = np.array((255, 176, 26), dtype=np.uint8)
 SUPPORT_RGB = np.array((230, 41, 51), dtype=np.uint8)
 PARALLEL_COSINE = math.cos(math.radians(0.5))
 HORIZONTAL_COSINE = math.cos(math.radians(2.0))
-CACHE_VERSION = 5
+CACHE_VERSION = 6
+CACHE_MAX_FILES = 32
+CACHE_MAX_BYTES = 5_000_000_000
+LARGE_STEP_BYTES = 20_000_000
+VERY_LARGE_STEP_BYTES = 100_000_000
 
 
 @dataclass(frozen=True)
@@ -69,18 +74,54 @@ def cache_directory() -> Path:
 
 
 def _cache_path(source_path: Path) -> Path:
-    key = hashlib.sha256(str(source_path).encode("utf-8")).hexdigest()[:24]
+    source = source_path.stat()
+    identity = f"{source_path}\0{source.st_size}\0{source.st_mtime_ns}".encode("utf-8")
+    key = hashlib.sha256(identity).hexdigest()
     return cache_directory() / f"step-view-v{CACHE_VERSION}-{key}.npz"
 
 
+def _discard_cache(path: Path) -> None:
+    """Remove an unusable cache entry; cache failures must not break import."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _prune_cache(directory: Path) -> None:
+    """Bound cache growth and remove obsolete formats after a successful write."""
+    try:
+        entries = sorted(
+            (entry for entry in directory.glob("step-view-*.npz") if entry.is_file()),
+            key=lambda entry: entry.stat().st_mtime_ns,
+            reverse=True,
+        )
+        total = sum(entry.stat().st_size for entry in entries)
+        for position, entry in enumerate(entries):
+            if (not entry.name.startswith(f"step-view-v{CACHE_VERSION}-")
+                    or position >= CACHE_MAX_FILES or total > CACHE_MAX_BYTES):
+                size = entry.stat().st_size
+                _discard_cache(entry)
+                total -= size
+    except OSError:
+        pass
+
+
 def _load_cached_model(source_path: Path) -> ImportedStepModel | None:
-    path = _cache_path(source_path)
+    try:
+        path = _cache_path(source_path)
+        source = source_path.stat()
+    except OSError:
+        return None
     if not path.is_file():
         return None
-    source = source_path.stat()
     try:
         with np.load(path, allow_pickle=False) as cached:
-            if int(cached["source_size"]) != source.st_size or int(cached["source_mtime_ns"]) != source.st_mtime_ns:
+            if (int(cached["cache_version"]) != CACHE_VERSION
+                    or str(cached["source_path"]) != str(source_path)
+                    or int(cached["source_size"]) != source.st_size
+                    or int(cached["source_mtime_ns"]) != source.st_mtime_ns):
+                _discard_cache(path)
                 return None
             mesh = pv.PolyData(np.asarray(cached["points"]), np.asarray(cached["cells"]))
             mesh.cell_data["step_face_index"] = np.asarray(cached["cell_face_indices"], dtype=np.int32)
@@ -95,7 +136,8 @@ def _load_cached_model(source_path: Path) -> ImportedStepModel | None:
             edges = pv.PolyData(np.asarray(cached["edge_points"]), lines=np.asarray(cached["edge_cells"]))
             diagonal = float(np.linalg.norm((mesh.bounds[1] - mesh.bounds[0], mesh.bounds[3] - mesh.bounds[2], mesh.bounds[5] - mesh.bounds[4])))
             return ImportedStepModel(mesh, edges, faces, max(diagonal * 1e-6, 1e-9), source_path)
-    except (KeyError, OSError, ValueError, TypeError):
+    except Exception:  # Cache data is untrusted and can be interrupted/corrupt.
+        _discard_cache(path)
         return None
 
 
@@ -107,12 +149,15 @@ def load_cached_step_model(filename: str | Path) -> ImportedStepModel | None:
 def _save_cached_model(model: ImportedStepModel) -> None:
     """Persist only display geometry and exact support-plane descriptors."""
     path = _cache_path(model.source_path)
+    temporary: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         source = model.source_path.stat()
-        temporary = path.with_suffix(".tmp.npz")
+        with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".npz", delete=False) as handle:
+            temporary = Path(handle.name)
         np.savez(
             temporary,
+            cache_version=np.uint8(CACHE_VERSION), source_path=str(model.source_path),
             source_size=np.uint64(source.st_size), source_mtime_ns=np.uint64(source.st_mtime_ns),
             points=model.mesh.points, cells=model.mesh.faces,
             edge_points=model.edges.points, edge_cells=model.edges.lines,
@@ -121,9 +166,13 @@ def _save_cached_model(model: ImportedStepModel) -> None:
             face_normals=np.asarray([face.normal if face.normal is not None else (np.nan, np.nan, np.nan) for face in model.faces]),
         )
         temporary.replace(path)
+        _prune_cache(path.parent)
     except OSError:
         # Caching is only an acceleration. A read-only profile must not stop import.
         return
+    finally:
+        if temporary is not None and temporary.exists():
+            _discard_cache(temporary)
 
 
 def _planar_face_geometry(face) -> tuple[np.ndarray | None, np.ndarray | None]:
@@ -205,6 +254,17 @@ def _shape_diagonal(shape) -> float:
     return diagonal
 
 
+def _tessellation_parameters(diagonal: float, source_size: int) -> tuple[float, float]:
+    """Choose a lighter but still face-selectable mesh for large assemblies."""
+    relative_deflection = 1e-4
+    angular_deflection = 12.0
+    if source_size >= VERY_LARGE_STEP_BYTES:
+        relative_deflection, angular_deflection = 5e-4, 20.0
+    elif source_size >= LARGE_STEP_BYTES:
+        relative_deflection, angular_deflection = 2.5e-4, 16.0
+    return max(diagonal * relative_deflection, 1e-9), math.radians(angular_deflection)
+
+
 def load_step_model(filename: str | Path, progress=None) -> ImportedStepModel:
     """Read a STEP file once and retain a mapping between triangles and B-Rep faces."""
     source_path = Path(filename).expanduser().resolve()
@@ -232,8 +292,10 @@ def load_step_model(filename: str | Path, progress=None) -> ImportedStepModel:
         progress(10, "Подготавливаем геометрию…")
     # This is the same scale-sensitive tessellation recipe proven in
     # test_scripts/step_support_detector.py.
-    deflection = max(_shape_diagonal(shape) * 1e-4, 1e-9)
-    BRepMesh_IncrementalMesh(shape, deflection, False, math.radians(12.0), True).Perform()
+    deflection, angular_deflection = _tessellation_parameters(
+        _shape_diagonal(shape), source_path.stat().st_size,
+    )
+    BRepMesh_IncrementalMesh(shape, deflection, False, angular_deflection, True).Perform()
     counter = TopExp_Explorer(shape, TopAbs_FACE)
     face_count = 0
     while counter.More():
