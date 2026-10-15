@@ -280,17 +280,25 @@ def test_calculate_rebuilds_model_from_current_panels():
 def test_save_project_delegates_current_state_to_controller():
     result = _pallet_result()
     saved_paths: list[str] = []
+    autosave_calls: list[object] = []
     status_bar = _StatusBar()
     window = SimpleNamespace(
         _project_path="C:/projects/pallet.palletlab.json",
         calculate=lambda **_kwargs: result,
         controller=SimpleNamespace(save_project=lambda path: saved_paths.append(path) or True),
+        _autosaves=SimpleNamespace(
+            clear=lambda: autosave_calls.append("clear"),
+            set_project=lambda path: autosave_calls.append(path),
+            save=lambda _state: autosave_calls.append("save"),
+        ),
+        state=SimpleNamespace(result=result),
         statusBar=lambda: status_bar,
     )
 
     MainWindow.save_project(window)
 
     assert saved_paths == ["C:/projects/pallet.palletlab.json"]
+    assert autosave_calls == ["clear", "C:/projects/pallet.palletlab.json", "save"]
     assert status_bar.messages[-1].endswith("pallet.palletlab.json")
 
 

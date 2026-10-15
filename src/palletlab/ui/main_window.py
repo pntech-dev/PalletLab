@@ -15,9 +15,11 @@ from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, Q
 
 from palletlab.controllers.pallet_controller import PalletController
 from palletlab.core.calculator import calculate_direction
+from palletlab.core.autosave import AutosaveStore
 from palletlab.core.formatting import format_mm
 from palletlab.core.materials import MATERIALS, get_material, pallet_mass_kg
 from palletlab.core.models import BeamSection, DirectionInput, InsertionSlot, LayerInput, PalletAxis
+from palletlab.core.persistence import ProjectPersistenceError
 from palletlab.core.project_state import ProjectHistory, ProjectState
 from palletlab.core.validation import CalculationError
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
@@ -242,6 +244,7 @@ class MainWindow(QMainWindow):
         self._pending_layer_revision: int | None = None
         self._pending_model_revision: int | None = None
         self._project_path: str | None = None
+        self._autosaves = AutosaveStore()
         self._imported_step_model: ImportedStepModel | None = None
         self._step_import_process: QProcess | None = None
         self._step_import_path: str | None = None
@@ -320,6 +323,10 @@ class MainWindow(QMainWindow):
         self._redo_shortcut.activated.connect(self.redo)
         self._set_stale(False)
         self.calculate()
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(60_000)
+        self._autosave_timer.timeout.connect(self._autosave_project)
+        self._autosave_timer.start()
         QTimer.singleShot(1500, self._check_for_updates)
 
     def _check_for_updates(self) -> None:
@@ -1400,7 +1407,7 @@ class MainWindow(QMainWindow):
         return selected[0], selected[1]
 
     def save_project(self) -> None:
-        """Save the current editable pallet state; no automatic save is used."""
+        """Save the current editable pallet state and reset recovery snapshots."""
         if self.calculate(show_error=True) is None:
             return
         path = self._project_path
@@ -1419,7 +1426,24 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Сохранение проекта", "Не удалось сохранить файл проекта.")
             return
         self._project_path = path
+        try:
+            self._autosaves.clear()
+        except OSError:
+            pass
+        self._autosaves.set_project(path)
+        MainWindow._autosave_project(self)
         self.statusBar().showMessage(f"Проект сохранён: {path}")
+
+    def _autosave_project(self) -> None:
+        """Periodically preserve a valid editable state without interrupting work."""
+        if self.state.result is None:
+            return
+        try:
+            self._autosaves.save(self.state)
+        except (OSError, ProjectPersistenceError):
+            # A recovery snapshot must never block editing or show a modal
+            # dialog every minute when a local disk is temporarily unavailable.
+            return
 
     def open_project(self) -> None:
         """Open a manually selected project file and rebuild the viewport."""
@@ -1440,6 +1464,7 @@ class MainWindow(QMainWindow):
         self.view.clear_step_model()
         self._set_model_controls_visible(False)
         self._project_path = path
+        self._autosaves.set_project(path)
         self._history.clear()
         MainWindow._discard_history_transaction(self)
         self.statusBar().showMessage(f"Проект открыт: {path}")
