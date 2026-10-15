@@ -2027,7 +2027,8 @@ class MainWindow(QMainWindow):
         self._restore_layer_stack(list(EXAMPLE_LAYERS))
         self.width_upper.setChecked(True)
         self._restore_default_view_settings()
-        self.calculate()
+        if self.calculate() is not None:
+            self.view.camera_fit()
 
     def _restore_default_view_settings(self) -> None:
         """Restore every non-geometric setting used by the opening example."""

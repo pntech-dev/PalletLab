@@ -20,6 +20,11 @@ class PalletView(QtInteractor):
         super().__init__(parent)
         self.setContentsMargins(0, 0, 0, 0)
         self.setStyleSheet("border: 0px; margin: 0px; padding: 0px;")
+        # A fresh QtInteractor and one rebuilt by ``clear`` use slightly
+        # different default lighting.  Start from the rebuilt renderer so the
+        # lighter timber appearance is the application default, then keep that
+        # renderer during workspace resets.
+        self.clear()
         self.set_background("#f5f7fa")
         self._has_model = False
         self._axes_added = False
