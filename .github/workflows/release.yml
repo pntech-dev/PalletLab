@@ -34,7 +34,7 @@ jobs:
       - name: Run static analysis
         shell: pwsh
         run: |
-          python -m ruff check src/palletlab/core src/palletlab/diagnostics.py tests/test_diagnostics.py
+          python -m ruff check src tests
           python -m mypy
 
       - name: Run tests

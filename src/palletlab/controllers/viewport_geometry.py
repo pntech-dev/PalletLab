@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from palletlab.core.calculator import inserted_beam_center
 from palletlab.core.models import InsertionSlot, ManualBeamInput, PalletAxis, PalletResult
 from palletlab.core.validation import CalculationError
 

@@ -479,7 +479,8 @@ def pallet_inputs_from_supports(
     if not supports:
         raise ValueError("Не найдены грани опор в выбранной плоскости.")
     reference = next((face for face in supports if face.index == reference_support_index), supports[0])
-    assert reference.point is not None
+    if reference.point is None:
+        raise ValueError("У выбранной опоры нет координаты точки.")
     frame = _support_frame(model, reference.index)
     local_mesh = _support_frame_mesh(model.mesh, frame)
     local_edges = _support_frame_mesh(model.edges, frame)

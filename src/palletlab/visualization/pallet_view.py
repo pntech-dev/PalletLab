@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from time import monotonic
 
 from PyQt5.QtCore import QTimer
 import numpy as np
@@ -73,6 +74,10 @@ class PalletView(QtInteractor):
         self._step_face_cell_indices: dict[int, np.ndarray] = {}
         self._hovered_step_face_index: int | None = None
         self._step_hover_actor = None
+        self._step_hover_selector = pv._vtk.vtkOpenGLHardwareSelector()
+        self._step_hover_selector.SetFieldAssociation(pv._vtk.vtkDataObject.FIELD_ASSOCIATION_CELLS)
+        self._step_hover_selector.SetRenderer(self.renderer)
+        self._last_step_hover_pick_at = float("-inf")
         self._step_picker = pv._vtk.vtkCellPicker()
         self._step_picker.SetTolerance(0.0005)
         self._step_picker.PickFromListOn()
@@ -247,13 +252,14 @@ class PalletView(QtInteractor):
         self._reference_support_index = None
         self._step_face_cell_indices.clear()
         self._hovered_step_face_index = None
-        self._step_hover_actor = None
+        self._last_step_hover_pick_at = float("-inf")
         self._has_model = False
         self._ensure_axes()
         self.render()
 
     def clear_step_model(self) -> None:
         """Forget only the imported machine while leaving a pallet render intact."""
+        self._remove_step_hover_face()
         self.remove_actor("step-model", render=False)
         self.remove_actor("step-model-edges", render=False)
         self._step_mesh = None
@@ -267,7 +273,7 @@ class PalletView(QtInteractor):
         self._reference_support_index = None
         self._step_face_cell_indices.clear()
         self._hovered_step_face_index = None
-        self._step_hover_actor = None
+        self._last_step_hover_pick_at = float("-inf")
         self._step_model_visible = True
         self.render()
 
@@ -286,6 +292,7 @@ class PalletView(QtInteractor):
         self._reference_support_index = None
         self._hovered_step_face_index = None
         self._remove_step_hover_face()
+        self._last_step_hover_pick_at = float("-inf")
         self._step_model_visible = True
         if self._step_mesh is not None:
             self._step_mesh.cell_data["face_colors"] = [(184, 194, 204)] * self._step_mesh.n_cells
@@ -310,6 +317,7 @@ class PalletView(QtInteractor):
         self._index_step_faces()
         self._hovered_step_face_index = None
         self._remove_step_hover_face()
+        self._last_step_hover_pick_at = float("-inf")
         self._step_model_visible = True
         self._add_step_model(render=False)
         # The imported model is the first visible scene, so fit it exactly
@@ -395,6 +403,12 @@ class PalletView(QtInteractor):
     def _update_step_face_hover(self, *_args) -> None:
         if self._support_callback is None or self._step_model_actor is None or not self._step_model_visible:
             return
+        now = monotonic()
+        # Hardware selection forces a render-pipeline pass.  Mouse events can
+        # arrive much faster than a user can perceive a changed highlight.
+        if now - self._last_step_hover_pick_at < 1 / 30:
+            return
+        self._last_step_hover_pick_at = now
         hovered = self._hardware_step_face_at_cursor()
         if hovered == self._hovered_step_face_index:
             return
@@ -407,9 +421,7 @@ class PalletView(QtInteractor):
         if self._step_mesh is None:
             return None
         x, y = self.iren.get_event_position()
-        selector = pv._vtk.vtkOpenGLHardwareSelector()
-        selector.SetFieldAssociation(pv._vtk.vtkDataObject.FIELD_ASSOCIATION_CELLS)
-        selector.SetRenderer(self.renderer)
+        selector = self._step_hover_selector
         selector.SetArea(x, y, x, y)
         selection = selector.Select()
         try:

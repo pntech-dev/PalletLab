@@ -945,7 +945,7 @@ class MainWindow(QMainWindow):
         self._clear_model_supports()
         self._imported_step_model = None
         self._set_model_controls_visible(False)
-        self.state.beam_sections.clear()
+        self._clear_pallet_edits_for_model()
         self.state.result = None
         self.view.clear_workspace()
         self.scene_info.setText("Загрузка 3D-модели…")
@@ -1050,7 +1050,7 @@ class MainWindow(QMainWindow):
         self._model_rebuild_timer.stop()
         self.controller.deactivate_tool()
         self.state.result = None
-        self.state.beam_sections.clear()
+        self._clear_pallet_edits_for_model()
         self._clear_model_supports()
         self.view.prepare_step_model_rebuild(self._support_face_selected)
         self.toggle_model_button.setEnabled(True)
@@ -1198,6 +1198,14 @@ class MainWindow(QMainWindow):
     def _clear_model_supports(self) -> None:
         self._model_supports = ()
         self._model_reference_support_index = None
+
+    def _clear_pallet_edits_for_model(self) -> None:
+        """Discard edits whose supports belong to the previous pallet geometry."""
+        self.state.beam_sections.clear()
+        self.state.layer_sections.clear()
+        self.state.manual_beams.clear()
+        self.controller.clear_deletion_selection()
+        self.controller.clear_section_selection()
 
     def _toggle_model_visibility(self) -> None:
         visible = self.view.toggle_step_model_visibility()
@@ -1913,7 +1921,7 @@ class MainWindow(QMainWindow):
         """Reflect an opened configuration in form controls without queuing rebuilds."""
         if state.length_input is None or state.width_input is None:
             return
-        if state.multi_layer_mode and state.layers:
+        if state.layers:
             self._restore_layer_stack(state.layers)
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)

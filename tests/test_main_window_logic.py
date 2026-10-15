@@ -43,6 +43,28 @@ class _Visibility:
         self.visible = visible
 
 
+def test_model_rebuild_discards_manual_beams_and_all_geometry_bound_edits():
+    state = ProjectState()
+    state.beam_sections[("length", 1)] = object()  # type: ignore[assignment]
+    state.layer_sections[("bottom", 1)] = object()  # type: ignore[assignment]
+    state.manual_beams.append(object())  # type: ignore[arg-type]
+    calls: list[str] = []
+    window = SimpleNamespace(
+        state=state,
+        controller=SimpleNamespace(
+            clear_deletion_selection=lambda: calls.append("deletion"),
+            clear_section_selection=lambda: calls.append("section"),
+        ),
+    )
+
+    MainWindow._clear_pallet_edits_for_model(window)
+
+    assert state.beam_sections == {}
+    assert state.layer_sections == {}
+    assert state.manual_beams == []
+    assert calls == ["deletion", "section"]
+
+
 class _Toggle:
     def __init__(self, checked: bool = False) -> None:
         self.checked = checked
@@ -246,7 +268,7 @@ def test_save_project_delegates_current_state_to_controller():
 
 def test_confirm_insertion_updates_the_input_panel_then_recalculates():
     result = _pallet_result()
-    slot = next(candidate for candidate in insertion_slots(result, "length") if candidate.after_beam_index == 1)
+    next(candidate for candidate in insertion_slots(result, "length") if candidate.after_beam_index == 1)
     length_panel = _Panel()
     recalculated: list[bool] = []
     window = SimpleNamespace(
@@ -269,7 +291,7 @@ def test_confirm_insertion_updates_the_input_panel_then_recalculates():
 
 
 def test_confirm_deletion_updates_selected_axes_then_recalculates():
-    result = _pallet_result()
+    _pallet_result()
     length_panel, width_panel = _Panel(), _Panel()
     recalculated: list[bool] = []
     status_bar = _StatusBar()
@@ -295,7 +317,7 @@ def test_confirm_deletion_updates_selected_axes_then_recalculates():
 
 
 def test_confirm_distance_edit_updates_input_panel_then_recalculates():
-    result = _pallet_result()
+    _pallet_result()
     length_panel = _Panel()
     recalculated: list[bool] = []
     window = SimpleNamespace(

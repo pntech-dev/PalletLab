@@ -137,8 +137,12 @@ def _safe_extract_update(archive: zipfile.ZipFile, destination: Path) -> None:
         relative = Path(item.filename)
         target = (root / relative).resolve()
         is_link = stat.S_ISLNK(item.external_attr >> 16)
-        if (is_link or relative.is_absolute() or ".." in relative.parts
-                or (root not in target.parents and target != root)):
+        if (
+            is_link
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or (root not in target.parents and target != root)
+        ):
             raise RuntimeError("Архив обновления содержит недопустимый путь или ссылку.")
         if not relative.parts or relative.parts[0] not in {"PalletLab", "PalletLabUpdater"}:
             raise RuntimeError("Архив обновления имеет неверную структуру.")
@@ -176,8 +180,14 @@ class UpdaterDialog(QDialog):
         self.open_button.setEnabled(False)
         self.close_button.clicked.connect(self.reject)
         self.open_button.clicked.connect(self._open)
-        layout = QVBoxLayout(self); layout.addWidget(self.label); layout.addWidget(self.bar)
-        buttons = QHBoxLayout(); buttons.addStretch(); buttons.addWidget(self.close_button); buttons.addWidget(self.open_button); layout.addLayout(buttons)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.label)
+        layout.addWidget(self.bar)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(self.close_button)
+        buttons.addWidget(self.open_button)
+        layout.addLayout(buttons)
         self.executable = ""
         self.worker = InstallWorker(package, app_dir, pid)
         self.worker.progress.connect(lambda value, text: (self.bar.setValue(value), self.label.setText(text)))
@@ -186,7 +196,8 @@ class UpdaterDialog(QDialog):
         self.worker.start()
 
     def _done(self, executable: str) -> None:
-        self.executable = executable; self.open_button.setEnabled(True)
+        self.executable = executable
+        self.open_button.setEnabled(True)
 
     def _failed(self, message: str) -> None:
         self.label.setText("Не удалось установить обновление: " + message)
@@ -194,13 +205,20 @@ class UpdaterDialog(QDialog):
         self.close_button.setText("Закрыть")
 
     def _open(self) -> None:
-        subprocess.Popen([self.executable], cwd=str(Path(self.executable).parent)); self.accept()
+        subprocess.Popen([self.executable], cwd=str(Path(self.executable).parent))  # noqa: S603 - executable was installed from a verified archive.
+        self.accept()
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(); parser.add_argument("--package", required=True); parser.add_argument("--app-dir", required=True); parser.add_argument("--pid", type=int, required=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--package", required=True)
+    parser.add_argument("--app-dir", required=True)
+    parser.add_argument("--pid", type=int, required=True)
     args = parser.parse_args()
-    app = QApplication([]); dialog = UpdaterDialog(Path(args.package), Path(args.app_dir), args.pid); dialog.show(); return app.exec_()
+    app = QApplication([])
+    dialog = UpdaterDialog(Path(args.package), Path(args.app_dir), args.pid)
+    dialog.show()
+    return app.exec_()
 
 
 if __name__ == "__main__":

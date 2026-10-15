@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
+import palletlab.controllers.pallet_controller as pallet_controller_module
 from palletlab.controllers.pallet_controller import PalletController
 from palletlab.core.models import BeamSection, DirectionInput, LayerInput
 from palletlab.core.persistence import ProjectPersistenceError, load_project, project_from_dict, project_to_dict, save_project
@@ -124,14 +126,82 @@ def test_controller_opens_saved_project_and_rebuilds_it(tmp_path):
     assert state.camera == "top"
 
 
-def test_save_replaces_a_project_atomically_after_validation(tmp_path):
+def test_failed_project_rebuild_restores_the_previously_applied_ui_state(monkeypatch):
+    state = _state()
+    previous_length = state.length_input
+    previous_camera = state.camera
+    invalid = _state()
+    invalid.length_input = DirectionInput(70, 50, (100,), -1, 240, 100, 150, True, 50)
+    applied: list[tuple[DirectionInput | None, str]] = []
+    controller = PalletController(
+        state,
+        _View(),
+        on_calculated=lambda _result: None,
+        on_error=lambda _error, _show: None,
+        on_stale_changed=lambda _value: None,
+        on_project_loaded=lambda loaded: applied.append((loaded.length_input, loaded.camera)),
+        timer=_Timer(),
+    )
+    monkeypatch.setattr(pallet_controller_module, "load_project", lambda _path: invalid)
+
+    assert controller.open_project("invalid-but-readable.json") is None
+
+    assert state.length_input == previous_length
+    assert state.camera == previous_camera
+    assert applied == [(invalid.length_input, invalid.camera), (previous_length, previous_camera)]
+
+
+def test_save_replaces_a_project_atomically_after_validation(tmp_path, monkeypatch):
     path = tmp_path / "project.json"
     path.write_text('{"previous": true}', encoding="utf-8")
+
+    def successful_replace(source, destination):
+        Path(destination).write_bytes(Path(source).read_bytes())
+        Path(source).unlink()
+
+    monkeypatch.setattr("palletlab.core.persistence.os.replace", successful_replace)
 
     save_project(path, _state())
 
     assert project_from_dict(json.loads(path.read_text(encoding="utf-8"))).material_id == "spruce"
     assert not list(tmp_path.glob(".project.json.*.tmp"))
+
+
+def test_save_keeps_the_original_file_when_atomic_replace_is_locked(tmp_path, monkeypatch):
+    path = tmp_path / "project.json"
+    previous = '{"previous": true}'
+    path.write_text(previous, encoding="utf-8")
+
+    def locked_replace(_source, _destination):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr("palletlab.core.persistence.os.replace", locked_replace)
+
+    with pytest.raises(ProjectPersistenceError, match="Временная копия сохранена"):
+        save_project(path, _state())
+
+    assert path.read_text(encoding="utf-8") == previous
+    recovery_files = list(tmp_path.glob(".project.json.*.tmp"))
+    assert len(recovery_files) == 1
+    recovery_files[0].unlink()
+
+
+@pytest.mark.parametrize("field, value", [
+    ("show_length_dimensions", "false"),
+    ("show_width_dimensions", 1),
+    ("multi_layer_mode", "true"),
+    ("round_pallet_size", "false"),
+])
+def test_project_rejects_non_boolean_flags(field, value):
+    raw = project_to_dict(_state())
+    container = raw["view"] if field.startswith("show_") else raw["pallet"]
+    if field == "round_pallet_size":
+        raw["pallet"]["length"][field] = value
+    else:
+        container[field] = value
+
+    with pytest.raises(ProjectPersistenceError):
+        project_from_dict(raw)
 
 
 def test_project_rejects_duplicate_manual_beam_ids():

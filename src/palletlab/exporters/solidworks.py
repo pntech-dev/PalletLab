@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 import shutil
 from typing import TYPE_CHECKING
@@ -16,6 +17,9 @@ from xml.etree import ElementTree
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
 from palletlab.core.materials import PalletMaterial, get_material
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 BASE_PLANE_NAME = "Спереди"
@@ -233,7 +237,7 @@ def _part_document(api: dict[str, object], model):
         if document is not None:
             return document
     except Exception:
-        pass
+        LOGGER.debug("SolidWorks did not expose an IPartDoc wrapper.", exc_info=True)
     return model
 
 
@@ -261,7 +265,7 @@ def _apply_material(model, material: PalletMaterial, material_library: Path, mat
         manager.Add2("Материал", 30, material.name)
         manager.Add2("Плотность, кг/м³", 30, str(material.density_kg_m3))
     except Exception:
-        pass
+        LOGGER.debug("SolidWorks did not accept supplemental material metadata.", exc_info=True)
 
 
 def _active_configuration_name(model) -> str:
@@ -271,7 +275,7 @@ def _active_configuration_name(model) -> str:
         if configuration is not None and configuration.Name:
             return str(configuration.Name)
     except Exception:
-        pass
+        LOGGER.debug("SolidWorks did not expose an active configuration.", exc_info=True)
     # Empty is the SolidWorks API fallback when a minimal template has no
     # available ConfigurationManager object.
     return ""
@@ -281,7 +285,7 @@ def available_materials(material_library: str | Path) -> tuple[str, ...]:
     """Return material names from a user-selected SolidWorks .sldmat file."""
     library = Path(material_library)
     try:
-        root = ElementTree.parse(library).getroot()
+        root = ElementTree.parse(library).getroot()  # noqa: S314 - the user explicitly selects this local CAD library.
         names = tuple(node.attrib["name"] for node in root.iter() if node.tag.endswith("material") and node.attrib.get("name"))
     except (OSError, ElementTree.ParseError) as exc:
         raise SolidWorksMaterialLibraryError("Не удалось прочитать выбранную библиотеку материалов SolidWorks.") from exc
@@ -385,5 +389,5 @@ def _create_assembly(api, sw, template: Path, result: PalletResult, parts, filen
         assembly.ShowNamedView2("", api["Convert"].ToInt32(api["const"]["views"].swIsometricView))
         assembly.ViewZoomtofit2()
     except Exception:
-        pass
+        LOGGER.debug("SolidWorks does not support optional assembly view fitting.", exc_info=True)
     _save(api, assembly, filename)

@@ -10,6 +10,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 RELEASES_URL = "https://api.github.com/repos/pntech-dev/PalletLab/releases"
 VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)(-beta)?$")
@@ -54,10 +55,14 @@ def find_newer_release(raw: object, current_version: str) -> Release | None:
 
 def _request(url_or_request, *, timeout: int, attempts: int = 3):
     """Open a short-lived HTTP request with bounded retries for transient failures."""
+    url = url_or_request.full_url if isinstance(url_or_request, urllib.request.Request) else str(url_or_request)
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise RuntimeError("Адрес обновления должен использовать HTTPS.")
     last_error: OSError | None = None
     for attempt in range(attempts):
         try:
-            return urllib.request.urlopen(url_or_request, timeout=timeout)
+            return urllib.request.urlopen(url_or_request, timeout=timeout)  # noqa: S310 - HTTPS is validated above.
         except OSError as exc:
             last_error = exc
             if attempt + 1 < attempts:
@@ -77,7 +82,9 @@ def download_verified(release: Release, progress) -> Path:
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise RuntimeError("Сервер обновлений вернул некорректную контрольную сумму.")
     target = Path(tempfile.mkdtemp(prefix="palletlab-update-")) / f"PalletLab-{release.version}-update.zip"
-    request = urllib.request.Request(release.package_url, headers={"User-Agent": "PalletLab"})
+    request = urllib.request.Request(  # noqa: S310 - _request validates this package URL before opening it.
+        release.package_url, headers={"User-Agent": "PalletLab"}
+    )
     try:
         with _request(request, timeout=30) as response, target.open("wb") as stream:
             total = int(response.headers.get("Content-Length", 0))

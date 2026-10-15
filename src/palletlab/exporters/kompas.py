@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import logging
 from pathlib import Path
 import shutil
 from typing import TYPE_CHECKING
@@ -10,6 +11,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
 from palletlab.core.materials import PalletMaterial, get_material
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class KompasExportError(RuntimeError):
@@ -166,7 +170,7 @@ def _apply_wood_appearance(part) -> None:
         part.SetAdvancedColor(light_wood, 0.35, 0.80, 0.15, 0.10, 1.0, 0.0)
         part.Update()
     except Exception:
-        pass
+        LOGGER.debug("KOMPAS does not expose optional appearance properties.", exc_info=True)
 
 
 def _placement(beam: Beam3D) -> tuple[float, float, float, bool]:
@@ -207,4 +211,4 @@ def _create_assembly(kompas, constants3d, result: PalletResult, parts, filename:
     try:
         assembly.ZoomPrevNextOrAll(0)
     except Exception:
-        pass
+        LOGGER.debug("KOMPAS does not support optional assembly zoom.", exc_info=True)

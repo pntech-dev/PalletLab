@@ -649,6 +649,53 @@ def test_controller_handles_insert_delete_and_distance_edits_through_project_sta
     assert errors == []
 
 
+def test_insertion_reindexes_manual_beam_supports_to_the_same_physical_beams():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")
+    assert controller.add_manual_beam(
+        ("width", 0), ("width", 1), 1000, BeamSection(70, 50),
+        reference_support=("width", 0), reference_face="x_min",
+    ) is not None
+    slot = next(slot for slot in insertion_slots(result, "width") if slot.after_beam_index == 0)
+
+    assert controller.begin_insertion(slot)
+    assert controller.confirm_insertion(100) is not None
+
+    manual = state.manual_beams[0]
+    assert manual.first_support == ("width", 0)
+    assert manual.second_support == ("width", 2)
+    assert manual.reference_support == ("width", 0)
+    assert controller.recalculate_from_state() is not None
+    assert errors == []
+
+
+def test_deletion_of_a_manual_beam_support_is_rejected_without_mutation():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")
+    assert controller.add_manual_beam(("width", 0), ("width", 1), 1000, BeamSection(70, 50)) is not None
+    original = state.width_input
+    controller.set_deletion_selection("width", 1, True)
+
+    assert controller.confirm_deletion() is None
+    assert state.width_input is original
+    assert len(state.manual_beams) == 1
+    assert "ручные брусья" in errors[-1][0]
+
+
+def test_deletion_reindexes_manual_supports_after_a_removed_preceding_beam():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")
+    assert controller.add_manual_beam(("width", 2), ("width", 3), 1000, BeamSection(70, 50)) is not None
+    controller.set_deletion_selection("width", 1, True)
+
+    assert controller.confirm_deletion() is not None
+    manual = state.manual_beams[0]
+    assert manual.first_support == ("width", 1)
+    assert manual.second_support == ("width", 2)
+    assert controller.recalculate_from_state() is not None
+    assert errors == []
+
+
 def test_viewport_geometry_is_prepared_outside_the_3d_view():
     controller, _state, _view, _timer, _calculated, _errors, _stale = _controller()
     result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")

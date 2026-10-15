@@ -232,6 +232,13 @@ class PalletController:
         result = self.recalculate_from_state()
         if result is None:
             self.state.__dict__.update(previous)
+            # The loaded controls were already applied before the geometry
+            # check.  Restore them together with the state so form fields can
+            # never describe a project that failed to open.
+            if self._on_project_loaded is not None:
+                self._on_project_loaded(self.state)
+            if self.state.result is not None:
+                self._show_result(self.state.result)
         return result
 
     def activate_tool(self, tool: ToolMode) -> None:
@@ -279,6 +286,7 @@ class PalletController:
             return None
         self._replace_layer_input(layer_id, updated)
         self._shift_sections_after_insertion(layer_id, slot.after_beam_index)
+        self._shift_manual_supports_after_insertion(layer_id, slot.after_beam_index)
         self.state.pending_insertion = None
         return layer_id, updated
 
@@ -423,6 +431,22 @@ class PalletController:
         for item in targets:
             if item.layer_id not in manual_ids:
                 selected_by_layer.setdefault(item.layer_id, set()).add(item.index)
+        removed_supports = {
+            (layer_id, index)
+            for layer_id, indices in selected_by_layer.items()
+            for index in indices
+        } | {(beam_id, 0) for beam_id in selected_manual}
+        dependent_manual = self._manual_beams_using_supports(removed_supports, ignored_ids=selected_manual)
+        if dependent_manual:
+            self._on_error(
+                CalculationError(
+                    "Нельзя удалить опору, пока на неё опираются ручные брусья: "
+                    + ", ".join(sorted(dependent_manual))
+                    + ". Сначала удалите или измените эти брусья."
+                ),
+                False,
+            )
+            return None
         try:
             for layer_id, indices in selected_by_layer.items():
                 layer = self._layer_for(layer_id)
@@ -451,6 +475,7 @@ class PalletController:
             direction = original_directions[layer_id]
             internal_indices = {index for index in selected if 0 < index < len(direction.beam_centers) - 1}
             self._reindex_sections_after_deletion(layer_id, internal_indices)
+            self._reindex_manual_supports_after_deletion(layer_id, internal_indices)
         self.clear_deletion_selection()
         return updated_inputs
 
@@ -544,6 +569,62 @@ class PalletController:
             self.state.layer_sections = moved
         else:
             self.state.beam_sections = moved
+
+    @staticmethod
+    def _manual_support_keys(item: ManualBeamInput) -> tuple[LayerBeamKey, ...]:
+        """Return every persisted support identity used by a manual beam."""
+        supports = [item.first_support, item.second_support]
+        if item.reference_support is not None:
+            supports.append(item.reference_support)
+        return tuple(supports)
+
+    def _manual_beams_using_supports(
+        self, supports: set[LayerBeamKey], *, ignored_ids: set[str] | None = None,
+    ) -> set[str]:
+        """Find manual beams that would lose a support in an edit operation."""
+        ignored = ignored_ids or set()
+        return {
+            item.beam_id
+            for item in self.state.manual_beams
+            if item.beam_id not in ignored and any(key in supports for key in self._manual_support_keys(item))
+        }
+
+    def _shift_manual_supports_after_insertion(self, layer_id: str, after_index: int) -> None:
+        """Keep manual-beam support identities attached to the same physical beams."""
+        def shifted(key: LayerBeamKey | None) -> LayerBeamKey | None:
+            if key is None or key[0] != layer_id or key[1] <= after_index:
+                return key
+            return key[0], key[1] + 1
+
+        self.state.manual_beams = [
+            replace(
+                item,
+                first_support=shifted(item.first_support),  # type: ignore[arg-type]
+                second_support=shifted(item.second_support),  # type: ignore[arg-type]
+                reference_support=shifted(item.reference_support),
+            )
+            for item in self.state.manual_beams
+        ]
+
+    def _reindex_manual_supports_after_deletion(self, layer_id: str, indices: set[int]) -> None:
+        """Move surviving manual-beam support identities after an internal deletion."""
+        if not indices:
+            return
+
+        def shifted(key: LayerBeamKey | None) -> LayerBeamKey | None:
+            if key is None or key[0] != layer_id:
+                return key
+            return key[0], key[1] - sum(removed < key[1] for removed in indices)
+
+        self.state.manual_beams = [
+            replace(
+                item,
+                first_support=shifted(item.first_support),  # type: ignore[arg-type]
+                second_support=shifted(item.second_support),  # type: ignore[arg-type]
+                reference_support=shifted(item.reference_support),
+            )
+            for item in self.state.manual_beams
+        ]
 
     def _clear_sections_for_axis(self, axis: PalletAxis) -> None:
         """Geometry edits renumber beam indices, so stale overrides must not move."""

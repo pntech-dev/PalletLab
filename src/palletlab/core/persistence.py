@@ -6,8 +6,8 @@ import json
 import math
 import os
 from pathlib import Path
-import shutil
 import tempfile
+import time
 from typing import Any, Literal
 
 from .models import BeamKey, BeamSection, DirectionInput, LayerInput, ManualBeamInput, PalletAxis
@@ -20,6 +20,14 @@ FORMAT_VERSION = 3
 
 class ProjectPersistenceError(ValueError):
     """Raised when a project JSON file cannot be read safely."""
+
+
+def _boolean(raw: dict[str, Any], key: str, default: bool | None = None) -> bool:
+    """Read a JSON boolean without accepting truthy strings or integers."""
+    value = raw.get(key, default)
+    if type(value) is not bool:
+        raise ProjectPersistenceError(f"Параметр «{key}» должен быть логическим значением.")
+    return value
 
 
 def _direction_to_dict(data: DirectionInput) -> dict[str, Any]:
@@ -58,7 +66,7 @@ def _direction_from_dict(raw: object, name: str) -> DirectionInput:
         direction = DirectionInput(
             float(raw["beam_height"]), float(raw["beam_width"]), tuple(float(value) for value in distances),
             float(raw["first_edge_to_support"]), float(raw["last_support_to_edge"]),
-            float(raw["margin_start"]), float(raw["margin_end"]), bool(raw["round_pallet_size"]),
+            float(raw["margin_start"]), float(raw["margin_end"]), _boolean(raw, "round_pallet_size"),
             rounding_step, None if positions is None else tuple(float(value) for value in positions),
             tuple(int(value) for value in hidden),
         )
@@ -248,10 +256,10 @@ def project_from_dict(raw: object) -> ProjectState:
         layers=layers,
         layer_sections=layer_sections,
         manual_beams=manual_beams,
-        multi_layer_mode=bool(pallet.get("multi_layer_mode", False)),
+        multi_layer_mode=_boolean(pallet, "multi_layer_mode", False),
         camera=camera,
-        show_length_dimensions=bool(view.get("show_length_dimensions", True)),
-        show_width_dimensions=bool(view.get("show_width_dimensions", True)),
+        show_length_dimensions=_boolean(view, "show_length_dimensions", True),
+        show_width_dimensions=_boolean(view, "show_width_dimensions", True),
     )
 
 
@@ -271,18 +279,44 @@ def save_project(path: str | Path, state: ProjectState) -> None:
             json.dump(payload, stream, ensure_ascii=False, indent=2)
             stream.flush()
             os.fsync(stream.fileno())
-        try:
-            os.replace(temporary_name, destination)
-        except PermissionError:
-            # Windows application containers can forbid ReplaceFile even when
-            # both files are writable.  Keep the normal path atomic, while
-            # still allowing a project to be saved in such a restricted host.
-            with Path(temporary_name).open("rb") as source, destination.open("wb") as target:
-                shutil.copyfileobj(source, target)
-                target.flush()
-                os.fsync(target.fileno())
-            Path(temporary_name).unlink()
-        temporary_name = None
+        if temporary_name is None:
+            raise OSError("Не удалось создать временный файл проекта.")
+        temporary_path = Path(temporary_name)
+        replace_error: PermissionError | None = None
+        for attempt in range(3):
+            try:
+                os.replace(temporary_path, destination)
+                temporary_name = None
+                break
+            except PermissionError as exc:
+                replace_error = exc
+                if not destination.exists():
+                    # A restrictive host can deny renaming even when no old
+                    # project exists.  Exclusive creation is safe here: it
+                    # cannot replace a file that appeared concurrently.
+                    try:
+                        with temporary_path.open("rb") as source, destination.open("xb") as target:
+                            while chunk := source.read(1024 * 1024):
+                                target.write(chunk)
+                            target.flush()
+                            os.fsync(target.fileno())
+                    except FileExistsError:
+                        pass
+                    else:
+                        temporary_path.unlink()
+                        temporary_name = None
+                        break
+                if attempt < 2:
+                    time.sleep(0.1 * (attempt + 1))
+        if temporary_name is not None:
+            # Never open the old project for writing as a fallback: a failed
+            # copy could truncate the only good version.  Keep the complete
+            # temporary file beside it so the user can recover it manually.
+            recovery_path = temporary_path
+            temporary_name = None
+            raise ProjectPersistenceError(
+                f"Не удалось заменить открытый файл проекта. Временная копия сохранена: {recovery_path}"
+            ) from replace_error
     except OSError as exc:
         raise ProjectPersistenceError("Не удалось безопасно сохранить файл проекта.") from exc
     finally:
