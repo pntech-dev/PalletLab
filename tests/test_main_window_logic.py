@@ -13,9 +13,9 @@ from types import SimpleNamespace
 import pytest
 
 from palletlab.core.calculator import build_pallet, calculate_direction, insertion_slots
-from palletlab.core.models import DirectionInput, LayerInput
+from palletlab.core.models import BeamSection, DirectionInput, LayerInput
 from palletlab.core.project_state import ProjectHistory, ProjectState
-from palletlab.ui.main_window import MainWindow
+from palletlab.ui.main_window import MainWindow, _model_pallet_layers
 
 
 LENGTH_INPUT = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100)
@@ -63,6 +63,34 @@ def test_model_rebuild_discards_manual_beams_and_all_geometry_bound_edits():
     assert state.layer_sections == {}
     assert state.manual_beams == []
     assert calls == ["deletion", "section"]
+
+
+def test_step_model_pallet_uses_three_fixed_layers_and_special_top_edge_beams():
+    layers, sections = _model_pallet_layers(LENGTH_INPUT, WIDTH_INPUT)
+
+    assert [(layer.layer_id, layer.axis) for layer in layers] == [
+        ("length", "length"), ("width", "width"), ("layer-1", "length"),
+    ]
+    assert all(
+        (layer.direction.beam_height, layer.direction.beam_width) == (70, 50)
+        for layer in layers
+    )
+    top_count = len(calculate_direction(layers[-1].direction).beam_centers)
+    assert sections == {
+        ("layer-1", 0): BeamSection(25, 100),
+        ("layer-1", top_count - 1): BeamSection(25, 100),
+    }
+
+
+def test_step_model_pallet_puts_cross_beams_on_the_longer_width_side():
+    short_length = DirectionInput(70, 50, (100,), 100, 100, 100, 100)
+    long_width = DirectionInput(70, 50, (1_500,), 100, 100, 100, 100)
+
+    layers, _sections = _model_pallet_layers(short_length, long_width)
+
+    assert [(layer.layer_id, layer.axis) for layer in layers] == [
+        ("width", "width"), ("length", "length"), ("layer-1", "width"),
+    ]
 
 
 class _Toggle:

@@ -469,6 +469,7 @@ def pallet_inputs_from_supports(
     round_pallet_size: bool,
     rounding_step: int,
     reference_support_index: int | None = None,
+    pallet_height: float | None = None,
 ) -> tuple[DirectionInput, DirectionInput, pv.PolyData, pv.PolyData]:
     """Create editable pallet inputs and place the machine on its support plane.
 
@@ -557,6 +558,12 @@ def pallet_inputs_from_supports(
         if round_pallet_size else raw_width
     )
 
+    # A regular two-layer pallet uses the sum of both beam heights.  Callers
+    # building a custom layer stack may supply its actual bearing height.
+    bearing_height = pallet_height if pallet_height is not None else length_beam_height + width_beam_height
+    if bearing_height <= 0:
+        raise ValueError("Высота поддона должна быть больше нуля.")
+
     def place(source: pv.PolyData) -> pv.PolyData:
         transformed = source.copy(deep=True)
         points = transformed.points.copy()
@@ -564,7 +571,7 @@ def pallet_inputs_from_supports(
         # PalletView mirrors the pallet's Y coordinate for its technical-drawing
         # orientation, so mirror the imported machine in the same display space.
         points[:, 1] = pallet_width - (points[:, 1] - ymin + margin_y_start)
-        points[:, 2] = points[:, 2] + length_beam_height + width_beam_height
+        points[:, 2] = points[:, 2] + bearing_height
         transformed.points = points
         return transformed
     return (

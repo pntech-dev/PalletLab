@@ -44,6 +44,53 @@ EXAMPLE_LAYERS = (
 )
 
 
+# STEP-driven pallets use a fixed three-layer construction.  The upper edge
+# beams are intentionally lower and wider, while every other beam is 70 x 50.
+MODEL_STANDARD_SECTION = BeamSection(70, 50)
+MODEL_TOP_EDGE_SECTION = BeamSection(25, 100)
+MODEL_PALLET_HEIGHT = MODEL_STANDARD_SECTION.height * 3
+
+
+def _model_pallet_layers(
+    length_input: DirectionInput, width_input: DirectionInput,
+) -> tuple[list[LayerInput], dict[tuple[str, int], BeamSection]]:
+    """Build a three-layer STEP pallet with cross-beams on its longer side."""
+    length_direction = replace(
+        length_input,
+        beam_height=MODEL_STANDARD_SECTION.height,
+        beam_width=MODEL_STANDARD_SECTION.width,
+    )
+    width_direction = replace(
+        width_input,
+        beam_height=MODEL_STANDARD_SECTION.height,
+        beam_width=MODEL_STANDARD_SECTION.width,
+    )
+    directions = {"length": length_direction, "width": width_direction}
+    # The bottom beams run across the longer side of the pallet, leaving a
+    # clear forklift entry from that side.  A ``length`` grid means beams run
+    # across width; a ``width`` grid means they run along length.
+    bottom_axis: PalletAxis = (
+        "length"
+        if calculate_direction(length_direction).pallet_size >= calculate_direction(width_direction).pallet_size
+        else "width"
+    )
+    middle_axis: PalletAxis = "width" if bottom_axis == "length" else "length"
+    top_direction = directions[bottom_axis]
+    top_centres = calculate_direction(top_direction).beam_centers
+    top_sections = {
+        ("layer-1", index): MODEL_TOP_EDGE_SECTION
+        for index in (0, len(top_centres) - 1)
+    }
+    return (
+        [
+            LayerInput(bottom_axis, bottom_axis, directions[bottom_axis]),
+            LayerInput(middle_axis, middle_axis, directions[middle_axis]),
+            LayerInput("layer-1", bottom_axis, top_direction),
+        ],
+        top_sections,
+    )
+
+
 class InsertionGapSpinBox(QDoubleSpinBox):
     """Numeric editor whose Enter/Escape semantics match the 3D insert workflow."""
 
@@ -1152,10 +1199,10 @@ class MainWindow(QMainWindow):
             length_input, width_input, placed_mesh, placed_edges = pallet_inputs_from_supports(
                 model,
                 self._model_supports,
-                length_beam_height=self.length_panel.height.value(),
-                length_beam_width=self.length_panel.width.value(),
-                width_beam_height=self.width_panel.height.value(),
-                width_beam_width=self.width_panel.width.value(),
+                length_beam_height=MODEL_STANDARD_SECTION.height,
+                length_beam_width=MODEL_STANDARD_SECTION.width,
+                width_beam_height=MODEL_STANDARD_SECTION.height,
+                width_beam_width=MODEL_STANDARD_SECTION.width,
                 length_margin_start=self.length_panel.margin_start.value(),
                 length_margin_end=self.length_panel.margin_end.value(),
                 width_margin_start=self.width_panel.margin_start.value(),
@@ -1163,13 +1210,25 @@ class MainWindow(QMainWindow):
                 round_pallet_size=rounding_step != 0,
                 rounding_step=rounding_step or 5,
                 reference_support_index=self._model_reference_support_index,
+                pallet_height=MODEL_PALLET_HEIGHT,
             )
         except ValueError as exc:
             QMessageBox.information(self, "Построение по модели", str(exc))
             self.statusBar().showMessage("Выберите корректные грани габарита и опоры.")
             return
         self.view.stage_step_model(placed_mesh, placed_edges)
-        result = self.controller.calculate(length_input, width_input, self.upper_layer())
+        try:
+            layers, top_edge_sections = _model_pallet_layers(length_input, width_input)
+        except CalculationError as exc:
+            QMessageBox.information(self, "Построение по модели", str(exc))
+            self.statusBar().showMessage("Не удалось построить трёхслойный поддон по модели.")
+            return
+        self.state.layer_sections.clear()
+        self.state.layer_sections.update(top_edge_sections)
+        self._layer_order = [layer.layer_id for layer in layers]
+        self._layer_axes = {layer.layer_id: layer.axis for layer in layers}
+        self._rebuild_layer_cards()
+        result = self.controller.calculate_layers(layers)
         if result is None:
             # Keep the staged STEP actor and its picking callback alive: a
             # non-support face can legitimately produce overlapping beams.
@@ -1181,6 +1240,7 @@ class MainWindow(QMainWindow):
         # model-only form rows.
         self.length_panel.apply_position_data(length_input, notify=False)
         self.width_panel.apply_position_data(width_input, notify=False)
+        self.top_length_panel.apply_position_data(layers[-1].direction, notify=False)
         self.length_panel.set_model_driven_mode(length_input)
         self.width_panel.set_model_driven_mode(width_input)
         # ``apply_position_data`` intentionally notifies regular manual

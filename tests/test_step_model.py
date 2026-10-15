@@ -65,6 +65,33 @@ def test_pallet_inputs_rotate_a_sideways_machine_onto_its_support_plane():
     assert placed_mesh.bounds[4] == 140
 
 
+def test_pallet_inputs_can_use_the_bearing_height_of_a_multilayer_pallet():
+    supports = (
+        StepFace(0, np.array((0, 50, 50), dtype=float), np.array((1, 0, 0), dtype=float)),
+        StepFace(1, np.array((0, 200, 50), dtype=float), np.array((1, 0, 0), dtype=float)),
+    )
+    model = _model(*supports)
+
+    _length, _width, placed_mesh, _edges = pallet_inputs_from_supports(
+        model,
+        supports,
+        length_beam_height=50,
+        length_beam_width=70,
+        width_beam_height=50,
+        width_beam_width=70,
+        length_margin_start=100,
+        length_margin_end=100,
+        width_margin_start=100,
+        width_margin_end=100,
+        round_pallet_size=False,
+        rounding_step=5,
+        reference_support_index=0,
+        pallet_height=150,
+    )
+
+    assert placed_mesh.bounds[4] == 150
+
+
 def test_automatic_model_offsets_position_supports_from_mesh_bounds():
     supports = (
         StepFace(0, np.array((120, 80, 0), dtype=float), np.array((0, 0, -1), dtype=float)),
