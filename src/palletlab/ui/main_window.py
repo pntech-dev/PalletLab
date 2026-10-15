@@ -1957,6 +1957,7 @@ class MainWindow(QMainWindow):
         MainWindow._begin_history_transaction(self)
         self.state.material_id = material_id
         MainWindow._commit_history_transaction(self)
+        self.view.set_material(material_id)
         if self._last_result is not None:
             self._update_scene_info(self._last_result)
 

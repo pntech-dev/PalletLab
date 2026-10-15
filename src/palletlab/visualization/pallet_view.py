@@ -11,6 +11,7 @@ import pyvista as pv
 from pyvistaqt import QtInteractor
 
 from palletlab.core.formatting import format_mm
+from palletlab.core.materials import DEFAULT_MATERIAL_ID, wood_palette
 from palletlab.core.models import InsertionSlot, PalletAxis, PalletResult
 from palletlab.controllers.viewport_geometry import EditableDimension, InsertionMarker, PreviewBox, beam_faces, editable_dimensions
 
@@ -27,6 +28,7 @@ class PalletView(QtInteractor):
         self.clear()
         self.set_background("#f5f7fa")
         self._has_model = False
+        self._material_id = DEFAULT_MATERIAL_ID
         self._axes_added = False
         self._annotation_actors: list[object] = []
         self._annotation_segments: list[pv.PolyData] | None = None
@@ -123,12 +125,13 @@ class PalletView(QtInteractor):
 
     def show_pallet(
         self, result: PalletResult, show_length_gaps: bool = True, show_width_gaps: bool = True, *,
-        dimensions: tuple[EditableDimension, ...] | None = None,
+        dimensions: tuple[EditableDimension, ...] | None = None, material_id: str = DEFAULT_MATERIAL_ID,
     ) -> None:
         camera_position = self.camera_position if self._has_model else None
         # Keep the STEP actor and unchanged pallet beams in the renderer.
         # Recreating the complete scene made large models flash while also
         # discarding a camera position the user had already chosen.
+        self.set_material(material_id, render=False)
         if self._has_beam_changes(result):
             self._clear_interaction_overlays()
         self._sync_beam_actors(result)
@@ -164,9 +167,9 @@ class PalletView(QtInteractor):
             if key in self._beam_actor_by_key:
                 continue
             cube = self._beam_cube(result, beam)
-            color = "#b7791f" if beam.orientation == "length" else "#8b5a2b"
+            color = self._interaction_colors["length_beam" if beam.orientation == "length" else "width_beam"]
             actor = self.add_mesh(
-                cube, color=color, show_edges=True, edge_color="#4a2c12",
+                cube, color=color, show_edges=True, edge_color=self._interaction_colors["default_edge"],
                 # A global enumerate index changes as soon as any preceding
                 # beam is removed.  PyVista treats a repeated ``name`` as a
                 # replacement, which used to make an unselected beam vanish
@@ -181,6 +184,45 @@ class PalletView(QtInteractor):
             self._beam_actors[actor] = (key[0], axis, beam.layer_index)
             changed = True
         return changed
+
+    def set_material(self, material_id: str, *, render: bool = True) -> None:
+        """Recolour existing beams without rebuilding their geometry or scene."""
+        if material_id == self._material_id:
+            return
+        self._material_id = material_id
+        self._interaction_colors.update({
+            name: pv.Color(color).float_rgb for name, color in wood_palette(material_id).items()
+        })
+        for actor in self._beam_actors:
+            self._restore_material_aware_interaction_color(actor)
+        if render:
+            self.render()
+
+    def _restore_material_aware_interaction_color(self, actor) -> None:
+        """Refresh a beam while retaining the active tool's selection feedback."""
+        if actor in self._selected_deletion_actors:
+            self._set_deletion_color(actor, selected=True)
+        elif actor == self._hovered_deletion_actor:
+            self._set_deletion_hover_color(actor)
+        elif actor in self._selected_section_actors:
+            self._set_section_color(actor, selected=True)
+        elif actor == self._hovered_section_actor:
+            self._set_section_hover_color(actor)
+        elif actor == self._hovered_support_actor:
+            actor.GetProperty().SetColor(*self._interaction_colors["section_hover"])
+            actor.GetProperty().SetEdgeColor(*self._interaction_colors["section_hover_edge"])
+        else:
+            self._restore_base_beam_color(actor)
+
+    def _restore_base_beam_color(self, actor) -> None:
+        """Restore a beam's material palette after an interaction highlight."""
+        if actor not in self._beam_actors:
+            return
+        _layer_id, axis, _index = self._beam_actors[actor]
+        actor.GetProperty().SetColor(*(
+            self._interaction_colors["length_beam"] if axis == "width" else self._interaction_colors["width_beam"]
+        ))
+        actor.GetProperty().SetEdgeColor(*self._interaction_colors["default_edge"])
 
     @staticmethod
     def _beam_actor_name(key: tuple[str, int]) -> str:
@@ -776,11 +818,7 @@ class PalletView(QtInteractor):
             self._support_pick_callback(layer_id, index, face)
 
     def _restore_support_actor(self, actor) -> None:
-        if actor not in self._beam_actors:
-            return
-        _layer_id, axis, _index = self._beam_actors[actor]
-        actor.GetProperty().SetColor(*(self._interaction_colors["length_beam"] if axis == "width" else self._interaction_colors["width_beam"]))
-        actor.GetProperty().SetEdgeColor(*self._interaction_colors["default_edge"])
+        self._restore_base_beam_color(actor)
 
     def _update_support_face_hover(self, *_args) -> None:
         if not self._support_pick_mode:

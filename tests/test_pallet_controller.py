@@ -99,7 +99,7 @@ def test_controller_calculates_updates_state_and_renders_the_view():
     assert result is state.result
     assert state.length_input is LENGTH_INPUT
     assert state.width_input is WIDTH_INPUT
-    assert view.rendered == [(result, {"show_length_gaps": True, "show_width_gaps": True})]
+    assert view.rendered == [(result, {"show_length_gaps": True, "show_width_gaps": True, "material_id": "pine"})]
     assert calculated == [result]
     assert errors == []
     assert stale == [False]

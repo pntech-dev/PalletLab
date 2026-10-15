@@ -197,6 +197,7 @@ class PalletController:
         kwargs = {
             "show_length_gaps": self.state.show_length_dimensions,
             "show_width_gaps": self.state.show_width_dimensions,
+            "material_id": self.state.material_id,
         }
         if self.state.manual_beams:
             kwargs["dimensions"] = editable_dimensions(result, tuple(self.state.manual_beams))
