@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 
 
-def test_smoke_test_mode_imports_the_3d_viewport(monkeypatch):
+def test_smoke_test_mode_imports_the_3d_viewport(monkeypatch, tmp_path):
     main_path = Path(__file__).parents[1] / "src" / "main.py"
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", [str(main_path), "--smoke-test"])
 
     with pytest.raises(SystemExit) as result:
