@@ -1,0 +1,24 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# Begin with correctness-oriented checks. Formatting rules are deliberately
+# deferred until the existing code is corrected incrementally.
+select = ["E4", "E7", "E9", "F", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["E402", "S101"]
+
+[tool.mypy]
+python_version = "3.11"
+files = [
+  "src/palletlab/core/models.py",
+  "src/palletlab/core/calculator.py",
+  "src/palletlab/core/project_state.py",
+  "src/palletlab/core/persistence.py",
+  "src/palletlab/diagnostics.py",
+]
+strict = true
+follow_imports = "skip"
+warn_unused_configs = true

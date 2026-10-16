@@ -8,6 +8,16 @@ from typing import Literal
 
 LayerDirection = Literal["length", "width"]
 PalletAxis = Literal["length", "width"]
+BeamKey = tuple[PalletAxis, int]
+LayerBeamKey = tuple[str, int]
+
+
+@dataclass(frozen=True)
+class BeamSection:
+    """Cross-section of one beam, expressed as height × width in millimetres."""
+
+    height: float
+    width: float
 
 
 @dataclass(frozen=True)
@@ -27,6 +37,33 @@ class DirectionInput:
     # beams.  In that case distances alone are not enough to encode the
     # layout, so the UI keeps the exact remaining support centres here.
     support_positions: tuple[float, ...] | None = None
+    # Edge beams can be removed while preserving the calculated pallet
+    # envelope. Indices refer to the stable beam-centre sequence.
+    hidden_beam_indices: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class LayerInput:
+    """Editable grid and direction of one layer in a multilayer pallet."""
+
+    layer_id: str
+    axis: PalletAxis
+    direction: DirectionInput
+
+
+@dataclass(frozen=True)
+class ManualBeamInput:
+    """A beam bridged between the outer edges of two selected pallet beams."""
+
+    beam_id: str
+    first_support: LayerBeamKey
+    second_support: LayerBeamKey
+    distance: float
+    section: BeamSection
+    reference_support: LayerBeamKey | None = None
+    reference_face: str | None = None
+    first_face: Literal["top", "bottom"] = "top"
+    second_face: Literal["top", "bottom"] = "top"
 
 
 @dataclass(frozen=True)
@@ -40,6 +77,7 @@ class DirectionResult:
     support_positions: tuple[float, ...]
     beam_centers: tuple[float, ...]
     gaps: tuple[float, ...]
+    hidden_beam_indices: tuple[int, ...] = ()
 
     @property
     def support_count(self) -> int:
@@ -51,6 +89,29 @@ class DirectionResult:
 
 
 @dataclass(frozen=True)
+class LayerDefinition:
+    """One pallet layer, listed in physical order from bottom to top."""
+
+    layer_id: str
+    axis: PalletAxis
+    direction: DirectionResult
+    # An empty tuple means that every beam uses the section from ``direction``.
+    sections: tuple[BeamSection, ...] = ()
+
+
+@dataclass(frozen=True)
+class LayerResult:
+    """Calculated vertical placement and beam range for one pallet layer."""
+
+    layer_id: str
+    axis: PalletAxis
+    base_z: float
+    top_z: float
+    beam_start_index: int
+    beam_count: int
+
+
+@dataclass(frozen=True)
 class InsertionSlot:
     """A valid place to insert a same-section beam after an existing beam."""
 
@@ -58,6 +119,10 @@ class InsertionSlot:
     after_beam_index: int
     maximum_clear_gap: float
     suggested_clear_gap: float
+    # The legacy two-layer pallet uses ``length``/``width`` as ids.  A real
+    # layer id keeps an insertion unambiguous in a stack containing several
+    # layers in the same direction.
+    layer_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -71,6 +136,8 @@ class Beam3D:
     size_y: float
     size_z: float
     orientation: LayerDirection
+    layer_id: str = ""
+    layer_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -82,3 +149,4 @@ class PalletResult:
     pallet_height: float
     upper_layer: LayerDirection
     beams_3d: tuple[Beam3D, ...]
+    layers: tuple[LayerResult, ...] = ()

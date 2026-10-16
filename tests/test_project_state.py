@@ -1,5 +1,5 @@
 from palletlab.core.models import DirectionInput, InsertionSlot
-from palletlab.core.project_state import ProjectState
+from palletlab.core.project_state import ProjectHistory, ProjectState
 
 
 def _input() -> DirectionInput:
@@ -43,3 +43,69 @@ def test_project_state_keeps_interaction_state_separate_from_project_data():
     assert state.pending_insertion is slot
     assert state.pending_distance == ("width", 2)
     assert state.selected_for_deletion == {"length": {3}, "width": set()}
+
+
+def test_history_restores_editable_state_without_restoring_tool_selection():
+    state = ProjectState(length_input=_input(), material_id="pine")
+    state.active_tool = "insertion"
+    state.pending_insertion = InsertionSlot("length", 1, 120, 60)
+    state.selected_for_deletion["length"].add(3)
+    history = ProjectHistory()
+
+    history.record(history.snapshot(state))
+    state.length_input = DirectionInput(70, 50, (700,), 100, 100, 100, 100)
+    state.material_id = "spruce"
+
+    assert history.undo(state)
+    assert state.length_input == _input()
+    assert state.material_id == "pine"
+    assert state.active_tool == "none"
+    assert state.pending_insertion is None
+    assert state.selected_for_deletion == {"length": set(), "width": set()}
+    assert history.redo(state)
+    assert state.length_input.support_distances == (700,)
+    assert state.material_id == "spruce"
+
+
+def test_history_is_limited_and_a_new_edit_clears_redo():
+    state = ProjectState(length_input=_input())
+    history = ProjectHistory(limit=2)
+    for spacing in (600, 700, 800):
+        history.record(history.snapshot(state))
+        state.length_input = DirectionInput(70, 50, (spacing,), 100, 100, 100, 100)
+
+    assert len(history.undo_stack) == 2
+    assert history.undo(state)
+    history.record(history.snapshot(state))
+    assert history.redo_stack == []
+
+
+def test_history_keeps_fifty_distinct_actions():
+    state = ProjectState(length_input=_input())
+    history = ProjectHistory()
+
+    for spacing in range(501, 551):
+        history.record(history.snapshot(state))
+        state.length_input = DirectionInput(70, 50, (spacing,), 100, 100, 100, 100)
+
+    assert len(history.undo_stack) == 50
+    for _ in range(50):
+        assert history.undo(state)
+    assert not history.undo(state)
+    assert state.length_input == _input()
+
+
+def test_history_records_each_successful_change_as_a_separate_undo_step():
+    state = ProjectState(length_input=_input())
+    history = ProjectHistory()
+
+    history.record(history.snapshot(state))
+    state.length_input = DirectionInput(70, 50, (600,), 100, 100, 100, 100)
+    history.record(history.snapshot(state))
+    state.material_id = "spruce"
+
+    assert history.undo(state)
+    assert state.material_id != "spruce"
+    assert state.length_input.support_distances == (600,)
+    assert history.undo(state)
+    assert state.length_input == _input()

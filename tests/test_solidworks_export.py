@@ -75,8 +75,10 @@ def test_lengthwise_beam_starts_at_the_shared_pallet_corner():
 
 
 def test_templates_are_read_from_solidworks_preferences(tmp_path):
-    part = tmp_path / "part.prtdot"; part.write_text("part")
-    assembly = tmp_path / "assembly.asmdot"; assembly.write_text("assembly")
+    part = tmp_path / "part.prtdot"
+    part.write_text("part")
+    assembly = tmp_path / "assembly.asmdot"
+    assembly.write_text("assembly")
 
     class _Preferences:
         swDefaultTemplatePart = "part"
@@ -121,7 +123,9 @@ def test_solidworks_material_is_assigned_through_part_document_api():
 
         def __init__(self):
             self.calls = []
-            self.ConfigurationManager = type("Manager", (), {"ActiveConfiguration": type("Configuration", (), {"Name": "Default"})()})()
+            self.ConfigurationManager = type(
+                "Manager", (), {"ActiveConfiguration": type("Configuration", (), {"Name": "Default"})()}
+            )()
             self.assigned_material = ""
 
         def _FlagAsMethod(self, name):
@@ -145,8 +149,10 @@ def test_solidworks_reads_material_names_from_selected_library(tmp_path):
 
 
 def test_solidworks_requires_library_folder_to_be_registered(tmp_path):
-    library_folder = tmp_path / "corporate"; library_folder.mkdir()
-    library = library_folder / "company.sldmat"; library.write_text("library")
+    library_folder = tmp_path / "corporate"
+    library_folder.mkdir()
+    library = library_folder / "company.sldmat"
+    library.write_text("library")
 
     class _SolidWorks:
         def GetMaterialDatabases(self):
@@ -160,7 +166,12 @@ def test_solidworks_requires_library_folder_to_be_registered(tmp_path):
 def test_solidworks_material_targets_the_active_configuration():
     model = type(
         "Model",
-        (), {"ConfigurationManager": type("Manager", (), {"ActiveConfiguration": type("Configuration", (), {"Name": "Конфигурация1"})()})()},
+        (),
+        {
+            "ConfigurationManager": type(
+                "Manager", (), {"ActiveConfiguration": type("Configuration", (), {"Name": "Конфигурация1"})()}
+            )()
+        },
     )()
 
     assert _active_configuration_name(model) == "Конфигурация1"

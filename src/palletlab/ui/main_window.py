@@ -2,33 +2,95 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import QEvent, QProcess, QProcessEnvironment, QSettings, QSignalBlocker, QTimer, Qt, pyqtSignal
-from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
-                             QMessageBox, QPushButton, QDoubleSpinBox, QProgressDialog, QRadioButton, QScrollArea, QSplitter, QVBoxLayout, QWidget)
+from PyQt5.QtGui import QKeySequence
+from PyQt5.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
+                             QMessageBox, QPushButton, QDoubleSpinBox, QProgressDialog, QRadioButton, QScrollArea, QShortcut, QSplitter, QVBoxLayout, QWidget)
 
 from palletlab.controllers.pallet_controller import PalletController
-from palletlab.core.calculator import insertion_slots
+from palletlab.core.calculator import calculate_direction
+from palletlab.core.autosave import AutosaveStore
 from palletlab.core.formatting import format_mm
 from palletlab.core.materials import MATERIALS, get_material, pallet_mass_kg
-from palletlab.core.models import InsertionSlot, PalletAxis
-from palletlab.core.project_state import ProjectState
+from palletlab.core.models import BeamSection, DirectionInput, InsertionSlot, LayerInput, PalletAxis
+from palletlab.core.persistence import ProjectPersistenceError
+from palletlab.core.project_state import ProjectHistory, ProjectState
 from palletlab.core.validation import CalculationError
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
 from palletlab.exporters.solidworks import SolidWorksExportError, SolidWorksMaterialLibraryError, SolidWorksTemplateError, available_materials, export_pallet
-from palletlab.ui import resources_rc  # Registers SVGs used by the application QSS.
-from palletlab.ui.input_panel import DirectionInputPanel
+from palletlab.importers.step_import_protocol import consume_messages
+from palletlab.ui import resources_rc  # noqa: F401 - Registers SVGs used by the application QSS.
+from palletlab.ui.input_panel import DirectionInputPanel, SECTIONS
+from palletlab.ui.layer_cards import LayerCardManager
+from palletlab.ui.tool_state import ToolMode, ToolStateMachine
 from palletlab.ui.update_dialog import check_for_updates
 from palletlab.version import __version__
 from palletlab.visualization.pallet_view import PalletView
 
 if TYPE_CHECKING:
     from palletlab.importers.step_model import ImportedStepModel
+
+
+EXAMPLE_LENGTH_INPUT = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100)
+EXAMPLE_WIDTH_INPUT = DirectionInput(70, 50, (560, 720), 277, 179, 100, 100)
+EXAMPLE_LAYERS = (
+    LayerInput("length", "length", EXAMPLE_LENGTH_INPUT),
+    LayerInput("width", "width", EXAMPLE_WIDTH_INPUT),
+    LayerInput("layer-1", "length", EXAMPLE_LENGTH_INPUT),
+)
+
+
+# STEP-driven pallets use a fixed three-layer construction.  The upper edge
+# beams are intentionally lower and wider, while every other beam is 70 x 50.
+MODEL_STANDARD_SECTION = BeamSection(70, 50)
+MODEL_TOP_EDGE_SECTION = BeamSection(25, 100)
+MODEL_PALLET_HEIGHT = MODEL_STANDARD_SECTION.height * 3
+
+
+def _model_pallet_layers(
+    length_input: DirectionInput, width_input: DirectionInput,
+) -> tuple[list[LayerInput], dict[tuple[str, int], BeamSection]]:
+    """Build a three-layer STEP pallet with cross-beams on its longer side."""
+    length_direction = replace(
+        length_input,
+        beam_height=MODEL_STANDARD_SECTION.height,
+        beam_width=MODEL_STANDARD_SECTION.width,
+    )
+    width_direction = replace(
+        width_input,
+        beam_height=MODEL_STANDARD_SECTION.height,
+        beam_width=MODEL_STANDARD_SECTION.width,
+    )
+    directions = {"length": length_direction, "width": width_direction}
+    # The bottom beams run across the longer side of the pallet, leaving a
+    # clear forklift entry from that side.  A ``length`` grid means beams run
+    # across width; a ``width`` grid means they run along length.
+    bottom_axis: PalletAxis = (
+        "length"
+        if calculate_direction(length_direction).pallet_size >= calculate_direction(width_direction).pallet_size
+        else "width"
+    )
+    middle_axis: PalletAxis = "width" if bottom_axis == "length" else "length"
+    top_direction = directions[bottom_axis]
+    top_centres = calculate_direction(top_direction).beam_centers
+    top_sections = {
+        ("layer-1", index): MODEL_TOP_EDGE_SECTION
+        for index in (0, len(top_centres) - 1)
+    }
+    return (
+        [
+            LayerInput(bottom_axis, bottom_axis, directions[bottom_axis]),
+            LayerInput(middle_axis, middle_axis, directions[middle_axis]),
+            LayerInput("layer-1", bottom_axis, top_direction),
+        ],
+        top_sections,
+    )
 
 
 class InsertionGapSpinBox(QDoubleSpinBox):
@@ -47,6 +109,74 @@ class InsertionGapSpinBox(QDoubleSpinBox):
             event.accept()
             return
         super().keyPressEvent(event)
+
+
+class BeamSectionDialog(QDialog):
+    """Choose one standard or custom cross-section for selected beams."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Изменить сечение брусьев")
+        self.setModal(True)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Новое сечение применяется ко всем выделенным брусьям."))
+        form = QFormLayout()
+        self.section_combo = QComboBox()
+        self.section_combo.addItems(SECTIONS)
+        self.height = QDoubleSpinBox()
+        self.width = QDoubleSpinBox()
+        for field in (self.height, self.width):
+            field.setRange(1.0, 1_000_000.0)
+            field.setDecimals(3)
+            field.setSuffix(" мм")
+            field.setSingleStep(1.0)
+        form.addRow("Сечение · высота × ширина", self.section_combo)
+        form.addRow("Высота", self.height)
+        form.addRow("Ширина", self.width)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.section_combo.currentTextChanged.connect(self._section_changed)
+        self._section_changed(self.section_combo.currentText())
+
+    def _section_changed(self, name: str) -> None:
+        values = SECTIONS[name]
+        custom = values is None
+        self.height.setEnabled(custom)
+        self.width.setEnabled(custom)
+        if values is not None:
+            self.height.setValue(values[0])
+            self.width.setValue(values[1])
+
+    def section(self) -> BeamSection:
+        return BeamSection(self.height.value(), self.width.value())
+
+
+class ManualBeamDialog(BeamSectionDialog):
+    """Parameters of one beam placed between two selected supports."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Новый брус")
+        self.layout().insertWidget(1, QLabel("Расстояние задаёт положение бруса вдоль выбранных опор."))
+        self.reference = QComboBox()
+        self.reference.addItem("От базовой точки (0)", False)
+        self.reference.addItem("От выбранной грани", True)
+        self.distance = QDoubleSpinBox()
+        self.distance.setRange(-1_000_000, 1_000_000)
+        self.distance.setDecimals(3)
+        self.distance.setSuffix(" мм")
+        self.pick_reference = QPushButton("Выбрать грань объекта")
+        self.pick_reference.setVisible(False)
+        form = QFormLayout()
+        form.addRow("Точка отсчёта", self.reference)
+        form.addRow("Расстояние", self.distance)
+        form.addRow("", self.pick_reference)
+        self.layout().insertLayout(2, form)
+        self.reference.currentIndexChanged.connect(lambda: self.pick_reference.setVisible(bool(self.reference.currentData())))
+        self.pick_reference.clicked.connect(lambda: self.done(2))
 
 
 class MainWindow(QMainWindow):
@@ -86,39 +216,74 @@ class MainWindow(QMainWindow):
         return self.state.pending_distance
 
     @_pending_distance.setter
-    def _pending_distance(self, value: tuple[PalletAxis, int] | None) -> None:
+    def _pending_distance(self, value: tuple[str, int] | None) -> None:
         self.state.pending_distance = value
 
     @property
-    def _selected_for_deletion(self) -> dict[PalletAxis, set[int]]:
+    def _selected_for_deletion(self) -> dict[str, set[int]]:
         return self.state.selected_for_deletion
 
     @_selected_for_deletion.setter
-    def _selected_for_deletion(self, value: dict[PalletAxis, set[int]]) -> None:
+    def _selected_for_deletion(self, value: dict[str, set[int]]) -> None:
         self.state.selected_for_deletion = value
+
+    @property
+    def _selected_for_section(self) -> dict[str, set[int]]:
+        return self.state.selected_for_section
 
     def __init__(self) -> None:
         super().__init__()
         self.state = ProjectState()
+        self._history = ProjectHistory()
+        self._pending_history_snapshot: ProjectState | None = None
+        self._history_restoring = False
+        # All delayed rebuild routes share one revision.  A timeout that was
+        # queued before a newer edit, load, undo or reset can no longer apply
+        # an obsolete scene.
+        self._recalculation_revision = 0
+        self._pending_layer_revision: int | None = None
+        self._pending_model_revision: int | None = None
         self._project_path: str | None = None
+        self._autosaves = AutosaveStore()
         self._imported_step_model: ImportedStepModel | None = None
         self._step_import_process: QProcess | None = None
         self._step_import_path: str | None = None
         self._step_import_output = ""
         self._step_import_error: str | None = None
         self._step_import_progress: QProgressDialog | None = None
+        self._step_import_done = False
+        self._step_import_cancelled = False
         self._model_supports = ()
         self._model_reference_support_index: int | None = None
         self._model_rebuild_timer = QTimer(self)
         self._model_rebuild_timer.setSingleShot(True)
         self._model_rebuild_timer.setInterval(300)
-        self._model_rebuild_timer.timeout.connect(self._build_selected_model_pallet)
+        self._model_rebuild_timer.timeout.connect(self._run_model_rebuild)
         self.setWindowTitle(f"PalletLab {__version__} — расчёт поддонов")
         screen = QApplication.primaryScreen().availableGeometry()
         self.resize(min(1400, int(screen.width() * 0.92)), min(900, int(screen.height() * 0.90)))
         self.setMinimumSize(900, 650)
         self.length_panel = DirectionInputPanel("01  Длина", "Центры опор задаются по оси X. Эти координаты определяют поперечные брусья.", "1070 460 1300 499", "123", "552")
         self.width_panel = DirectionInputPanel("02  Ширина", "Центры опор задаются по оси Y. Эти координаты определяют продольные брусья.", "560 720", "277", "179")
+        self.top_length_panel = DirectionInputPanel("03  Длина", "Центры опор задаются по оси X. Эти координаты определяют поперечные брусья.", "1070 460 1300 499", "123", "552")
+        self._layer_order = ["length", "width", "layer-1"]
+        self._layer_panels: dict[str, DirectionInputPanel] = {
+            "length": self.length_panel, "width": self.width_panel, "layer-1": self.top_length_panel,
+        }
+        self._layer_axes: dict[str, PalletAxis] = {"length": "length", "width": "width", "layer-1": "length"}
+        # Reordering cards must never destroy a reusable DirectionInputPanel.
+        # The manager keeps editors and their short-lived visual wrappers apart.
+        self._layer_card_manager: LayerCardManager | None = None
+        self._tool_state = ToolStateMachine()
+        self._layer_rebuild_timer = QTimer(self)
+        self._layer_rebuild_timer.setSingleShot(True)
+        self._layer_rebuild_timer.setInterval(300)
+        self._layer_rebuild_timer.timeout.connect(self._run_layer_rebuild)
+        self._layer_envelope_source: str | None = None
+        self._manual_supports: list[tuple[str, int, str]] = []
+        self._manual_reference_request: tuple[
+            tuple[str, int, str], tuple[str, int, str], ManualBeamDialog
+        ] | None = None
         self.width_upper = QPushButton("Вдоль ширины")
         self.length_upper = QPushButton("Вдоль длины")
         self.layer_buttons = QButtonGroup(self)
@@ -130,7 +295,7 @@ class MainWindow(QMainWindow):
         self.controller = PalletController(
             self.state,
             self.view,
-            on_calculated=self._update_scene_info,
+            on_calculated=self._calculation_succeeded,
             on_error=self._handle_calculation_error,
             on_stale_changed=self._set_stale,
             input_provider=self._read_calculation_inputs,
@@ -150,8 +315,18 @@ class MainWindow(QMainWindow):
         self.camera_combo.addItem("Спереди", "front")
         self.camera_combo.addItem("Сбоку", "side")
         self._build_ui()
+        self._undo_shortcut = QShortcut(QKeySequence.Undo, self)
+        self._undo_shortcut.setContext(Qt.ApplicationShortcut)
+        self._undo_shortcut.activated.connect(self.undo)
+        self._redo_shortcut = QShortcut(QKeySequence("Ctrl+U"), self)
+        self._redo_shortcut.setContext(Qt.ApplicationShortcut)
+        self._redo_shortcut.activated.connect(self.redo)
         self._set_stale(False)
         self.calculate()
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(60_000)
+        self._autosave_timer.timeout.connect(self._autosave_project)
+        self._autosave_timer.start()
         QTimer.singleShot(1500, self._check_for_updates)
 
     def _check_for_updates(self) -> None:
@@ -178,11 +353,15 @@ class MainWindow(QMainWindow):
         note.setObjectName("paneHint")
         note.setWordWrap(True)
         controls_layout.addWidget(note)
-        controls_layout.addWidget(self.length_panel)
-        controls_layout.addWidget(self.width_panel)
-        layer_card = QFrame()
-        layer_card.setObjectName("layerCard")
-        layer_layout = QVBoxLayout(layer_card)
+        self.layer_stack_card = QFrame()
+        self.layer_stack_card.setObjectName("layerStackCard")
+        self.layer_stack_layout = QVBoxLayout(self.layer_stack_card)
+        self.layer_stack_layout.setContentsMargins(0, 0, 0, 0)
+        self.layer_stack_layout.setSpacing(10)
+        controls_layout.addWidget(self.layer_stack_card)
+        self.layer_card = QFrame()
+        self.layer_card.setObjectName("layerCard")
+        layer_layout = QVBoxLayout(self.layer_card)
         layer_layout.setContentsMargins(16, 14, 16, 14)
         layer_layout.addWidget(QLabel("Верхний слой"))
         layer_hint = QLabel("Выберите, какая группа брусьев лежит сверху.")
@@ -193,7 +372,7 @@ class MainWindow(QMainWindow):
         choices.addWidget(self.width_upper)
         choices.addWidget(self.length_upper)
         layer_layout.addLayout(choices)
-        controls_layout.addWidget(layer_card)
+        controls_layout.addWidget(self.layer_card)
         controls_layout.addStretch()
         scroll = QScrollArea()
         scroll.setObjectName("parametersScroll")
@@ -258,20 +437,17 @@ class MainWindow(QMainWindow):
         view_title.setToolTip("Вращайте модель мышью, колёсиком меняйте масштаб.")
         title_block.addWidget(view_title)
         view_heading.addLayout(title_block)
-        self.build_from_model_button = QPushButton("Построить по модели")
-        self.build_from_model_button.setObjectName("buildFromModelButton")
-        self.build_from_model_button.setToolTip("Загрузить STEP-модель и выбрать нижнюю грань одной опоры.")
-        self.build_from_model_button.clicked.connect(self.build_from_model)
-        view_heading.addWidget(self.build_from_model_button)
         self.rebuild_from_model_button = QPushButton("Перестроить по модели")
         self.rebuild_from_model_button.setObjectName("rebuildFromModelButton")
         self.rebuild_from_model_button.setToolTip("Удалить поддон и заново выбрать грань опоры уже загруженной модели.")
         self.rebuild_from_model_button.setEnabled(False)
+        self.rebuild_from_model_button.setVisible(False)
         self.rebuild_from_model_button.clicked.connect(self.rebuild_from_model)
         view_heading.addWidget(self.rebuild_from_model_button)
         self.toggle_model_button = QPushButton("Скрыть 3D модель")
         self.toggle_model_button.setObjectName("toggleModelButton")
         self.toggle_model_button.setEnabled(False)
+        self.toggle_model_button.setVisible(False)
         self.toggle_model_button.clicked.connect(self._toggle_model_visibility)
         view_heading.addWidget(self.toggle_model_button)
         self.add_beam_button = QPushButton("＋ Добавить брус")
@@ -292,6 +468,12 @@ class MainWindow(QMainWindow):
         self.edit_distance_button.setToolTip("Выбрать размерную линию и изменить расстояние либо общий габарит.")
         self.edit_distance_button.toggled.connect(self._toggle_distance_editing)
         view_heading.addWidget(self.edit_distance_button)
+        self.change_section_button = QPushButton("▣ Изменить сечение")
+        self.change_section_button.setObjectName("changeSectionButton")
+        self.change_section_button.setCheckable(True)
+        self.change_section_button.setToolTip("Выбрать брусья и назначить им другое сечение.")
+        self.change_section_button.toggled.connect(self._toggle_section_editing)
+        view_heading.addWidget(self.change_section_button)
         self.insertion_editor = QFrame()
         self.insertion_editor.setObjectName("insertionEditor")
         insertion_layout = QHBoxLayout(self.insertion_editor)
@@ -326,6 +508,20 @@ class MainWindow(QMainWindow):
         deletion_layout.addWidget(self.confirm_deletion_button)
         self.deletion_editor.setVisible(False)
         view_heading.addWidget(self.deletion_editor)
+        self.section_editor = QFrame()
+        self.section_editor.setObjectName("sectionEditor")
+        section_layout = QHBoxLayout(self.section_editor)
+        section_layout.setContentsMargins(8, 4, 8, 4)
+        section_layout.setSpacing(6)
+        self.section_hint = QLabel()
+        self.section_hint.setObjectName("sectionEditHint")
+        section_layout.addWidget(self.section_hint)
+        self.confirm_section_button = QPushButton("Изменить…")
+        self.confirm_section_button.setObjectName("confirmSectionButton")
+        self.confirm_section_button.clicked.connect(self._confirm_section_change)
+        section_layout.addWidget(self.confirm_section_button)
+        self.section_editor.setVisible(False)
+        view_heading.addWidget(self.section_editor)
         self.distance_editor = QFrame()
         self.distance_editor.setObjectName("distanceEditor")
         distance_layout = QHBoxLayout(self.distance_editor)
@@ -333,7 +529,7 @@ class MainWindow(QMainWindow):
         distance_layout.setSpacing(6)
         distance_layout.addWidget(QLabel("Новое расстояние:"))
         self.distance_value = InsertionGapSpinBox()
-        self.distance_value.setRange(0, 1_000_000)
+        self.distance_value.setRange(-1_000_000, 1_000_000)
         self.distance_value.setDecimals(2)
         self.distance_value.setSuffix(" мм")
         self.distance_value.setMinimumWidth(120)
@@ -362,17 +558,25 @@ class MainWindow(QMainWindow):
         splitter.setSizes([420, 980])
         root_layout.addWidget(splitter, 1)
         self.setCentralWidget(root)
+        self._rebuild_layer_cards()
         self.length_panel.changed.connect(self._schedule_recalculation)
         self.width_panel.changed.connect(self._schedule_recalculation)
+        self.top_length_panel.changed.connect(self._schedule_recalculation)
         self.layer_buttons.buttonClicked.connect(self._layer_changed)
         self.rounding_buttons.buttonClicked.connect(self._rounding_changed)
-        self.show_length_gaps.toggled.connect(self._refresh_dimension_annotations)
-        self.show_width_gaps.toggled.connect(self._refresh_dimension_annotations)
+        self.show_length_gaps.toggled.connect(self._dimension_visibility_changed)
+        self.show_width_gaps.toggled.connect(self._dimension_visibility_changed)
         self.setStyleSheet(self._stylesheet())
         self.add_beam_button.installEventFilter(self)
         self.delete_beam_button.installEventFilter(self)
         self.edit_distance_button.installEventFilter(self)
+        self.change_section_button.installEventFilter(self)
         self.view.installEventFilter(self)
+        # The editor of QDoubleSpinBox is a child QLineEdit and receives key
+        # events before the spin box itself on some Qt styles.  Watch both so
+        # Enter always commits a chosen insertion slot.
+        self.insertion_gap.installEventFilter(self)
+        self.insertion_gap.lineEdit().installEventFilter(self)
 
     def _header(self) -> QFrame:
         header = QFrame()
@@ -396,6 +600,11 @@ class MainWindow(QMainWindow):
         self.save_project_button.setObjectName("saveProjectButton")
         self.save_project_button.clicked.connect(self.save_project)
         layout.addWidget(self.save_project_button)
+        self.build_from_model_button = QPushButton("Построить по модели")
+        self.build_from_model_button.setObjectName("buildFromModelButton")
+        self.build_from_model_button.setToolTip("Загрузить STEP-модель и выбрать нижнюю грань одной опоры.")
+        self.build_from_model_button.clicked.connect(self.build_from_model)
+        layout.addWidget(self.build_from_model_button)
         self.export_kompas_button = QPushButton("Экспорт в КОМПАС")
         self.export_kompas_button.setObjectName("exportKompasButton")
         self.export_kompas_button.clicked.connect(self.export_to_kompas)
@@ -462,6 +671,9 @@ class MainWindow(QMainWindow):
             QPushButton#editDistanceButton { border-color: #b47a22; color: #8a5b14; font-weight: 650; }
             QPushButton#editDistanceButton:hover { background: #fbf0da; }
             QPushButton#editDistanceButton:checked { background: #9a681b; border-color: #9a681b; color: #fff; }
+            QPushButton#changeSectionButton { border-color: #287b9f; color: #1e617d; font-weight: 650; }
+            QPushButton#changeSectionButton:hover { background: #e2f1f6; }
+            QPushButton#changeSectionButton:checked { background: #246f91; border-color: #246f91; color: #fff; }
             QPushButton#buildFromModelButton { background: #255e64; border-color: #255e64; color: #fff; font-weight: 650; }
             QPushButton#buildFromModelButton:hover { background: #1f4f54; border-color: #1f4f54; }
             QPushButton#rebuildFromModelButton { border-color: #8aa7a3; color: #285e59; font-weight: 650; }
@@ -473,6 +685,10 @@ class MainWindow(QMainWindow):
             QLabel#deletionHint { color: #81332e; font-size: 11px; }
             QPushButton#confirmDeletionButton { background: #b83e37; border-color: #b83e37; color: #fff; font-weight: 650; padding: 6px 9px; }
             QPushButton#confirmDeletionButton:disabled { background: #e3b9b5; border-color: #e3b9b5; color: #fff; }
+            QFrame#sectionEditor { background: #e2f1f6; border: 1px solid #afd3df; border-radius: 7px; }
+            QLabel#sectionEditHint { color: #215b72; font-size: 11px; }
+            QPushButton#confirmSectionButton { background: #287b9f; border-color: #287b9f; color: #fff; font-weight: 650; padding: 6px 9px; }
+            QPushButton#confirmSectionButton:disabled { background: #a8ccd9; border-color: #a8ccd9; color: #fff; }
             QFrame#distanceEditor { background: #fbf0da; border: 1px solid #e7c782; border-radius: 7px; }
             QLabel#distanceHint { color: #7d5a20; font-size: 11px; }
             QComboBox#cameraCombo { min-width: 115px; }
@@ -496,6 +712,276 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Расчёт актуален.")
 
+    @staticmethod
+    def _layer_description(axis: PalletAxis) -> str:
+        return (
+            "Центры брусьев задаются по оси X. Брусья слоя идут поперёк ширины."
+            if axis == "length" else
+            "Центры брусьев задаются по оси Y. Брусья слоя идут вдоль длины."
+        )
+
+    def _rebuild_layer_cards(self) -> None:
+        """Render the ordered layer stack while retaining each panel's values."""
+        if self._layer_card_manager is None:
+            self._layer_card_manager = LayerCardManager(
+                self.layer_stack_layout,
+                description=self._layer_description,
+                on_move=self._move_layer,
+                on_remove=self._remove_layer,
+                on_add=self._add_layer,
+            )
+        self._layer_card_manager.rebuild(self._layer_order, self._layer_axes, self._layer_panels)
+        self._sync_layer_mode()
+
+    def _add_layer(self) -> None:
+        MainWindow._begin_history_transaction(self)
+        self._layer_rebuild_timer.stop()
+        axis: PalletAxis = "length" if self._layer_axes[self._layer_order[-1]] == "width" else "width"
+        number = 1
+        while f"layer-{number}" in self._layer_panels:
+            number += 1
+        layer_id = f"layer-{number}"
+        source_id = next((identifier for identifier in self._layer_order if self._layer_axes[identifier] == axis), self._layer_order[-1])
+        source = self._layer_panels[source_id]
+        panel = DirectionInputPanel("", self._layer_description(axis), "", "100", "100")
+        try:
+            panel.apply_position_data(source.values(self.rounding_buttons.checkedId() != 0, self.rounding_buttons.checkedId() or 5), notify=False)
+            panel.section.setCurrentText(source.section.currentText())
+        except CalculationError:
+            pass
+        panel.changed.connect(self._schedule_recalculation)
+        self._layer_order.append(layer_id)
+        self._layer_axes[layer_id] = axis
+        self._layer_panels[layer_id] = panel
+        self._rebuild_layer_cards()
+        self._calculate_layer_stack()
+
+    def _remove_layer(self, layer_id: str) -> None:
+        if len(self._layer_order) <= 2:
+            return
+        MainWindow._begin_history_transaction(self)
+        self._layer_rebuild_timer.stop()
+        remaining = [identifier for identifier in self._layer_order if identifier != layer_id]
+        if not any(self._layer_axes[identifier] == "length" for identifier in remaining) or not any(
+            self._layer_axes[identifier] == "width" for identifier in remaining
+        ):
+            MainWindow._discard_history_transaction(self)
+            self.statusBar().showMessage("В поддоне должен остаться хотя бы один слой по каждой оси.")
+            return
+        panel = self._layer_panels.pop(layer_id)
+        if self._layer_card_manager is not None:
+            self._layer_card_manager.detach_panel(panel)
+        self._layer_axes.pop(layer_id)
+        self._layer_order = remaining
+        self.state.layer_sections = {
+            key: section for key, section in self.state.layer_sections.items() if key[0] != layer_id
+        }
+        self._rebuild_layer_cards()
+        self._calculate_layer_stack()
+
+    def _move_layer(self, layer_id: str, shift: int) -> None:
+        current = self._layer_order.index(layer_id)
+        target = current + shift
+        if not 0 <= target < len(self._layer_order):
+            return
+        MainWindow._begin_history_transaction(self)
+        self._layer_rebuild_timer.stop()
+        self._layer_order[current], self._layer_order[target] = self._layer_order[target], self._layer_order[current]
+        self._rebuild_layer_cards()
+        self._calculate_layer_stack()
+
+    def _read_layer_inputs(self) -> list[LayerInput]:
+        rounding_step = self.rounding_buttons.checkedId()
+        return [
+            LayerInput(layer_id, self._layer_axes[layer_id], self._layer_panels[layer_id].values(
+                rounding_step != 0, rounding_step or 5,
+            ))
+            for layer_id in self._layer_order
+        ]
+
+    @staticmethod
+    def _panel_for_layer(owner, layer_id: str) -> DirectionInputPanel:
+        """Resolve a layer editor and retain compatibility with the two-panel UI."""
+        panel = getattr(owner, "_layer_panels", {}).get(layer_id)
+        if panel is not None:
+            return panel
+        return owner.length_panel if layer_id == "length" else owner.width_panel
+
+    @staticmethod
+    def _apply_interactive_position_update(owner, panel: DirectionInputPanel, data) -> None:
+        """Synchronise form fields without queuing a second pallet rebuild."""
+        timer = getattr(owner, "_layer_rebuild_timer", None)
+        if timer is not None:
+            timer.stop()
+        try:
+            panel.apply_position_data(data, notify=False)
+        except TypeError:
+            # Lightweight non-Qt test doubles intentionally expose the old
+            # single-argument API.
+            panel.apply_position_data(data)
+
+    def _calculate_layer_stack(self, *, show_error: bool = False):
+        self._layer_rebuild_timer.stop()
+        try:
+            layers = self._read_layer_inputs()
+            layers = self._synchronize_layer_envelopes(layers)
+        except CalculationError as exc:
+            self._set_stale(True)
+            self._handle_calculation_error(exc, show_error)
+            return None
+        finally:
+            # A later recalculation caused by reordering, loading or a tool
+            # action must not reuse an old field-edit source.
+            self._layer_envelope_source = None
+        result = self.controller.calculate_layers(layers, show_error=show_error)
+        if result is not None:
+            MainWindow._commit_history_transaction(self)
+            self._restore_active_tool_after_rebuild()
+        return result
+
+    def _invalidate_pending_recalculations(self) -> int:
+        """Cancel every delayed rebuild route and return a fresh revision."""
+        self._recalculation_revision = getattr(self, "_recalculation_revision", 0) + 1
+        self._pending_layer_revision = None
+        self._pending_model_revision = None
+        for name in ("_layer_rebuild_timer", "_model_rebuild_timer"):
+            timer = getattr(self, name, None)
+            if timer is not None:
+                timer.stop()
+        controller = getattr(self, "controller", None)
+        if controller is not None:
+            invalidator = getattr(controller, "invalidate_scheduled_recalculation", None)
+            if callable(invalidator):
+                invalidator()
+            else:
+                stopper = getattr(controller, "stop_scheduled_recalculation", None)
+                if callable(stopper):
+                    stopper()
+        return self._recalculation_revision
+
+    def _run_layer_rebuild(self) -> None:
+        if self._pending_layer_revision != self._recalculation_revision:
+            return
+        self._pending_layer_revision = None
+        self._calculate_layer_stack()
+
+    def _run_model_rebuild(self) -> None:
+        if self._pending_model_revision != self._recalculation_revision:
+            return
+        self._pending_model_revision = None
+        self._build_selected_model_pallet()
+
+    def _synchronize_layer_envelopes(self, layers: list[LayerInput]) -> list[LayerInput]:
+        """Keep same-axis layers on the envelope changed in the editor.
+
+        Beam grids in parallel layers may differ, but their common pallet
+        dimension may not.  When a user edits one grid, retain every other
+        grid and adjust only its dependent end margin by the envelope delta.
+        """
+        source_id = self._layer_envelope_source
+        source = next((layer for layer in layers if layer.layer_id == source_id), None)
+        if source is None:
+            return layers
+        target_size = calculate_direction(source.direction).raw_pallet_size
+        synchronized: list[LayerInput] = []
+        for layer in layers:
+            if layer.axis != source.axis or layer.layer_id == source.layer_id:
+                synchronized.append(layer)
+                continue
+            current_size = calculate_direction(layer.direction).raw_pallet_size
+            direction = replace(layer.direction, margin_end=layer.direction.margin_end + target_size - current_size)
+            # Validate before applying it to the visible form; otherwise a
+            # failed edit could leave the UI and project state out of sync.
+            calculate_direction(direction)
+            panel = self._layer_panels.get(layer.layer_id)
+            if panel is not None:
+                MainWindow._apply_interactive_position_update(self, panel, direction)
+            synchronized.append(LayerInput(layer.layer_id, layer.axis, direction))
+        return synchronized
+
+    def _restore_active_tool_after_rebuild(self) -> None:
+        """Re-register viewport affordances cleared with the old pallet actors."""
+        if self.add_beam_button.isChecked():
+            self._toggle_insertion_mode(True)
+        elif self.delete_beam_button.isChecked():
+            self._toggle_deletion_mode(True)
+        elif self.edit_distance_button.isChecked():
+            self._toggle_distance_editing(True)
+        elif self.change_section_button.isChecked():
+            self._toggle_section_editing(True)
+
+    @staticmethod
+    def _begin_history_transaction(owner) -> bool:
+        """Remember the state before one user-confirmed edit."""
+        if not hasattr(owner, "_history") or getattr(owner, "_history_restoring", False):
+            return False
+        if getattr(owner, "_pending_history_snapshot", None) is not None:
+            return False
+        owner._pending_history_snapshot = owner._history.snapshot(owner.state)
+        return True
+
+    @staticmethod
+    def _begin_discrete_history_transaction(owner) -> bool:
+        """Start a tool action at its own Undo boundary.
+
+        Form changes are debounced.  If a user clicks an edit tool while one
+        is pending, the old snapshot must not absorb the next explicit action.
+        """
+        MainWindow._commit_history_transaction(owner)
+        return MainWindow._begin_history_transaction(owner)
+
+    @staticmethod
+    def _commit_history_transaction(owner) -> None:
+        if not hasattr(owner, "_history") or getattr(owner, "_history_restoring", False):
+            return
+        snapshot = getattr(owner, "_pending_history_snapshot", None)
+        if snapshot is None:
+            return
+        owner._history.record(snapshot)
+        owner._pending_history_snapshot = None
+
+    @staticmethod
+    def _discard_history_transaction(owner) -> None:
+        if hasattr(owner, "_pending_history_snapshot"):
+            owner._pending_history_snapshot = None
+
+    def undo(self) -> None:
+        self._restore_history(self._history.undo, "Отменено последнее изменение.")
+
+    def redo(self) -> None:
+        self._restore_history(self._history.redo, "Повторено отменённое изменение.")
+
+    def _restore_history(self, operation, message: str) -> None:
+        """Restore an edit snapshot and rebuild the palette from its data."""
+        self._invalidate_pending_recalculations()
+        MainWindow._discard_history_transaction(self)
+        if not operation(self.state):
+            self.statusBar().showMessage("Нет изменений для отмены." if message.startswith("Отмен") else "Нет изменений для повтора.")
+            return
+        self._history_restoring = True
+        try:
+            for button in (self.add_beam_button, self.delete_beam_button, self.edit_distance_button, self.change_section_button):
+                button.setChecked(False)
+            self.controller.deactivate_tool()
+            self.controller.cancel_insertion()
+            self.controller.cancel_distance_edit()
+            self._clear_model_supports()
+            self._set_model_controls_visible(False)
+            self.length_panel.set_model_driven_mode(None)
+            self.width_panel.set_model_driven_mode(None)
+            self._apply_loaded_project(self.state)
+            result = self.controller.recalculate_from_state(show_error=False)
+        finally:
+            self._history_restoring = False
+        if result is None:
+            self.statusBar().showMessage("Не удалось восстановить состояние поддона.")
+            return
+        self.statusBar().showMessage(message)
+
+    def _sync_layer_mode(self) -> None:
+        multilayer = len(self._layer_order) > 2
+        self.layer_card.setVisible(not multilayer)
+
     def build_from_model(self) -> None:
         """Start the STEP-driven workflow and ask for one horizontal support face."""
         path, _ = QFileDialog.getOpenFileName(
@@ -506,11 +992,14 @@ class MainWindow(QMainWindow):
         self.add_beam_button.setChecked(False)
         self.delete_beam_button.setChecked(False)
         self.edit_distance_button.setChecked(False)
+        self.change_section_button.setChecked(False)
         self._model_rebuild_timer.stop()
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
         self._clear_model_supports()
         self._imported_step_model = None
+        self._set_model_controls_visible(False)
+        self._clear_pallet_edits_for_model()
         self.state.result = None
         self.view.clear_workspace()
         self.scene_info.setText("Загрузка 3D-модели…")
@@ -518,18 +1007,19 @@ class MainWindow(QMainWindow):
         self.build_from_model_button.setEnabled(False)
         self.rebuild_from_model_button.setEnabled(False)
         self.centralWidget().setEnabled(False)
-        self._step_import_progress = QProgressDialog("Подготовка загрузки…", None, 0, 100, self)
+        self._step_import_progress = QProgressDialog("Подготовка загрузки…", "Отмена", 0, 100, self)
         self._step_import_progress.setWindowTitle("Загрузка 3D-модели")
         self._step_import_progress.setWindowModality(Qt.ApplicationModal)
         self._step_import_progress.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self._step_import_progress.setCancelButton(None)
         self._step_import_progress.setAutoClose(False)
         self._step_import_progress.setMinimumDuration(0)
+        self._step_import_progress.canceled.connect(self._cancel_step_import)
         self._step_import_progress.show()
         process = QProcess(self)
         process.setProcessChannelMode(QProcess.SeparateChannels)
         process.readyReadStandardOutput.connect(self._read_step_import_output)
         process.finished.connect(self._step_import_process_finished)
+        process.errorOccurred.connect(self._step_import_process_error)
         environment = QProcessEnvironment.systemEnvironment()
         if not getattr(sys, "frozen", False):
             source_root = str(Path(__file__).resolve().parents[2])
@@ -539,6 +1029,8 @@ class MainWindow(QMainWindow):
         self._step_import_path = path
         self._step_import_output = ""
         self._step_import_error = None
+        self._step_import_done = False
+        self._step_import_cancelled = False
         self.statusBar().showMessage("Загрузка STEP-модели…")
         arguments = ["--step-import", path] if getattr(sys, "frozen", False) else ["-m", "palletlab.importers.step_import_worker", path]
         process.start(sys.executable, arguments)
@@ -548,6 +1040,35 @@ class MainWindow(QMainWindow):
             self._step_import_progress.setValue(value)
             self._step_import_progress.setLabelText(label)
 
+    def _cancel_step_import(self) -> None:
+        """Request cancellation without leaving a modal dialog or child behind."""
+        process = self._step_import_process
+        if process is None or process.state() == QProcess.NotRunning:
+            return
+        self._step_import_cancelled = True
+        self._step_import_error = "Загрузка 3D-модели отменена пользователем."
+        self._update_step_import_progress(0, "Отменяем загрузку 3D-модели…")
+        process.terminate()
+        QTimer.singleShot(1500, self._kill_step_import_if_needed)
+
+    def _kill_step_import_if_needed(self) -> None:
+        process = self._step_import_process
+        if process is not None and process.state() != QProcess.NotRunning:
+            process.kill()
+
+    def closeEvent(self, event) -> None:
+        """Do not leave the worker running after the application window closes."""
+        self._cancel_step_import()
+        super().closeEvent(event)
+
+    def _step_import_process_error(self, _error) -> None:
+        """Finish failed-to-start imports even when QProcess emits no finished signal."""
+        process = self._step_import_process
+        if process is None or process.state() != QProcess.NotRunning:
+            return
+        self._step_import_error = process.errorString() or "Не удалось запустить импорт STEP-модели."
+        self._step_import_process_finished(-1, None)
+
     def _step_import_loaded(self, model: ImportedStepModel) -> None:
         self._imported_step_model = model
         # A STEP import always uses support coordinates derived from the model;
@@ -555,6 +1076,7 @@ class MainWindow(QMainWindow):
         # first support face, not only after the pallet has been built.
         self.length_panel.set_model_driven_mode(None, hide_model_offsets=True)
         self.width_panel.set_model_driven_mode(None, hide_model_offsets=True)
+        self._set_model_controls_visible(True)
         self.rebuild_from_model_button.setEnabled(True)
         self.toggle_model_button.setEnabled(True)
         self.toggle_model_button.setText("Скрыть 3D модель")
@@ -578,9 +1100,11 @@ class MainWindow(QMainWindow):
         self.add_beam_button.setChecked(False)
         self.delete_beam_button.setChecked(False)
         self.edit_distance_button.setChecked(False)
+        self.change_section_button.setChecked(False)
         self._model_rebuild_timer.stop()
         self.controller.deactivate_tool()
         self.state.result = None
+        self._clear_pallet_edits_for_model()
         self._clear_model_supports()
         self.view.prepare_step_model_rebuild(self._support_face_selected)
         self.toggle_model_button.setEnabled(True)
@@ -592,6 +1116,7 @@ class MainWindow(QMainWindow):
     def _step_import_failed(self, message: str) -> None:
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
+        self._set_model_controls_visible(False)
         QMessageBox.warning(self, "Загрузка 3D-модели", message)
         self.scene_info.setText("3D-модель не загружена.")
         self.statusBar().showMessage("Не удалось загрузить 3D-модель.")
@@ -600,25 +1125,27 @@ class MainWindow(QMainWindow):
         process = self._step_import_process
         if process is None:
             return
-        self._step_import_output += bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
-        lines = self._step_import_output.split("\n")
-        self._step_import_output = lines.pop()
-        for line in lines:
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if message.get("kind") == "progress":
+        chunk = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        messages, self._step_import_output = consume_messages(self._step_import_output, chunk)
+        for message in messages:
+            if message["kind"] == "progress":
                 self._update_step_import_progress(int(message["value"]), str(message["label"]))
-            elif message.get("kind") == "error":
-                self._step_import_error = str(message.get("message", "Неизвестная ошибка импорта."))
+            elif message["kind"] == "error":
+                self._step_import_error = str(message["message"])
+            elif message["kind"] == "done":
+                self._step_import_done = True
 
     def _step_import_process_finished(self, exit_code: int, exit_status) -> None:
         process = self._step_import_process
+        if process is None:
+            return
         show_selection_prompt = False
-        if process is not None:
-            self._read_step_import_output()
-        if exit_code == 0 and self._step_import_error is None and self._step_import_path is not None:
+        self._read_step_import_output()
+        if self._step_import_cancelled:
+            self.scene_info.setText("Загрузка 3D-модели отменена.")
+            self.statusBar().showMessage("Загрузка STEP-модели отменена.")
+        elif (exit_code == 0 and self._step_import_done and self._step_import_error is None
+              and self._step_import_path is not None):
             try:
                 from palletlab.importers.step_model import load_cached_step_model
                 model = load_cached_step_model(self._step_import_path)
@@ -630,9 +1157,9 @@ class MainWindow(QMainWindow):
                 self._step_import_failed(str(exc))
         else:
             detail = self._step_import_error
-            if not detail and process is not None:
+            if not detail:
                 detail = bytes(process.readAllStandardError()).decode("utf-8", errors="replace").strip()
-            self._step_import_failed(detail or "Процесс загрузки STEP-модели завершился с ошибкой.")
+            self._step_import_failed(detail or "Импорт STEP-модели завершился без корректного сообщения о готовности.")
         self._step_import_finished()
         if show_selection_prompt:
             self._show_support_selection_prompt()
@@ -648,6 +1175,8 @@ class MainWindow(QMainWindow):
             self._step_import_process.deleteLater()
         self._step_import_process = None
         self._step_import_path = None
+        self._step_import_output = ""
+        self._step_import_done = False
 
     def _support_face_selected(self, face_index: int) -> None:
         model = self._imported_step_model
@@ -667,6 +1196,7 @@ class MainWindow(QMainWindow):
 
     def _build_selected_model_pallet(self) -> None:
         """Recalculate a STEP-driven pallet from the detected support faces."""
+        self._invalidate_pending_recalculations()
         model = self._imported_step_model
         if model is None or not self._model_supports or self._model_reference_support_index is None:
             return
@@ -676,10 +1206,10 @@ class MainWindow(QMainWindow):
             length_input, width_input, placed_mesh, placed_edges = pallet_inputs_from_supports(
                 model,
                 self._model_supports,
-                length_beam_height=self.length_panel.height.value(),
-                length_beam_width=self.length_panel.width.value(),
-                width_beam_height=self.width_panel.height.value(),
-                width_beam_width=self.width_panel.width.value(),
+                length_beam_height=MODEL_STANDARD_SECTION.height,
+                length_beam_width=MODEL_STANDARD_SECTION.width,
+                width_beam_height=MODEL_STANDARD_SECTION.height,
+                width_beam_width=MODEL_STANDARD_SECTION.width,
                 length_margin_start=self.length_panel.margin_start.value(),
                 length_margin_end=self.length_panel.margin_end.value(),
                 width_margin_start=self.width_panel.margin_start.value(),
@@ -687,13 +1217,25 @@ class MainWindow(QMainWindow):
                 round_pallet_size=rounding_step != 0,
                 rounding_step=rounding_step or 5,
                 reference_support_index=self._model_reference_support_index,
+                pallet_height=MODEL_PALLET_HEIGHT,
             )
         except ValueError as exc:
             QMessageBox.information(self, "Построение по модели", str(exc))
             self.statusBar().showMessage("Выберите корректные грани габарита и опоры.")
             return
         self.view.stage_step_model(placed_mesh, placed_edges)
-        result = self.controller.calculate(length_input, width_input, self.upper_layer())
+        try:
+            layers, top_edge_sections = _model_pallet_layers(length_input, width_input)
+        except CalculationError as exc:
+            QMessageBox.information(self, "Построение по модели", str(exc))
+            self.statusBar().showMessage("Не удалось построить трёхслойный поддон по модели.")
+            return
+        self.state.layer_sections.clear()
+        self.state.layer_sections.update(top_edge_sections)
+        self._layer_order = [layer.layer_id for layer in layers]
+        self._layer_axes = {layer.layer_id: layer.axis for layer in layers}
+        self._rebuild_layer_cards()
+        result = self.controller.calculate_layers(layers)
         if result is None:
             # Keep the staged STEP actor and its picking callback alive: a
             # non-support face can legitimately produce overlapping beams.
@@ -705,6 +1247,7 @@ class MainWindow(QMainWindow):
         # model-only form rows.
         self.length_panel.apply_position_data(length_input, notify=False)
         self.width_panel.apply_position_data(width_input, notify=False)
+        self.top_length_panel.apply_position_data(layers[-1].direction, notify=False)
         self.length_panel.set_model_driven_mode(length_input)
         self.width_panel.set_model_driven_mode(width_input)
         # ``apply_position_data`` intentionally notifies regular manual
@@ -723,9 +1266,26 @@ class MainWindow(QMainWindow):
         self._model_supports = ()
         self._model_reference_support_index = None
 
+    def _clear_pallet_edits_for_model(self) -> None:
+        """Discard edits whose supports belong to the previous pallet geometry."""
+        self.state.beam_sections.clear()
+        self.state.layer_sections.clear()
+        self.state.manual_beams.clear()
+        self.controller.clear_deletion_selection()
+        self.controller.clear_section_selection()
+
     def _toggle_model_visibility(self) -> None:
         visible = self.view.toggle_step_model_visibility()
         self.toggle_model_button.setText("Скрыть 3D модель" if visible else "Показать 3D модель")
+
+    def _set_model_controls_visible(self, visible: bool) -> None:
+        """Keep model-only controls out of the manual pallet workflow."""
+        self.rebuild_from_model_button.setVisible(visible)
+        self.toggle_model_button.setVisible(visible)
+        if not visible:
+            self.rebuild_from_model_button.setEnabled(False)
+            self.toggle_model_button.setEnabled(False)
+            self.toggle_model_button.setText("Скрыть 3D модель")
 
     def export_to_solidworks(self) -> None:
         """Rebuild the visible pallet and export its exact current geometry."""
@@ -847,7 +1407,7 @@ class MainWindow(QMainWindow):
         return selected[0], selected[1]
 
     def save_project(self) -> None:
-        """Save the current editable pallet state; no automatic save is used."""
+        """Save the current editable pallet state and reset recovery snapshots."""
         if self.calculate(show_error=True) is None:
             return
         path = self._project_path
@@ -866,7 +1426,24 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Сохранение проекта", "Не удалось сохранить файл проекта.")
             return
         self._project_path = path
+        try:
+            self._autosaves.clear()
+        except OSError:
+            pass
+        self._autosaves.set_project(path)
+        MainWindow._autosave_project(self)
         self.statusBar().showMessage(f"Проект сохранён: {path}")
+
+    def _autosave_project(self) -> None:
+        """Periodically preserve a valid editable state without interrupting work."""
+        if self.state.result is None:
+            return
+        try:
+            self._autosaves.save(self.state)
+        except (OSError, ProjectPersistenceError):
+            # A recovery snapshot must never block editing or show a modal
+            # dialog every minute when a local disk is temporarily unavailable.
+            return
 
     def open_project(self) -> None:
         """Open a manually selected project file and rebuild the viewport."""
@@ -878,10 +1455,18 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        self._invalidate_pending_recalculations()
         if self.controller.open_project(path) is None:
             QMessageBox.warning(self, "Открытие проекта", "Не удалось открыть файл проекта.")
             return
+        self._imported_step_model = None
+        self._clear_model_supports()
+        self.view.clear_step_model()
+        self._set_model_controls_visible(False)
         self._project_path = path
+        self._autosaves.set_project(path)
+        self._history.clear()
+        MainWindow._discard_history_transaction(self)
         self.statusBar().showMessage(f"Проект открыт: {path}")
 
     def export_to_kompas(self) -> None:
@@ -910,9 +1495,22 @@ class MainWindow(QMainWindow):
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""
-        if getattr(self, "_imported_step_model", None) is not None and getattr(self, "_model_supports", ()):
-            self.controller.stop_scheduled_recalculation()
+        MainWindow._begin_history_transaction(self)
+        sender_method = getattr(self, "sender", None)
+        sender = sender_method() if callable(sender_method) else None
+        for layer_id, panel in getattr(self, "_layer_panels", {}).items():
+            if sender is panel:
+                self._layer_envelope_source = layer_id
+                break
+        revision = MainWindow._invalidate_pending_recalculations(self)
+        if len(getattr(self, "_layer_order", ())) > 2:
             self._set_stale(True)
+            self._pending_layer_revision = revision
+            self._layer_rebuild_timer.start()
+            return
+        if getattr(self, "_imported_step_model", None) is not None and getattr(self, "_model_supports", ()):
+            self._set_stale(True)
+            self._pending_model_revision = revision
             self._model_rebuild_timer.start()
             return
         self.controller.schedule_recalculation()
@@ -923,18 +1521,22 @@ class MainWindow(QMainWindow):
             return
         self._model_rebuild_timer.stop()
         self._clear_model_supports()
+        self._set_model_controls_visible(False)
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
 
     def _layer_changed(self, *_args) -> None:
+        MainWindow._begin_history_transaction(self)
         self.controller.set_upper_layer(self.upper_layer())
         self._schedule_recalculation()
 
     def _rounding_changed(self, *_args) -> None:
+        MainWindow._begin_history_transaction(self)
         self.controller.set_rounding_step(self.rounding_buttons.checkedId())
         self._schedule_recalculation()
 
     def _set_camera(self, index: int) -> None:
+        started_history = MainWindow._begin_history_transaction(self)
         handlers = {
             "isometric": self.view.camera_isometric,
             "top": self.view.camera_top,
@@ -944,6 +1546,17 @@ class MainWindow(QMainWindow):
         camera = self.camera_combo.itemData(index)
         self.state.camera = camera
         handlers[camera]()
+        if started_history:
+            MainWindow._commit_history_transaction(self)
+
+    def _dimension_visibility_changed(self) -> None:
+        """Keep dimension visibility in the project state as well as the view."""
+        started_history = MainWindow._begin_history_transaction(self)
+        self.state.show_length_dimensions = self.show_length_gaps.isChecked()
+        self.state.show_width_dimensions = self.show_width_gaps.isChecked()
+        self._refresh_dimension_annotations()
+        if started_history:
+            MainWindow._commit_history_transaction(self)
 
     def _refresh_dimension_annotations(self) -> None:
         self.controller.refresh_dimension_annotations(
@@ -951,41 +1564,137 @@ class MainWindow(QMainWindow):
             show_width=self.show_width_gaps.isChecked(),
         )
 
-    def _toggle_insertion_mode(self, enabled: bool) -> None:
-        if not enabled:
-            self.controller.deactivate_tool()
+    def _tool_buttons(self) -> dict[ToolMode, QPushButton]:
+        return {
+            "insertion": self.add_beam_button,
+            "deletion": self.delete_beam_button,
+            "distance_editing": self.edit_distance_button,
+            "section_editing": self.change_section_button,
+        }
+
+    def _release_tool_capture(self, tool: ToolMode) -> None:
+        """Release every preview and selection owned by a tool being left."""
+        self.controller.deactivate_tool()
+        if tool == "insertion":
             self._cancel_pending_insertion()
             self.view.disable_insertion_mode()
-            return
-        if self.delete_beam_button.isChecked():
-            self.delete_beam_button.setChecked(False)
-        if self.edit_distance_button.isChecked():
-            self.edit_distance_button.setChecked(False)
-        if self._last_result is None:
-            self.add_beam_button.setChecked(False)
-            return
-        slots = insertion_slots(self._last_result, "length") + insertion_slots(self._last_result, "width")
-        if not slots:
-            self.statusBar().showMessage("Нет промежутков, в которые помещается ещё один брус.")
-            self.add_beam_button.setChecked(False)
-            return
-        self.controller.enable_insertion_mode(slots, self._start_insertion)
-        self.controller.activate_tool("insertion")
-        self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
-
-    def _toggle_deletion_mode(self, enabled: bool) -> None:
-        if not enabled:
-            self.controller.deactivate_tool()
+            self.view.disable_support_face_selection()
+        elif tool == "deletion":
             self.controller.clear_deletion_selection()
             self.deletion_editor.setVisible(False)
             self.view.disable_deletion_mode()
+        elif tool == "distance_editing":
+            self._cancel_pending_distance_edit()
+            self.view.disable_distance_editing()
+        elif tool == "section_editing":
+            self.controller.clear_section_selection()
+            self.section_editor.setVisible(False)
+            self.view.disable_section_editing()
+
+    def _transition_tool_mode(self, tool: ToolMode, enabled: bool) -> bool:
+        """Apply a single tool transition without re-entrant toggle signals."""
+        previous, active = self._tool_state.transition(tool, enabled)
+        if previous != active and previous != "none":
+            self._release_tool_capture(previous)
+        blockers = [QSignalBlocker(button) for button in self._tool_buttons().values()]
+        for mode, button in self._tool_buttons().items():
+            button.setChecked(mode == active)
+        del blockers
+        return active == tool
+
+    def _toggle_insertion_mode(self, enabled: bool) -> None:
+        if not self._transition_tool_mode("insertion", enabled):
             return
-        if self.add_beam_button.isChecked():
-            self.add_beam_button.setChecked(False)
-        if self.edit_distance_button.isChecked():
-            self.edit_distance_button.setChecked(False)
         if self._last_result is None:
-            self.delete_beam_button.setChecked(False)
+            self._transition_tool_mode("insertion", False)
+            return
+        self._manual_supports.clear()
+        self.view.enable_support_face_selection(self._manual_support_selected)
+        self.controller.activate_tool("insertion")
+        self.statusBar().showMessage("Выберите верхние или нижние грани двух параллельных брусьев.")
+
+    def _manual_support_selected(self, layer_id: str, index: int, face: str) -> None:
+        key = (layer_id, index, face)
+        if key in self._manual_supports:
+            return
+        self._manual_supports.append(key)
+        if len(self._manual_supports) == 1:
+            self.statusBar().showMessage("Выберите такую же (верхнюю или нижнюю) грань второй параллельной опоры.")
+            return
+        first, second = self._manual_supports
+        beams = {(beam.layer_id, beam.layer_index): beam for beam in self._last_result.beams_3d}
+        first_key, second_key = first[:2], second[:2]
+        if (first_key not in beams or second_key not in beams or first[2] != second[2]
+                or beams[first_key].orientation != beams[second_key].orientation):
+            self._manual_supports.clear()
+            self.statusBar().showMessage("Выберите одинаковые верхние или нижние грани двух параллельных брусьев.")
+            return
+        self.view.disable_support_face_selection()
+        self._open_manual_beam_dialog(first, second)
+
+    def _open_manual_beam_dialog(
+        self, first: tuple[str, int, str], second: tuple[str, int, str],
+        reference: tuple[str, int, str] | None = None, dialog: ManualBeamDialog | None = None,
+    ) -> None:
+        dialog = dialog or ManualBeamDialog(self)
+        if reference is not None:
+            dialog.pick_reference.setText(f"Грань выбрана: {reference[0]} · брус {reference[1] + 1}")
+        answer = dialog.exec_()
+        if answer == 2:
+            self.statusBar().showMessage("Выберите грань объекта для точки отсчёта.")
+            self._manual_reference_request = (first, second, dialog)
+            self.view.enable_beam_face_selection(self._manual_reference_selected_from_view)
+            return
+        if answer == QDialog.Accepted:
+            selected_reference = reference[:2] if reference is not None and dialog.reference.currentData() else None
+            MainWindow._begin_discrete_history_transaction(self)
+            result = self.controller.add_manual_beam(
+                first[:2], second[:2], dialog.distance.value(), dialog.section(),
+                reference_support=selected_reference,
+                reference_face=reference[2] if selected_reference is not None else None,
+                first_face=first[2], second_face=second[2],
+            )
+            if result is not None:
+                MainWindow._commit_history_transaction(self)
+                self.statusBar().showMessage("Брус добавлен. Выберите две следующие опоры.")
+            else:
+                MainWindow._discard_history_transaction(self)
+        self._manual_supports.clear()
+        self._manual_reference_request = None
+        if self.add_beam_button.isChecked():
+            self.view.enable_support_face_selection(self._manual_support_selected)
+
+    def _manual_reference_selected_from_view(self, layer_id: str, index: int, face: str) -> None:
+        request = self._manual_reference_request
+        self._manual_reference_request = None
+        if request is None:
+            return
+        first, second, dialog = request
+        self._manual_reference_selected(first, second, (layer_id, index, face), dialog)
+
+    def _manual_reference_selected(
+        self, first: tuple[str, int, str], second: tuple[str, int, str], reference: tuple[str, int, str], dialog: ManualBeamDialog,
+    ) -> None:
+        beams = {(beam.layer_id, beam.layer_index): beam for beam in self._last_result.beams_3d}
+        support = beams.get(first[:2])
+        if support is None:
+            self._manual_supports.clear()
+            return
+        required_faces = ("x_min", "x_max") if support.orientation == "length" else ("y_min", "y_max")
+        if reference[2] not in required_faces:
+            axis = "X" if support.orientation == "length" else "Y"
+            self.statusBar().showMessage(f"Выберите боковую грань, перпендикулярную оси {axis}.")
+            self._manual_reference_request = (first, second, dialog)
+            self.view.enable_beam_face_selection(self._manual_reference_selected_from_view)
+            return
+        self.view.disable_support_face_selection()
+        self._open_manual_beam_dialog(first, second, reference, dialog)
+
+    def _toggle_deletion_mode(self, enabled: bool) -> None:
+        if not self._transition_tool_mode("deletion", enabled):
+            return
+        if self._last_result is None:
+            self._transition_tool_mode("deletion", False)
             return
         self.controller.clear_deletion_selection()
         self.deletion_editor.setVisible(True)
@@ -995,24 +1704,30 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Нажмите на внутренние брусья для выбора. Крайние брусья удалить нельзя.")
 
     def _toggle_distance_editing(self, enabled: bool) -> None:
-        if not enabled:
-            self.controller.deactivate_tool()
-            self._cancel_pending_distance_edit()
-            self.view.disable_distance_editing()
+        if not self._transition_tool_mode("distance_editing", enabled):
             return
-        if self.add_beam_button.isChecked():
-            self.add_beam_button.setChecked(False)
-        if self.delete_beam_button.isChecked():
-            self.delete_beam_button.setChecked(False)
         if self._last_result is None:
-            self.edit_distance_button.setChecked(False)
+            self._transition_tool_mode("distance_editing", False)
             return
         self.controller.enable_distance_editing(self._start_distance_edit)
         self.controller.activate_tool("distance_editing")
         self.statusBar().showMessage("Наведите курсор на размерную линию и нажмите: внутренний брус или общий габарит.")
 
-    def _start_distance_edit(self, axis: PalletAxis, beam_index: int, value: float) -> None:
-        self.controller.begin_distance_edit(axis, beam_index)
+    def _toggle_section_editing(self, enabled: bool) -> None:
+        if not self._transition_tool_mode("section_editing", enabled):
+            return
+        if self._last_result is None:
+            self._transition_tool_mode("section_editing", False)
+            return
+        self.controller.clear_section_selection()
+        self.section_editor.setVisible(True)
+        self._update_section_editor()
+        self.view.enable_section_editing(self._section_selection_changed)
+        self.controller.activate_tool("section_editing")
+        self.statusBar().showMessage("Выберите один или несколько брусьев, затем нажмите «Изменить…».")
+
+    def _start_distance_edit(self, layer_id: str, beam_index: int, value: float) -> None:
+        self.controller.begin_distance_edit(layer_id, beam_index)
         self.distance_value.blockSignals(True)
         self.distance_value.setValue(value)
         self.distance_value.blockSignals(False)
@@ -1028,24 +1743,61 @@ class MainWindow(QMainWindow):
         self.edit_distance_button.setFocus()
 
     def _confirm_distance_edit(self) -> None:
+        MainWindow._begin_discrete_history_transaction(self)
         update = self.controller.confirm_distance_edit(self.distance_value.value())
         if update is None:
+            MainWindow._discard_history_transaction(self)
             return
-        axis, updated_input = update
-        panel = self.length_panel if axis == "length" else self.width_panel
-        MainWindow._switch_model_pallet_to_manual_editing(self)
-        panel.apply_position_data(updated_input)
+        layer_id, updated_input = update
+        if updated_input is not None:
+            panel = MainWindow._panel_for_layer(self, layer_id)
+            MainWindow._switch_model_pallet_to_manual_editing(self)
+            MainWindow._apply_interactive_position_update(self, panel, updated_input)
         self.distance_editor.setVisible(False)
         result = self.controller.recalculate_from_state()
+        if result is not None:
+            MainWindow._commit_history_transaction(self)
+        else:
+            MainWindow._discard_history_transaction(self)
         # Rebuilding the viewport removes the old pickable dimension actors.
         # Keep the checked tool immediately usable by registering the new ones.
         if result is not None and self.edit_distance_button.isChecked():
             self._toggle_distance_editing(True)
         self.statusBar().showMessage("Расстояние обновлено. Выберите следующую размерную линию.")
 
-    def _selection_changed(self, axis: PalletAxis, index: int, selected: bool) -> None:
-        self.controller.set_deletion_selection(axis, index, selected)
+    def _selection_changed(self, layer_id: str, index: int, selected: bool) -> bool:
+        accepted = self.controller.set_deletion_selection(layer_id, index, selected)
         self._update_deletion_editor()
+        return accepted
+
+    def _section_selection_changed(self, layer_id: str, index: int, selected: bool) -> None:
+        self.controller.set_section_selection(layer_id, index, selected)
+        self._update_section_editor()
+
+    def _update_section_editor(self) -> None:
+        count = sum(len(indices) for indices in self._selected_for_section.values())
+        self.section_hint.setText(
+            "Выделено: " + (f"{count}. Сечение будет заменено." if count else "0. Выберите брусья в модели.")
+        )
+        self.confirm_section_button.setEnabled(count > 0)
+
+    def _confirm_section_change(self) -> None:
+        if not any(self._selected_for_section.values()):
+            return
+        dialog = BeamSectionDialog(self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        changed = sum(len(indices) for indices in self._selected_for_section.values())
+        MainWindow._begin_discrete_history_transaction(self)
+        MainWindow._switch_model_pallet_to_manual_editing(self)
+        result = self.controller.apply_section_change(dialog.section())
+        if result is not None:
+            MainWindow._commit_history_transaction(self)
+        else:
+            MainWindow._discard_history_transaction(self)
+        if result is not None and self.change_section_button.isChecked():
+            self._toggle_section_editing(True)
+            self.statusBar().showMessage(f"Сечение изменено у брусьев: {changed}.")
 
     def _update_deletion_editor(self) -> None:
         count = sum(len(indices) for indices in self._selected_for_deletion.values())
@@ -1054,15 +1806,25 @@ class MainWindow(QMainWindow):
         self.confirm_deletion_button.setEnabled(count > 0)
 
     def _confirm_deletion(self) -> None:
+        deleted = sum(len(indices) for indices in self._selected_for_deletion.values())
+        # Deletion owns its complete Undo record.  It must not share the
+        # deferred form-edit snapshot that may still be waiting to recalc.
+        history = getattr(self, "_history", None)
+        before = history.snapshot(self.state) if history is not None else None
+        MainWindow._discard_history_transaction(self)
         updated_inputs = self.controller.confirm_deletion()
         if updated_inputs is None:
             return
-        deleted = sum(len(indices) for indices in self._selected_for_deletion.values())
         MainWindow._switch_model_pallet_to_manual_editing(self)
-        for axis, updated_input in updated_inputs.items():
-            panel = self.length_panel if axis == "length" else self.width_panel
-            panel.apply_position_data(updated_input)
+        timer = getattr(self, "_layer_rebuild_timer", None)
+        if timer is not None:
+            timer.stop()
+        for layer_id, updated_input in updated_inputs.items():
+            panel = MainWindow._panel_for_layer(self, layer_id)
+            MainWindow._apply_interactive_position_update(self, panel, updated_input)
         result = self.controller.recalculate_from_state()
+        if result is not None and before is not None:
+            history.record(before)
         # ``show_pallet`` recreates all beam actors, so restore deletion
         # picking without forcing the user to toggle the tool off and on.
         if result is not None and self.delete_beam_button.isChecked():
@@ -1086,21 +1848,28 @@ class MainWindow(QMainWindow):
 
     def _cancel_pending_insertion(self) -> None:
         self.controller.cancel_insertion()
+        self._manual_reference_request = None
         self.insertion_editor.setVisible(False)
         if self.add_beam_button.isChecked():
             self.statusBar().showMessage("Выберите + в нужном промежутке. Esc или повторное нажатие завершает режим.")
         self.add_beam_button.setFocus()
 
     def _confirm_insertion(self) -> None:
+        MainWindow._begin_discrete_history_transaction(self)
         update = self.controller.confirm_insertion(self.insertion_gap.value())
         if update is None:
+            MainWindow._discard_history_transaction(self)
             return
-        axis, updated_input = update
-        panel = self.length_panel if axis == "length" else self.width_panel
+        layer_id, updated_input = update
+        panel = MainWindow._panel_for_layer(self, layer_id)
         MainWindow._switch_model_pallet_to_manual_editing(self)
-        panel.apply_position_data(updated_input)
+        MainWindow._apply_interactive_position_update(self, panel, updated_input)
         self.insertion_editor.setVisible(False)
         result = self.controller.recalculate_from_state()
+        if result is not None:
+            MainWindow._commit_history_transaction(self)
+        else:
+            MainWindow._discard_history_transaction(self)
         # The viewport rebuild removes insertion markers together with the old
         # beams. Re-register the markers while the tool remains checked.
         if result is not None and self.add_beam_button.isChecked():
@@ -1112,22 +1881,38 @@ class MainWindow(QMainWindow):
             self._confirm_deletion()
             event.accept()
             return
+        if (event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.change_section_button.isChecked()
+                and any(self._selected_for_section.values())):
+            self._confirm_section_change()
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape and (self.add_beam_button.isChecked() or self.delete_beam_button.isChecked()
-                                               or self.edit_distance_button.isChecked()):
+                                               or self.edit_distance_button.isChecked() or self.change_section_button.isChecked()):
             if self.add_beam_button.isChecked():
                 self.add_beam_button.setChecked(False)
             elif self.delete_beam_button.isChecked():
                 self.delete_beam_button.setChecked(False)
-            else:
+            elif self.edit_distance_button.isChecked():
                 self.edit_distance_button.setChecked(False)
+            else:
+                self.change_section_button.setChecked(False)
             event.accept()
             return
         super().keyPressEvent(event)
 
     def eventFilter(self, watched, event) -> bool:
         if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and self._pending_insertion is not None
+                and watched in (self.insertion_gap, self.insertion_gap.lineEdit())):
+            self._confirm_insertion()
+            return True
+        if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
                 and self.delete_beam_button.isChecked() and any(self._selected_for_deletion.values())):
             self._confirm_deletion()
+            return True
+        if (event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+                and self.change_section_button.isChecked() and any(self._selected_for_section.values())):
+            self._confirm_section_change()
             return True
         if (event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape
                 and self.add_beam_button.isChecked() and self._pending_insertion is None):
@@ -1138,6 +1923,9 @@ class MainWindow(QMainWindow):
             return True
         if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape and self.edit_distance_button.isChecked():
             self.edit_distance_button.setChecked(False)
+            return True
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape and self.change_section_button.isChecked():
+            self.change_section_button.setChecked(False)
             return True
         return super().eventFilter(watched, event)
 
@@ -1151,8 +1939,25 @@ class MainWindow(QMainWindow):
             f"|    Материал: {material.name} · масса {pallet_mass_kg(result.beams_3d, material.id):.1f} кг"
         )
 
+    def _calculation_succeeded(self, result) -> None:
+        """Apply one completed calculation and close its history transaction.
+
+        Form edits are debounced, so their successful calculation happens
+        outside the original signal handler.  Committing here prevents that
+        pending snapshot from accidentally absorbing a later delete, section
+        change or manual beam operation into the same Ctrl+Z step.
+        """
+        self._update_scene_info(result)
+        MainWindow._commit_history_transaction(self)
+
     def _material_changed(self, _index: int) -> None:
-        self.state.material_id = self.material_combo.currentData()
+        material_id = self.material_combo.currentData()
+        if material_id == self.state.material_id:
+            return
+        MainWindow._begin_history_transaction(self)
+        self.state.material_id = material_id
+        MainWindow._commit_history_transaction(self)
+        self.view.set_material(material_id)
         if self._last_result is not None:
             self._update_scene_info(self._last_result)
 
@@ -1162,6 +1967,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Невозможная геометрия", str(error))
 
     def calculate(self, *, show_error: bool = True):
+        if len(getattr(self, "_layer_order", ())) > 2:
+            return self._calculate_layer_stack(show_error=show_error)
         try:
             length_input, width_input, upper_layer = self._read_calculation_inputs()
         except CalculationError as exc:
@@ -1182,6 +1989,8 @@ class MainWindow(QMainWindow):
             self._toggle_deletion_mode(True)
         elif self.edit_distance_button.isChecked():
             self._toggle_distance_editing(True)
+        elif self.change_section_button.isChecked():
+            self._toggle_section_editing(True)
         return result
 
     def _read_calculation_inputs(self):
@@ -1198,17 +2007,19 @@ class MainWindow(QMainWindow):
         """Reflect an opened configuration in form controls without queuing rebuilds."""
         if state.length_input is None or state.width_input is None:
             return
+        if state.layers:
+            self._restore_layer_stack(state.layers)
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
         blockers = [QSignalBlocker(widget) for widget in (
             self.length_panel, self.width_panel, self.width_upper, self.length_upper,
             self.round_to_50, self.round_to_5, self.no_rounding, self.show_length_gaps,
-            self.show_width_gaps, self.camera_combo,
+            self.show_width_gaps, self.camera_combo, self.material_combo,
         )]
         material_index = self.material_combo.findData(state.material_id)
         self.material_combo.setCurrentIndex(max(0, material_index))
-        self.length_panel.apply_position_data(state.length_input)
-        self.width_panel.apply_position_data(state.width_input)
+        self.length_panel.apply_direction_data(state.length_input, notify=False)
+        self.width_panel.apply_direction_data(state.width_input, notify=False)
         self.length_upper.setChecked(state.upper_layer == "length")
         self.width_upper.setChecked(state.upper_layer == "width")
         {50: self.round_to_50, 5: self.round_to_5, 0: self.no_rounding}[state.rounding_step].setChecked(True)
@@ -1220,17 +2031,77 @@ class MainWindow(QMainWindow):
         self._set_camera(camera_index)
 
     def reset_example(self) -> None:
+        self._invalidate_pending_recalculations()
+        MainWindow._begin_history_transaction(self)
+        for button in (self.add_beam_button, self.delete_beam_button, self.edit_distance_button, self.change_section_button):
+            button.setChecked(False)
+        self.controller.deactivate_tool()
+        self.controller.cancel_insertion()
+        self.controller.cancel_distance_edit()
         self.length_panel.set_model_driven_mode(None)
         self.width_panel.set_model_driven_mode(None)
         self._imported_step_model = None
-        self.view.clear_step_model()
-        self.toggle_model_button.setEnabled(False)
-        self.toggle_model_button.setText("Скрыть 3D модель")
-        self.rebuild_from_model_button.setEnabled(False)
-        self.length_panel.reset_example("1070 460 1300 499", 123, 552)
-        self.width_panel.reset_example("560 720", 277, 179)
+        self._manual_supports.clear()
+        self._layer_envelope_source = None
+        self.state.beam_sections.clear()
+        self.state.layer_sections.clear()
+        self.state.manual_beams.clear()
+        self.controller.clear_deletion_selection()
+        self.controller.clear_section_selection()
+        self.view.clear_workspace()
+        self._set_model_controls_visible(False)
+        self._restore_layer_stack(list(EXAMPLE_LAYERS))
         self.width_upper.setChecked(True)
-        self.calculate()
+        self._restore_default_view_settings()
+        if self.calculate() is not None:
+            self.view.camera_fit()
+
+    def _restore_default_view_settings(self) -> None:
+        """Restore every non-geometric setting used by the opening example."""
+        blockers = [QSignalBlocker(widget) for widget in (
+            self.round_to_50, self.round_to_5, self.no_rounding,
+            self.show_length_gaps, self.show_width_gaps,
+            self.camera_combo,
+        )]
+        self.round_to_50.setChecked(True)
+        self.show_length_gaps.setChecked(True)
+        self.show_width_gaps.setChecked(True)
+        camera_index = self.camera_combo.findData("isometric")
+        self.camera_combo.setCurrentIndex(max(0, camera_index))
+        del blockers
+        self.state.rounding_step = 50
+        # Reset returns the example geometry, but retains the chosen timber
+        # palette so the beam colours do not unexpectedly change.
+        self.state.show_length_dimensions = True
+        self.state.show_width_dimensions = True
+        self._set_camera(max(0, camera_index))
+        self._refresh_dimension_annotations()
+
+    def _restore_layer_stack(self, layers: list[LayerInput]) -> None:
+        """Replace dynamic layer cards from a saved multilayer project."""
+        expected_layer_ids = {layer.layer_id for layer in layers}
+        for layer_id in list(self._layer_panels):
+            if layer_id not in ("length", "width") and layer_id not in expected_layer_ids:
+                # A layer card can still own this widget while a layout update
+                # is pending.  Do not queue it for deletion: Qt may then delete
+                # the panel after it has been added to a newly rebuilt card.
+                panel = self._layer_panels.pop(layer_id)
+                if self._layer_card_manager is not None:
+                    self._layer_card_manager.detach_panel(panel)
+        self._layer_order = []
+        self._layer_axes = {}
+        for position, layer in enumerate(layers):
+            panel = self._layer_panels.get(layer.layer_id)
+            if panel is None:
+                panel = DirectionInputPanel("", self._layer_description(layer.axis), "", "100", "100")
+                panel.changed.connect(self._schedule_recalculation)
+                self._layer_panels[layer.layer_id] = panel
+            panel.apply_direction_data(layer.direction, notify=False)
+            self._layer_order.append(layer.layer_id)
+            self._layer_axes[layer.layer_id] = layer.axis
+            if layer.layer_id == "layer-1":
+                self.top_length_panel = panel
+        self._rebuild_layer_cards()
 
     def upper_layer(self) -> str:
         return "length" if self.length_upper.isChecked() else "width"

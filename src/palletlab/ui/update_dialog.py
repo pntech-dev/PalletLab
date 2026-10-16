@@ -31,11 +31,14 @@ class DownloadWorker(QThread):
     failed = pyqtSignal(str)
 
     def __init__(self, release: Release) -> None:
-        super().__init__(); self.release = release
+        super().__init__()
+        self.release = release
 
     def run(self) -> None:
         try:
-            path = download_verified(self.release, lambda received, total: self.progress.emit(int(received * 100 / total) if total else 0))
+            path = download_verified(
+                self.release, lambda received, total: self.progress.emit(int(received * 100 / total) if total else 0)
+            )
             self.done.emit(path)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -43,27 +46,48 @@ class DownloadWorker(QThread):
 
 class UpdateDialog(QDialog):
     def __init__(self, release: Release, parent=None) -> None:
-        super().__init__(parent); self.release = release; self.setWindowTitle("Доступно обновление")
+        super().__init__(parent)
+        self.release = release
+        self.setWindowTitle("Доступно обновление")
         self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
         self.setMinimumWidth(460)
         self.label = QLabel(f"Доступна версия {release.version}.\n\nУстановить её сейчас?")
         self.label.setWordWrap(True)
-        self.progress = QProgressBar(); self.progress.setTextVisible(True); self.progress.hide()
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(True)
+        self.progress.hide()
         self.install, self.later = QPushButton("Скачать и установить"), QPushButton("Позже")
-        self.install.clicked.connect(self._download); self.later.clicked.connect(self.reject)
-        layout = QVBoxLayout(self); layout.addWidget(self.label); layout.addWidget(self.progress)
-        buttons = QHBoxLayout(); buttons.addStretch(); buttons.addWidget(self.later); buttons.addWidget(self.install); layout.addLayout(buttons)
+        self.install.clicked.connect(self._download)
+        self.later.clicked.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.label)
+        layout.addWidget(self.progress)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        buttons.addWidget(self.later)
+        buttons.addWidget(self.install)
+        layout.addLayout(buttons)
 
     def _download(self) -> None:
-        self.install.setEnabled(False); self.later.setEnabled(False); self.progress.show(); self.label.setText("Скачивание обновления…")
-        self.worker = DownloadWorker(self.release); self.worker.progress.connect(self.progress.setValue); self.worker.done.connect(self._launch_updater); self.worker.failed.connect(self._failed); self.worker.start()
+        self.install.setEnabled(False)
+        self.later.setEnabled(False)
+        self.progress.show()
+        self.label.setText("Скачивание обновления…")
+        self.worker = DownloadWorker(self.release)
+        self.worker.progress.connect(self.progress.setValue)
+        self.worker.done.connect(self._launch_updater)
+        self.worker.failed.connect(self._failed)
+        self.worker.start()
 
     def _launch_updater(self, package: Path) -> None:
         executable = Path(sys.executable)
         updater = _extract_updater(package)
         if not updater.exists():
-            self._failed("Пакет обновления не содержит апдейтер. Установите новую версию через Setup."); return
-        subprocess.Popen([str(updater), "--package", str(package), "--app-dir", str(executable.parent), "--pid", str(os.getpid())])
+            self._failed("Пакет обновления не содержит апдейтер. Установите новую версию через Setup.")
+            return
+        subprocess.Popen(  # noqa: S603 - updater path comes from the verified update archive.
+            [str(updater), "--package", str(package), "--app-dir", str(executable.parent), "--pid", str(os.getpid())]
+        )
         self.accept()
         if self.parentWidget() is not None:
             self.parentWidget().window().close()
@@ -72,7 +96,10 @@ class UpdateDialog(QDialog):
             application.quit()
 
     def _failed(self, message: str) -> None:
-        self.label.setText("Не удалось загрузить обновление: " + message); self.label.setWordWrap(True); self.install.setEnabled(True); self.later.setEnabled(True)
+        self.label.setText("Не удалось загрузить обновление: " + message)
+        self.label.setWordWrap(True)
+        self.install.setEnabled(True)
+        self.later.setEnabled(True)
 
 
 def check_for_updates(parent) -> CheckWorker | None:

@@ -19,7 +19,8 @@ def test_stable_version_is_newer_than_same_beta():
 
 
 def test_release_selection_includes_beta_and_ignores_drafts():
-    draft = _release("0.9.0-beta"); draft["draft"] = True
+    draft = _release("0.9.0-beta")
+    draft["draft"] = True
     selected = find_newer_release([draft, _release("0.2.0-beta"), _release("0.3.0-beta")], "0.1.0-beta")
     assert selected is not None
     assert selected.version == "0.3.0-beta"

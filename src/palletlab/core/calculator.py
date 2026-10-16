@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
-from typing import Iterable
+from typing import Iterable, Mapping, Sequence
 
-from .models import Beam3D, DirectionInput, DirectionResult, InsertionSlot, LayerDirection, PalletAxis, PalletResult
+from .models import Beam3D, BeamKey, BeamSection, DirectionInput, DirectionResult, InsertionSlot, LayerDefinition, LayerDirection, LayerResult, PalletAxis, PalletResult
 from .validation import CalculationError
 
 EPSILON = 1e-7
@@ -74,6 +74,11 @@ def calculate_direction(data: DirectionInput) -> DirectionResult:
         _validate_measurements((("Позиция опоры", value) for value in data.support_positions))
         support_positions = list(data.support_positions)
     centers = [data.beam_width / 2, *support_positions, pallet_size - data.beam_width / 2]
+    hidden = tuple(sorted(set(data.hidden_beam_indices)))
+    if any(not isinstance(index, int) or index < 0 or index >= len(centers) for index in hidden):
+        raise CalculationError("Удалённый брус относится к несуществующей позиции.")
+    if len(hidden) >= len(centers):
+        raise CalculationError("В слое должен остаться хотя бы один брус.")
 
     for index, center in enumerate(centers):
         left, right = center - data.beam_width / 2, center + data.beam_width / 2
@@ -101,18 +106,26 @@ def calculate_direction(data: DirectionInput) -> DirectionResult:
         support_positions=tuple(support_positions),
         beam_centers=tuple(centers),
         gaps=gaps,
+        hidden_beam_indices=hidden,
     )
 
 
 def insertion_slots(result: PalletResult, axis: PalletAxis) -> tuple[InsertionSlot, ...]:
     """Return gaps large enough to accept a same-section beam in *axis*."""
     direction = result.length_result if axis == "length" else result.width_result
+    return insertion_slots_for_direction(axis, axis, direction)
+
+
+def insertion_slots_for_direction(
+    layer_id: str, axis: PalletAxis, direction: DirectionResult,
+) -> tuple[InsertionSlot, ...]:
+    """Return insertion slots for one explicitly identified pallet layer."""
     slots = []
     for after_beam_index, gap in enumerate(direction.gaps):
         maximum_clear_gap = gap - direction.beam_width
         if maximum_clear_gap >= -EPSILON:
             maximum_clear_gap = max(0.0, maximum_clear_gap)
-            slots.append(InsertionSlot(axis, after_beam_index, maximum_clear_gap, maximum_clear_gap / 2))
+            slots.append(InsertionSlot(axis, after_beam_index, maximum_clear_gap, maximum_clear_gap / 2, layer_id))
     return tuple(slots)
 
 
@@ -196,19 +209,26 @@ def _input_with_support_positions(
 def delete_beams_input(
     data: DirectionInput, direction: DirectionResult, beam_indices: Iterable[int]
 ) -> DirectionInput:
-    """Persist removal of one or more non-edge beams from a direction.
-
-    Beam indices refer to ``direction.beam_centers``.  The two outer beams are
-    structural pallet edges and deliberately cannot be removed.
-    """
+    """Persist removal of beams, including physical edge beams."""
     selected = set(beam_indices)
     if not selected:
         return data
     last_index = len(direction.beam_centers) - 1
-    if any(not 0 < index < last_index for index in selected):
-        raise CalculationError("Крайние брусья удалять нельзя.")
-    remaining = tuple(center for index, center in enumerate(direction.beam_centers) if index not in selected)
-    return _input_with_support_positions(data, direction, remaining[1:-1])
+    if any(not isinstance(index, int) or index < 0 or index > last_index for index in selected):
+        raise CalculationError("Выбран несуществующий брус.")
+    if len(set(data.hidden_beam_indices) | selected) >= len(direction.beam_centers):
+        raise CalculationError("В слое должен остаться хотя бы один брус.")
+    edge_indices = {index for index in selected if index in (0, last_index)}
+    internal_indices = selected - edge_indices
+    remaining = tuple(center for index, center in enumerate(direction.beam_centers) if index not in internal_indices)
+    updated = _input_with_support_positions(data, direction, remaining[1:-1]) if internal_indices else data
+    hidden_before = set(data.hidden_beam_indices) | edge_indices
+    hidden_after = tuple(
+        index - sum(removed < index for removed in internal_indices)
+        for index in sorted(hidden_before)
+        if index not in internal_indices
+    )
+    return replace(updated, hidden_beam_indices=hidden_after)
 
 
 def set_beam_face_distance_input(
@@ -233,33 +253,140 @@ def set_beam_face_distance_input(
     return _input_with_support_positions(data, direction, positions)
 
 
-def build_pallet(length: DirectionResult, width: DirectionResult, upper_layer: LayerDirection = "width") -> PalletResult:
-    """Turn two already-calculated directions into real 3D beam boxes.
+def _section_for(
+    axis: PalletAxis, index: int, direction: DirectionResult, overrides: Mapping[BeamKey, BeamSection],
+) -> BeamSection:
+    section = overrides.get((axis, index), BeamSection(direction.beam_height, direction.beam_width))
+    _validate_measurements((("Высота сечения бруса", section.height), ("Ширина сечения бруса", section.width)))
+    return section
 
-    Input coordinates are the only positioning source: length-axis centres make
-    beams spanning Y, while width-axis centres make beams spanning X.
+
+def _centres_for_sections(direction: DirectionResult, sections: tuple[BeamSection, ...]) -> tuple[float, ...]:
+    """Keep the two structural edge beams flush with the pallet boundary."""
+    centres = list(direction.beam_centers)
+    if len(centres) > 1:
+        centres[0] = sections[0].width / 2
+        centres[-1] = direction.pallet_size - sections[-1].width / 2
+    return tuple(centres)
+
+
+def _validate_sections(
+    direction: DirectionResult, sections: tuple[BeamSection, ...], centres: tuple[float, ...],
+) -> None:
+    """Ensure individually sized beams fit on their physical centre grid."""
+    for index, (center, section) in enumerate(zip(centres, sections)):
+        if center - section.width / 2 < -EPSILON or center + section.width / 2 > direction.pallet_size + EPSILON:
+            raise CalculationError(f"Брус {index + 1} выходит за границу поддона после изменения сечения.")
+    for index, (left, right) in enumerate(zip(sections, sections[1:])):
+        centre_distance = centres[index + 1] - centres[index]
+        required_distance = (left.width + right.width) / 2
+        if centre_distance < required_distance - EPSILON:
+            raise CalculationError(
+                f"Брусья {index + 1} и {index + 2} пересекаются после изменения сечения: "
+                f"расстояние между центрами {centre_distance:g} мм, требуется не менее {required_distance:g} мм."
+            )
+
+
+def build_multilayer_pallet(layers: Sequence[LayerDefinition]) -> PalletResult:
+    """Build any number of layers supplied from bottom to top.
+
+    Every layer has its own beam grid and section set.  The first layer is
+    top-aligned so a shorter selected beam cannot leave the second layer
+    hanging; every later layer starts at the bearing plane of the layer below.
+    A pallet must contain at least one X-grid and one Y-grid layer in order to
+    define both external dimensions.
     """
-    if upper_layer not in ("length", "width"):
-        raise CalculationError("Верхний слой должен быть задан как 'length' или 'width'.")
-    lower = "width" if upper_layer == "length" else "length"
-    z_length = width.beam_height if lower == "width" else 0.0
-    z_width = length.beam_height if lower == "length" else 0.0
+    if not layers:
+        raise CalculationError("Поддон должен содержать хотя бы один слой.")
+    if len({layer.layer_id for layer in layers}) != len(layers) or any(not layer.layer_id for layer in layers):
+        raise CalculationError("Каждый слой должен иметь уникальный идентификатор.")
+    by_axis: dict[PalletAxis, list[LayerDefinition]] = {"length": [], "width": []}
+    for layer in layers:
+        if layer.axis not in by_axis:
+            raise CalculationError("Направление слоя должно быть «длина» или «ширина».")
+        by_axis[layer.axis].append(layer)
+    if not by_axis["length"] or not by_axis["width"]:
+        raise CalculationError("Для габаритов поддона нужны слои по длине и ширине.")
+
+    def axis_size(axis: PalletAxis) -> float:
+        sizes = [layer.direction.pallet_size for layer in by_axis[axis]]
+        if any(not math.isclose(size, sizes[0], abs_tol=EPSILON) for size in sizes[1:]):
+            raise CalculationError(f"Слои по оси {axis} должны иметь одинаковый габарит поддона.")
+        return sizes[0]
+
+    pallet_length, pallet_width = axis_size("length"), axis_size("width")
     beams: list[Beam3D] = []
-    # Length-result centres lie on X: these beams span the full pallet width.
-    for x in length.beam_centers:
-        beams.append(Beam3D(x, width.pallet_size / 2, z_length + length.beam_height / 2,
-                            length.beam_width, width.pallet_size, length.beam_height, "width"))
-    # Width-result centres lie on Y: these beams span the full pallet length.
-    for y in width.beam_centers:
-        beams.append(Beam3D(length.pallet_size / 2, y, z_width + width.beam_height / 2,
-                            length.pallet_size, width.beam_width, width.beam_height, "length"))
-    result = PalletResult(length, width, length.pallet_size, width.pallet_size,
-                          length.beam_height + width.beam_height, upper_layer, tuple(beams))
+    calculated_layers: list[LayerResult] = []
+    base_z = 0.0
+    for layer_index, layer in enumerate(layers):
+        direction = layer.direction
+        sections = layer.sections or tuple(
+            BeamSection(direction.beam_height, direction.beam_width) for _ in direction.beam_centers
+        )
+        if len(sections) != len(direction.beam_centers):
+            raise CalculationError(f"Слой «{layer.layer_id}» содержит неверное число сечений брусьев.")
+        centres = _centres_for_sections(direction, sections)
+        _validate_sections(direction, sections, centres)
+        visible_indices = tuple(index for index in range(len(sections)) if index not in direction.hidden_beam_indices)
+        layer_height = max(sections[index].height for index in visible_indices)
+        top_z = base_z + layer_height
+        beam_start_index = len(beams)
+        for beam_index, (centre, section) in enumerate(zip(centres, sections)):
+            if beam_index in direction.hidden_beam_indices:
+                continue
+            # The first layer is top-aligned to provide one continuous bearing
+            # plane for the next layer.  Other layers rest on the plane below.
+            z = top_z - section.height / 2 if layer_index == 0 else base_z + section.height / 2
+            if layer.axis == "length":
+                beams.append(Beam3D(
+                    centre, pallet_width / 2, z, section.width, pallet_width, section.height,
+                    "width", layer.layer_id, beam_index,
+                ))
+            else:
+                beams.append(Beam3D(
+                    pallet_length / 2, centre, z, pallet_length, section.width, section.height,
+                    "length", layer.layer_id, beam_index,
+                ))
+        calculated_layers.append(LayerResult(
+            layer.layer_id, layer.axis, base_z, top_z, beam_start_index, len(visible_indices)
+        ))
+        base_z = top_z
+
+    length_result = by_axis["length"][0].direction
+    width_result = by_axis["width"][0].direction
+    result = PalletResult(
+        length_result, width_result, pallet_length, pallet_width, base_z,
+        layers[-1].axis, tuple(beams), tuple(calculated_layers),
+    )
     bounds = pallet_bounds(result.beams_3d)
-    if not (math.isclose(bounds[1] - bounds[0], result.pallet_length, abs_tol=EPSILON)
-            and math.isclose(bounds[3] - bounds[2], result.pallet_width, abs_tol=EPSILON)):
+    if not (math.isclose(bounds[1] - bounds[0], pallet_length, abs_tol=EPSILON)
+            and math.isclose(bounds[3] - bounds[2], pallet_width, abs_tol=EPSILON)):
         raise CalculationError("3D-геометрия не совпадает с рассчитанным габаритом поддона.")
     return result
+
+
+def build_pallet(
+    length: DirectionResult,
+    width: DirectionResult,
+    upper_layer: LayerDirection = "width",
+    section_overrides: Mapping[BeamKey, BeamSection] | None = None,
+) -> PalletResult:
+    """Adapt the legacy two-direction API to the canonical layer builder."""
+    if upper_layer not in ("length", "width"):
+        raise CalculationError("Верхний слой должен быть задан как 'length' или 'width'.")
+    overrides = section_overrides or {}
+    valid_keys = {
+        *( ("length", index) for index in range(len(length.beam_centers)) ),
+        *( ("width", index) for index in range(len(width.beam_centers)) ),
+    }
+    if any(key not in valid_keys for key in overrides):
+        raise CalculationError("Изменённое сечение относится к брусу, которого больше нет.")
+    length_sections = tuple(_section_for("length", index, length, overrides) for index in range(len(length.beam_centers)))
+    width_sections = tuple(_section_for("width", index, width, overrides) for index in range(len(width.beam_centers)))
+    length_layer = LayerDefinition("length", "length", length, length_sections)
+    width_layer = LayerDefinition("width", "width", width, width_sections)
+    ordered_layers = (length_layer, width_layer) if upper_layer == "width" else (width_layer, length_layer)
+    return build_multilayer_pallet(ordered_layers)
 
 
 def pallet_bounds(beams: Iterable[Beam3D]) -> tuple[float, float, float, float, float, float]:

@@ -8,13 +8,18 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import logging
 from pathlib import Path
+import shutil
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree
 
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
 from palletlab.core.materials import PalletMaterial, get_material
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 BASE_PLANE_NAME = "Спереди"
@@ -77,6 +82,7 @@ def export_pallet(
 ) -> Path:
     """Create the native parts and assembly; return the newly-created folder."""
     api = _load_solidworks_api()
+    api["pythoncom"].CoInitialize()
     try:
         material = get_material(material_id)
         library = _validate_material_library(material_library, material_name)
@@ -85,6 +91,8 @@ def export_pallet(
         raise
     except Exception as exc:
         raise SolidWorksExportError(str(exc)) from exc
+    finally:
+        api["pythoncom"].CoUninitialize()
 
 
 def _load_solidworks_api() -> dict[str, object]:
@@ -134,22 +142,25 @@ def _export(api: dict[str, object], result: PalletResult, parent_directory: Path
     templates = _resolve_templates(api, sw, configured_templates)
     _ensure_material_library_is_configured(api, sw, material_library)
     output = create_output_directory(parent_directory, result)
+    try:
+        groups: dict[tuple[str, float, float, float], list[Beam3D]] = defaultdict(list)
+        for beam in result.beams_3d:
+            groups[(beam.orientation, beam.size_x, beam.size_y, beam.size_z)].append(beam)
 
-    groups: dict[tuple[str, float, float, float], list[Beam3D]] = defaultdict(list)
-    for beam in result.beams_3d:
-        groups[(beam.orientation, beam.size_x, beam.size_y, beam.size_z)].append(beam)
+        parts: dict[tuple[str, float, float, float], Path] = {}
+        for index, (key, beams) in enumerate(groups.items(), start=1):
+            orientation, size_x, size_y, size_z = key
+            length, cross_width = (size_y, size_x) if orientation == "width" else (size_x, size_y)
+            filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(cross_width)}x{_format_number(size_z)}.SLDPRT"
+            _create_beam(api, sw, templates.part, material, material_library, material_name, length, cross_width, size_z, filename)
+            parts[key] = filename
 
-    parts: dict[tuple[str, float, float, float], Path] = {}
-    for index, (key, beams) in enumerate(groups.items(), start=1):
-        orientation, size_x, size_y, size_z = key
-        length, cross_width = (size_y, size_x) if orientation == "width" else (size_x, size_y)
-        filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(cross_width)}x{_format_number(size_z)}.SLDPRT"
-        _create_beam(api, sw, templates.part, material, material_library, material_name, length, cross_width, size_z, filename)
-        parts[key] = filename
-
-    assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
-    _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
-    return output
+        assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
+        _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
+        return output
+    except Exception:
+        shutil.rmtree(output, ignore_errors=True)
+        raise
 
 
 def _resolve_templates(api: dict[str, object], sw, configured_templates) -> TemplatePaths:
@@ -226,7 +237,7 @@ def _part_document(api: dict[str, object], model):
         if document is not None:
             return document
     except Exception:
-        pass
+        LOGGER.debug("SolidWorks did not expose an IPartDoc wrapper.", exc_info=True)
     return model
 
 
@@ -254,7 +265,7 @@ def _apply_material(model, material: PalletMaterial, material_library: Path, mat
         manager.Add2("Материал", 30, material.name)
         manager.Add2("Плотность, кг/м³", 30, str(material.density_kg_m3))
     except Exception:
-        pass
+        LOGGER.debug("SolidWorks did not accept supplemental material metadata.", exc_info=True)
 
 
 def _active_configuration_name(model) -> str:
@@ -264,7 +275,7 @@ def _active_configuration_name(model) -> str:
         if configuration is not None and configuration.Name:
             return str(configuration.Name)
     except Exception:
-        pass
+        LOGGER.debug("SolidWorks did not expose an active configuration.", exc_info=True)
     # Empty is the SolidWorks API fallback when a minimal template has no
     # available ConfigurationManager object.
     return ""
@@ -274,7 +285,7 @@ def available_materials(material_library: str | Path) -> tuple[str, ...]:
     """Return material names from a user-selected SolidWorks .sldmat file."""
     library = Path(material_library)
     try:
-        root = ElementTree.parse(library).getroot()
+        root = ElementTree.parse(library).getroot()  # noqa: S314 - the user explicitly selects this local CAD library.
         names = tuple(node.attrib["name"] for node in root.iter() if node.tag.endswith("material") and node.attrib.get("name"))
     except (OSError, ElementTree.ParseError) as exc:
         raise SolidWorksMaterialLibraryError("Не удалось прочитать выбранную библиотеку материалов SolidWorks.") from exc
@@ -378,5 +389,5 @@ def _create_assembly(api, sw, template: Path, result: PalletResult, parts, filen
         assembly.ShowNamedView2("", api["Convert"].ToInt32(api["const"]["views"].swIsometricView))
         assembly.ViewZoomtofit2()
     except Exception:
-        pass
+        LOGGER.debug("SolidWorks does not support optional assembly view fitting.", exc_info=True)
     _save(api, assembly, filename)

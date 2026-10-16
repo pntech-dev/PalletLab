@@ -12,7 +12,7 @@ from palletlab.core.validation import CalculationError
 
 SECTIONS = {
     "70 × 50 мм": (70.0, 50.0),
-    "100 × 25 мм": (100.0, 25.0),
+    "25 × 100 мм": (25.0, 100.0),
     "100 × 100 мм": (100.0, 100.0),
     "100 × 200 мм": (100.0, 200.0),
     "Свой размер": None,
@@ -92,7 +92,7 @@ class DirectionInputPanel(QGroupBox):
         widget.setSuffix(" мм")
         return widget
 
-    def _section_changed(self, name: str) -> None:
+    def _section_changed(self, name: str, *, notify: bool = True) -> None:
         dimensions = SECTIONS[name]
         custom = dimensions is None
         self.height.setEnabled(custom)
@@ -100,7 +100,8 @@ class DirectionInputPanel(QGroupBox):
         if dimensions:
             self.height.setValue(dimensions[0])
             self.width.setValue(dimensions[1])
-        self.changed.emit()
+        if notify:
+            self.changed.emit()
 
     def _position_data_changed(self, *_args) -> None:
         """Notify the owner about an editable pallet parameter change."""
@@ -114,17 +115,28 @@ class DirectionInputPanel(QGroupBox):
         self.changed.emit()
 
     def values(self, round_pallet_size: bool = False, rounding_step: int = 5) -> DirectionInput:
-        if self._model_input is not None:
-            return replace(
-                self._model_input,
-                round_pallet_size=round_pallet_size,
-                rounding_step=rounding_step,
-            )
         raw = self.distances.text().strip().replace(",", ".")
         try:
             distances = tuple(float(token) for token in raw.split()) if raw else ()
         except ValueError as exc:
             raise CalculationError("Расстояния между опорами должны быть числами через пробел.") from exc
+        if self._model_input is not None:
+            # The hidden distances from the pallet edge to the first/last
+            # support are still obtained from the selected model faces.  The
+            # visible values, however, remain editable in the layer editor.
+            # Keeping ``support_positions`` here would make
+            # ``calculate_direction`` ignore those edits altogether.
+            return replace(
+                self._model_input,
+                beam_height=self.height.value(),
+                beam_width=self.width.value(),
+                support_distances=distances,
+                margin_start=self.margin_start.value(),
+                margin_end=self.margin_end.value(),
+                support_positions=None,
+                round_pallet_size=round_pallet_size,
+                rounding_step=rounding_step,
+            )
         support_positions = self._support_positions_override
         # With no inter-support distances, zero values on both sides mean the
         # user intentionally removed every internal support.  Keep only the
@@ -155,6 +167,22 @@ class DirectionInputPanel(QGroupBox):
         self._support_positions_override = data.support_positions
         if notify:
             self.changed.emit()
+
+    def apply_direction_data(self, data: DirectionInput, *, notify: bool = True) -> None:
+        """Restore section and position values together without edit signals."""
+        matching_section = next(
+            (name for name, dimensions in SECTIONS.items() if dimensions == (data.beam_height, data.beam_width)),
+            "Свой размер",
+        )
+        for field in (self.section, self.height, self.width):
+            field.blockSignals(True)
+        self.section.setCurrentText(matching_section)
+        self.height.setValue(data.beam_height)
+        self.width.setValue(data.beam_width)
+        for field in (self.section, self.height, self.width):
+            field.blockSignals(False)
+        self._section_changed(matching_section, notify=False)
+        self.apply_position_data(data, notify=notify)
 
     def set_model_driven_mode(self, data: DirectionInput | None, *, hide_model_offsets: bool = False) -> None:
         """Show or hide geometry-derived offsets for the STEP-model workflow."""
