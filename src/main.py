@@ -9,8 +9,16 @@ if __name__ == "__main__":
         # Used by the release workflow to verify the frozen executable can
         # import the full 3D viewport before publishing it.
         import importlib
+        import traceback
+        from pathlib import Path
 
-        importlib.import_module("palletlab.visualization.pallet_view")
+        try:
+            importlib.import_module("palletlab.visualization.pallet_view")
+        except Exception:
+            Path("palletlab-smoke-test-error.log").write_text(
+                traceback.format_exc(), encoding="utf-8"
+            )
+            raise
         raise SystemExit(0)
     from palletlab.ui.main_window import run
     raise SystemExit(run())

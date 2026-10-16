@@ -86,6 +86,9 @@ jobs:
         run: |
           & .\dist\PalletLab\PalletLab.exe --smoke-test
           if ($LASTEXITCODE -ne 0) {
+            if (Test-Path .\palletlab-smoke-test-error.log) {
+              Get-Content .\palletlab-smoke-test-error.log
+            }
             throw "The packaged PalletLab executable failed its import smoke test."
           }
 
