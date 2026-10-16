@@ -31,6 +31,12 @@ EXCLUDES = [
     "IPython",
     "PIL.ImageQt",
     "pytest",
+    # ``mypy`` is a development-only dependency.  Recent Windows wheels use
+    # a hash-named mypyc bootstrap module, which PyInstaller cannot infer from
+    # the extension modules.  The application never uses it at runtime.
+    "mypy",
+    "mypyc",
+    "mypy_extensions",
     "pyvista.examples",
     "pyvista.trame",
     "tkinter",
@@ -49,6 +55,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ("VERSION", "."),
+        ("icon.ico", "."),
         ("src/palletlab/ui/assets/brand", "palletlab/ui/assets/brand"),
         ("src/palletlab/ui/assets/icons", "palletlab/ui/assets/icons"),
     ],

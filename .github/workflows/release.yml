@@ -80,6 +80,15 @@ jobs:
           python -m PyInstaller --noconfirm palletlab.spec
           python -m PyInstaller --noconfirm updater.spec
 
+      - name: Smoke-test frozen application
+        if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          & .\dist\PalletLab\PalletLab.exe --smoke-test
+          if ($LASTEXITCODE -ne 0) {
+            throw "The packaged PalletLab executable failed its import smoke test."
+          }
+
       - name: Install Inno Setup
         if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'
         shell: pwsh

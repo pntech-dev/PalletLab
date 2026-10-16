@@ -26,6 +26,7 @@ from palletlab.exporters.kompas import KompasExportError, export_pallet as expor
 from palletlab.exporters.solidworks import SolidWorksExportError, SolidWorksMaterialLibraryError, SolidWorksTemplateError, available_materials, export_pallet
 from palletlab.importers.step_import_protocol import consume_messages
 from palletlab.ui import resources_rc  # noqa: F401 - Registers SVGs used by the application QSS.
+from palletlab.ui.app_icon import application_icon
 from palletlab.ui.input_panel import DirectionInputPanel, SECTIONS
 from palletlab.ui.layer_cards import LayerCardManager
 from palletlab.ui.tool_state import ToolMode, ToolStateMachine
@@ -233,6 +234,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        self.setWindowIcon(application_icon())
         self.state = ProjectState()
         self._history = ProjectHistory()
         self._pending_history_snapshot: ProjectState | None = None
@@ -2116,6 +2118,7 @@ def run() -> int:
         QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("PalletLab")
+    app.setWindowIcon(application_icon())
     window = MainWindow()
     window.showMaximized()
     return app.exec_()

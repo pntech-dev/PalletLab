@@ -14,6 +14,8 @@ from pathlib import Path
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QPushButton, QProgressBar, QVBoxLayout
 
+from palletlab.ui.app_icon import application_icon
+
 
 class InstallWorker(QThread):
     progress = pyqtSignal(int, str)
@@ -216,6 +218,7 @@ def main() -> int:
     parser.add_argument("--pid", type=int, required=True)
     args = parser.parse_args()
     app = QApplication([])
+    app.setWindowIcon(application_icon())
     dialog = UpdaterDialog(Path(args.package), Path(args.app_dir), args.pid)
     dialog.show()
     return app.exec_()
