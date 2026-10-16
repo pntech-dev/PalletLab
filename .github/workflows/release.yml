@@ -84,8 +84,12 @@ jobs:
         if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'
         shell: pwsh
         run: |
-          & .\dist\PalletLab\PalletLab.exe --smoke-test
-          if ($LASTEXITCODE -ne 0) {
+          $smokeTest = Start-Process `
+            -FilePath .\dist\PalletLab\PalletLab.exe `
+            -ArgumentList "--smoke-test" `
+            -Wait `
+            -PassThru
+          if ($smokeTest.ExitCode -ne 0) {
             if (Test-Path .\palletlab-smoke-test-error.log) {
               Get-Content .\palletlab-smoke-test-error.log
             }

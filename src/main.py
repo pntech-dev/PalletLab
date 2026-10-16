@@ -12,16 +12,11 @@ if __name__ == "__main__":
         import traceback
         from pathlib import Path
 
-        report_path = Path("palletlab-smoke-test-error.log")
         try:
-            report_path.write_text(
-                "Reached PalletLab smoke-test entry point.\n", encoding="utf-8"
-            )
             importlib.import_module("palletlab.visualization.pallet_view")
         except BaseException:
-            report_path.write_text(
-                report_path.read_text(encoding="utf-8") + traceback.format_exc(),
-                encoding="utf-8",
+            Path("palletlab-smoke-test-error.log").write_text(
+                traceback.format_exc(), encoding="utf-8"
             )
             raise
         raise SystemExit(0)
