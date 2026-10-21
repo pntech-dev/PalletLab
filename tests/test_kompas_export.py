@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from palletlab.core.calculator import build_pallet, calculate_direction
 from palletlab.core.models import Beam3D, DirectionInput
 from palletlab.core.materials import get_material
-from palletlab.exporters.kompas import _apply_material, _apply_wood_appearance, _placement, create_output_directory
+from types import SimpleNamespace
+
+from palletlab.exporters.kompas import (
+    _apply_material,
+    _apply_wood_appearance,
+    _create_drawing,
+    _drawing_scale,
+    _placement,
+    create_output_directory,
+)
 
 
 def _result():
@@ -63,3 +74,150 @@ def test_kompas_beam_gets_a_light_wood_appearance_when_supported():
 
     assert part.useColor == 0
     assert part.calls == [("colour", (0x70ADDE, 0.35, 0.80, 0.15, 0.10, 1.0, 0.0)), ("update",)]
+
+
+def test_kompas_drawing_uses_api5_methods_for_a_standard_sheet(tmp_path):
+    class _SheetParameters:
+        def __init__(self):
+            self.initialized = False
+
+        def Init(self):
+            self.initialized = True
+
+    class _LayoutParameters:
+        def __init__(self):
+            self.initialized = False
+            self.sheet = _SheetParameters()
+
+        def Init(self):
+            self.initialized = True
+
+        def GetSheetParam(self):
+            return self.sheet
+
+    class _Parameters:
+        def __init__(self):
+            self.initialized = False
+            self.layout = _LayoutParameters()
+
+        def Init(self):
+            self.initialized = True
+
+        def GetLayoutParam(self):
+            return self.layout
+
+        def GetViewParam(self):
+            return self
+
+    class _Document:
+        def __init__(self):
+            self.calls = []
+
+        def ksCreateDocument(self, parameters):
+            self.calls.append(("create", parameters))
+            return True
+
+        def ksCreateSheetStandartViews(self, parameters, view_type, x, y):
+            self.calls.append(("views", parameters, view_type, x, y))
+            return True
+
+        def ksRebuildDocument(self):
+            self.calls.append(("rebuild",))
+            return True
+
+        def ksSaveDocument(self, filename):
+            self.calls.append(("save", filename))
+            return True
+
+    class _Kompas:
+        def __init__(self):
+            self.Document2D = _Document()
+            self.document_parameters = _Parameters()
+            self.view_parameters = _Parameters()
+
+        def GetParamStruct(self, parameter_type):
+            return self.document_parameters if parameter_type == "document" else self.view_parameters
+
+    kompas = _Kompas()
+    constants = SimpleNamespace(
+        ko_DocumentParam="document",
+        ko_AssociationViewParam="association-view",
+        lt_DocSheetStandart=1,
+    )
+    model = tmp_path / "Pallet.a3d"
+    output = tmp_path / "Pallet.cdw"
+
+    _create_drawing(kompas, constants, model, output, None)
+
+    assert kompas.document_parameters.initialized
+    assert kompas.document_parameters.type == 1
+    assert kompas.document_parameters.layout.initialized
+    assert kompas.document_parameters.layout.sheet.initialized
+    assert kompas.document_parameters.layout.sheet.format == 3
+    assert kompas.document_parameters.layout.sheet.multiply == 1
+    assert kompas.document_parameters.layout.sheet.direct == 1
+    assert kompas.view_parameters.initialized
+    assert kompas.view_parameters.fileName == str(model)
+    assert kompas.view_parameters.projBodies == 1
+    assert kompas.view_parameters.projSurfaces == 1
+    assert kompas.view_parameters.projectionLink == 1
+    assert kompas.view_parameters.x == 75.0
+    assert kompas.view_parameters.y == 245.0
+    assert kompas.view_parameters.scale_ == 1 / 4
+    assert kompas.Document2D.calls == [
+        ("create", kompas.document_parameters),
+        ("views", kompas.view_parameters, 21, 25.0, 25.0),
+        ("rebuild",),
+        ("save", str(output)),
+    ]
+
+
+def test_kompas_drawing_opens_a_template_with_api5_methods(tmp_path):
+    class _Parameters:
+        def GetViewParam(self):
+            return self
+
+        def Init(self):
+            pass
+
+    class _Document:
+        def __init__(self):
+            self.calls = []
+
+        def ksOpenDocument(self, filename, visible):
+            self.calls.append(("open", filename, visible))
+            return True
+
+        def ksCreateSheetStandartViews(self, parameters, view_type, x, y):
+            self.calls.append(("views", parameters, view_type, x, y))
+            return True
+
+        def ksRebuildDocument(self):
+            self.calls.append(("rebuild",))
+            return True
+
+        def ksSaveDocument(self, filename):
+            self.calls.append(("save", filename))
+            return True
+
+    class _Kompas:
+        def __init__(self):
+            self.Document2D = _Document()
+
+        def GetParamStruct(self, _parameter_type):
+            return _Parameters()
+
+    kompas = _Kompas()
+    constants = SimpleNamespace(ko_AssociationViewParam="association-view")
+    template = tmp_path / "Template.cdt"
+    output = tmp_path / "Pallet.cdw"
+
+    _create_drawing(kompas, constants, tmp_path / "Pallet.a3d", output, template)
+
+    assert kompas.Document2D.calls[0] == ("open", str(template), False)
+    assert kompas.Document2D.calls[-1] == ("save", str(output))
+
+
+def test_kompas_drawing_scale_uses_a_standard_reduction_for_large_models():
+    assert _drawing_scale(Path("Pallet_4200x1950.a3d")) == 1 / 20
+    assert _drawing_scale(Path("Beam_1_1000x100x70.m3d")) == 1 / 4

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import logging
+import math
 from pathlib import Path
 import shutil
 from typing import TYPE_CHECKING
@@ -15,6 +16,18 @@ from palletlab.exporters.drawings import DrawingExportError, DrawingScope, Drawi
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+_A3_LANDSCAPE_FORMAT = 3
+_VIEW_ORIGIN_X = 75.0
+# KOMPAS places the main standard view downwards from this point.  Keeping the
+# anchor in the upper working area leaves room for the long pallet elevation
+# above the bottom frame and title block.
+_VIEW_ORIGIN_Y = 245.0
+_VIEW_GAP = 25.0
+_MAX_VIEW_WIDTH = 260.0
+_STANDARD_SCALE_DENOMINATORS = (1, 2, 2.5, 4, 5, 10, 20, 25, 40, 50, 100, 200, 400, 500)
+_PALLET_VIEW_MASK = 0x01 | 0x04 | 0x10  # front, top, left
 
 
 class KompasExportError(RuntimeError):
@@ -53,19 +66,93 @@ def create_drawings(model_directory: str | Path, scope: DrawingScope, configured
 
 
 def _create_drawing(kompas, constants, model: Path, filename: Path, template: Path | None) -> None:
+    """Create a drawing through the KOMPAS API5 ``ksDocument2D`` interface.
+
+    ``KOMPAS.Application.5.Document2D`` is an API5 object.  It deliberately
+    does not expose the API7-style ``Create``, ``Open`` and ``SaveAs`` methods
+    used by 3D documents.  Keeping all three calls in the API5 family avoids
+    version-dependent Automation errors and is required for KOMPAS 3D v22+.
+    """
     document = kompas.Document2D
     if template is not None:
-        if not document.Open(str(template), False):
+        if not document.ksOpenDocument(str(template), False):
             raise DrawingTemplateError(f"КОМПАС-3D не открыл шаблон {template.name}.")
-    elif not document.Create(False, False):
-        raise DrawingExportError("КОМПАС-3D не создал документ чертежа по стандартному шаблону.")
+    else:
+        document_parameters = kompas.GetParamStruct(constants.ko_DocumentParam)
+        document_parameters.Init()
+        # lt_DocSheetStandart is the API5 type for a standard drawing sheet.
+        # The numeric fallback keeps the export compatible with older type
+        # libraries that do not publish this named constant to pywin32.
+        document_parameters.type = getattr(constants, "lt_DocSheetStandart", 1)
+        _configure_standard_sheet(document_parameters, constants)
+        if not document.ksCreateDocument(document_parameters):
+            raise DrawingExportError("КОМПАС-3D не создал документ чертежа по стандартному шаблону.")
     parameters = kompas.GetParamStruct(constants.ko_AssociationViewParam)
     parameters.Init()
     parameters.fileName = str(model)
-    if not document.ksCreateSheetStandartViews(parameters, 7, 0, 0):
+    # Init() clears every association option.  With projBodies left at zero,
+    # KOMPAS creates the view nodes but deliberately projects no solid bodies,
+    # yielding the "Вид не содержит изображения модели" diagnostic.  Include
+    # both solids and surfaces so parts and assemblies are handled alike.
+    parameters.projBodies = 1
+    parameters.projSurfaces = 1
+    # The standard-view group must retain its projection relation; otherwise
+    # KOMPAS treats its views as independent and does not align them.
+    parameters.projectionLink = 1
+    view_parameters = parameters.GetViewParam()
+    view_parameters.Init()
+    view_parameters.x = _VIEW_ORIGIN_X
+    view_parameters.y = _VIEW_ORIGIN_Y
+    view_parameters.scale_ = _drawing_scale(model)
+    if not document.ksCreateSheetStandartViews(parameters, _PALLET_VIEW_MASK, _VIEW_GAP, _VIEW_GAP):
         raise DrawingExportError(f"КОМПАС-3D не создал стандартные виды для {model.name}.")
-    if not document.SaveAs(str(filename)):
+    # Standard views are inserted as associative objects.  KOMPAS creates
+    # their nodes first and calculates the visible geometry on rebuild; saving
+    # before this step leaves warning-marked, empty views in the drawing tree.
+    if not document.ksRebuildDocument():
+        raise DrawingExportError(f"КОМПАС-3D не перестроил ассоциативные виды для {model.name}.")
+    if not document.ksSaveDocument(str(filename)):
         raise DrawingExportError(f"КОМПАС-3D не сохранил {filename.name}.")
+
+
+def _configure_standard_sheet(document_parameters, constants) -> None:
+    """Prepare an A3 landscape sheet with KOMPAS's native frame and stamp."""
+    layout_parameters = document_parameters.GetLayoutParam()
+    layout_parameters.Init()
+    sheet_parameters = layout_parameters.GetSheetParam()
+    sheet_parameters.Init()
+    sheet_parameters.format = getattr(constants, "ksFormatA3", _A3_LANDSCAPE_FORMAT)
+    sheet_parameters.multiply = 1
+    # In the API5 standard-sheet parameters this selects the long-side layout.
+    sheet_parameters.direct = 1
+
+
+def _drawing_scale(model: Path) -> float:
+    """Select a conventional reduction scale that keeps the model on an A3 sheet."""
+    dimensions = _dimensions_from_model_name(model)
+    largest_dimension = max(dimensions, default=1000.0)
+    required_denominator = max(1.0, largest_dimension / _MAX_VIEW_WIDTH)
+    denominator = next(
+        (candidate for candidate in _STANDARD_SCALE_DENOMINATORS if candidate >= required_denominator),
+        math.ceil(required_denominator / 100.0) * 100.0,
+    )
+    return 1.0 / denominator
+
+
+def _dimensions_from_model_name(model: Path) -> list[float]:
+    """Recover dimensions from the native-model names produced by this exporter."""
+    stem = model.stem
+    if stem.startswith("Pallet_"):
+        dimensions_text = stem.removeprefix("Pallet_")
+    elif stem.startswith("Beam_"):
+        parts = stem.split("_", 2)
+        dimensions_text = parts[2] if len(parts) == 3 else ""
+    else:
+        dimensions_text = ""
+    try:
+        return [float(value.replace("_", ".")) for value in dimensions_text.split("x")]
+    except ValueError:
+        return []
 
 
 def _format_number(value: float) -> str:

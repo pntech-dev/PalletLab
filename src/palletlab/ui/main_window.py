@@ -651,6 +651,11 @@ class MainWindow(QMainWindow):
         self.save_project_button.setObjectName("saveProjectButton")
         self.save_project_button.clicked.connect(self.save_project)
         layout.addWidget(self.save_project_button)
+        self.create_drawings_button = QPushButton("Создать чертежи")
+        self.create_drawings_button.setObjectName("createDrawingsButton")
+        self.create_drawings_button.setToolTip("Создать ассоциативные чертежи деталей и/или сборки из экспортированных моделей.")
+        self.create_drawings_button.clicked.connect(self.create_drawings)
+        layout.addWidget(self.create_drawings_button)
         self.build_from_model_button = QPushButton("Построить по модели")
         self.build_from_model_button.setObjectName("buildFromModelButton")
         self.build_from_model_button.setToolTip("Загрузить STEP-модель и выбрать нижнюю грань одной опоры.")
@@ -664,11 +669,6 @@ class MainWindow(QMainWindow):
         self.export_solidworks_button.setObjectName("exportSolidWorksButton")
         self.export_solidworks_button.clicked.connect(self.export_to_solidworks)
         layout.addWidget(self.export_solidworks_button)
-        self.create_drawings_button = QPushButton("Создать чертежи")
-        self.create_drawings_button.setObjectName("createDrawingsButton")
-        self.create_drawings_button.setToolTip("Создать ассоциативные чертежи деталей и/или сборки из экспортированных моделей.")
-        self.create_drawings_button.clicked.connect(self.create_drawings)
-        layout.addWidget(self.create_drawings_button)
         return header
 
     @staticmethod
