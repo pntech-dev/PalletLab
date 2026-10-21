@@ -8,6 +8,17 @@ const double WorkingLowerReserve = 0.080;
 const double WorkingUpperMargin = 0.020;
 const double ProjectedViewGap = 0.015;
 const double ManualAnnotationReserve = 0.035;
+const double AssemblyRequirementsLeft = 0.230;
+const double AssemblyRequirementsTop = 0.095;
+const double AssemblyRequirementsLowerReserve = 0.110;
+const string AssemblyTechnicalRequirements =
+    "1. *Размеры для справок.\n" +
+    "2. Сварные соединения по ГОСТ 14771-76.\n" +
+    "3. Острые кромки притупить.\n" +
+    "4. Общие допуски по ГОСТ 30893.1: Н14, h14, ±IТ14/2.\n" +
+    "5. Общие допуски формы и расположения — ГОСТ 30893.2—К.\n" +
+    "6. Остальные ТТ по СТБ 1022-96.\n" +
+    "7. Все сварные швы зачистить Rz40.";
 
 if (args.Length is not 3 and not 4)
 {
@@ -26,6 +37,7 @@ try
     var modelPath = Path.GetFullPath(args[1]);
     var documentType = Path.GetExtension(modelPath).Equals(".sldasm", StringComparison.OrdinalIgnoreCase)
         ? (int)swDocumentTypes_e.swDocASSEMBLY : (int)swDocumentTypes_e.swDocPART;
+    var hasAssemblyRequirements = documentType == (int)swDocumentTypes_e.swDocASSEMBLY;
     var errors = 0;
     var warnings = 0;
     var model = sw.OpenDoc6(modelPath, documentType, (int)swOpenDocOptions_e.swOpenDocOptions_Silent, "", ref errors, ref warnings);
@@ -39,16 +51,18 @@ try
         throw new InvalidOperationException("SolidWorks did not create a drawing document.");
     var drawing = (DrawingDoc)(sw.IActiveDoc2 ?? throw new InvalidOperationException("Drawing document is not active."));
     var drawingModel = (ModelDoc2)drawing;
-    ApplyGostSheetScale(sw, drawing, pallet);
+    ApplyGostSheetScale(sw, drawing, pallet, hasAssemblyRequirements);
     if (pallet?.Pallet is not null)
-        CreatePalletOrthographicViews(drawing, model, modelPath, pallet);
+        CreatePalletOrthographicViews(drawing, model, modelPath, pallet, hasAssemblyRequirements);
     else if (!drawing.Create3rdAngleViews2(modelPath))
         throw new InvalidOperationException("SolidWorks did not create standard views.");
     // View insertion can apply the user's automatic-scale preference.  Apply
     // the selected GOST scale again after the three views are present.
-    ApplyGostSheetScale(sw, drawing, pallet);
+    ApplyGostSheetScale(sw, drawing, pallet, hasAssemblyRequirements);
     drawingModel.ForceRebuild3(false);
     RemoveSurfaceFinishSymbols(drawing, drawingModel);
+    if (hasAssemblyRequirements)
+        AddAssemblyTechnicalRequirements(drawingModel);
     drawingModel.ForceRebuild3(false);
     drawingModel.GraphicsRedraw2();
     drawingModel.SaveAs3(Path.GetFullPath(args[2]), (int)swSaveAsVersion_e.swSaveAsCurrentVersion, (int)swSaveAsOptions_e.swSaveAsOptions_Silent);
@@ -63,7 +77,7 @@ catch (Exception error)
     return 1;
 }
 
-static void ApplyGostSheetScale(SldWorks sw, DrawingDoc drawing, PalletDrawingData? pallet)
+static void ApplyGostSheetScale(SldWorks sw, DrawingDoc drawing, PalletDrawingData? pallet, bool reserveAssemblyRequirements)
 {
     var sheet = (Sheet)drawing.GetCurrentSheet();
     (double Numerator, double Denominator)[] allowed =
@@ -77,9 +91,10 @@ static void ApplyGostSheetScale(SldWorks sw, DrawingDoc drawing, PalletDrawingDa
     var sheetWidth = Convert.ToDouble(properties.GetValue(5));
     var sheetHeight = Convert.ToDouble(properties.GetValue(6));
     var views = GetModelViews(drawing).ToArray();
+    var lowerReserve = reserveAssemblyRequirements ? AssemblyRequirementsLowerReserve : WorkingLowerReserve;
     var chosen = allowed.FirstOrDefault(scale => pallet is not null
-        ? PalletLayoutFits(pallet.Pallet, scale.Numerator / scale.Denominator, sheetWidth, sheetHeight)
-        : ViewsFitOnSheet(views, scale.Numerator / scale.Denominator, sheetWidth, sheetHeight));
+        ? PalletLayoutFits(pallet.Pallet, scale.Numerator / scale.Denominator, sheetWidth, sheetHeight, lowerReserve)
+        : ViewsFitOnSheet(views, scale.Numerator / scale.Denominator, sheetWidth, sheetHeight, lowerReserve));
     if (chosen == default)
         chosen = allowed[^1];
     sheet.SetScale(chosen.Numerator, chosen.Denominator, true, false);
@@ -89,10 +104,10 @@ static void ApplyGostSheetScale(SldWorks sw, DrawingDoc drawing, PalletDrawingDa
     // CreatePalletOrthographicViews.  Re-centering them here would override
     // that layout and can break their native alignment relations.
     if (pallet?.Pallet is null)
-        CenterProjectedViewGroup(views, sheetWidth, sheetHeight);
+        CenterProjectedViewGroup(views, sheetWidth, sheetHeight, lowerReserve);
 }
 
-static bool PalletLayoutFits(PalletEnvelope? pallet, double scale, double sheetWidth, double sheetHeight)
+static bool PalletLayoutFits(PalletEnvelope? pallet, double scale, double sheetWidth, double sheetHeight, double lowerReserve)
 {
     if (pallet is null)
         return false;
@@ -101,17 +116,16 @@ static bool PalletLayoutFits(PalletEnvelope? pallet, double scale, double sheetW
     var height = pallet.Height / 1000d * scale;
     return length + width + ProjectedViewGap <= sheetWidth - WorkingLeftMargin - WorkingRightMargin
         && width + ManualAnnotationReserve + ProjectedViewGap + height
-            <= sheetHeight - WorkingLowerReserve - WorkingUpperMargin;
+            <= sheetHeight - lowerReserve - WorkingUpperMargin;
 }
 
 static void CenterProjectedViewGroup(
-    IReadOnlyCollection<SolidWorks.Interop.sldworks.View> views, double sheetWidth, double sheetHeight)
+    IReadOnlyCollection<SolidWorks.Interop.sldworks.View> views, double sheetWidth, double sheetHeight, double lowerMargin)
 {
     var mainView = views.FirstOrDefault(view => view.GetBaseView() is null);
     if (mainView is null)
         return;
 
-    const double lowerMargin = 0.085;
     const double upperMargin = 0.020;
     // Create3rdAngleViews2 already produces a valid editable projection
     // group.  Move only the main view; moving projected children directly can
@@ -129,7 +143,8 @@ static void CenterProjectedViewGroup(
     };
 }
 
-static void CreatePalletOrthographicViews(DrawingDoc drawing, ModelDoc2 model, string modelPath, PalletDrawingData pallet)
+static void CreatePalletOrthographicViews(
+    DrawingDoc drawing, ModelDoc2 model, string modelPath, PalletDrawingData pallet, bool reserveAssemblyRequirements)
 {
     var sheet = (Sheet)drawing.GetCurrentSheet();
     var properties = (Array)sheet.GetProperties2();
@@ -145,7 +160,8 @@ static void CreatePalletOrthographicViews(DrawingDoc drawing, ModelDoc2 model, s
     var groupWidth = sideWidth + ProjectedViewGap + endWidth;
     var groupHeight = sideHeight + ManualAnnotationReserve + ProjectedViewGap + topHeight;
     var workingWidth = sheetWidth - WorkingLeftMargin - WorkingRightMargin;
-    var workingHeight = sheetHeight - WorkingLowerReserve - WorkingUpperMargin;
+    var lowerReserve = reserveAssemblyRequirements ? AssemblyRequirementsLowerReserve : WorkingLowerReserve;
+    var workingHeight = sheetHeight - lowerReserve - WorkingUpperMargin;
     if (groupWidth > workingWidth || groupHeight > workingHeight)
         throw new InvalidOperationException("The selected GOST scale does not leave space for the projected views.");
 
@@ -153,7 +169,7 @@ static void CreatePalletOrthographicViews(DrawingDoc drawing, ModelDoc2 model, s
     // title block below and the left frame are deliberately excluded, so the
     // views are neither pressed against the border nor drawn over the stamp.
     var groupLeft = WorkingLeftMargin + (workingWidth - groupWidth) / 2d;
-    var groupBottom = WorkingLowerReserve + (workingHeight - groupHeight) / 2d;
+    var groupBottom = lowerReserve + (workingHeight - groupHeight) / 2d;
     var sideX = groupLeft + sideWidth / 2d;
     var sideY = groupBottom + topHeight + ManualAnnotationReserve + ProjectedViewGap + sideHeight / 2d;
     var topX = sideX;
@@ -206,10 +222,10 @@ static IEnumerable<SolidWorks.Interop.sldworks.View> GetModelViews(DrawingDoc dr
         yield return view;
 }
 
-static bool ViewsFitOnSheet(IReadOnlyCollection<SolidWorks.Interop.sldworks.View> views, double scale, double sheetWidth, double sheetHeight)
+static bool ViewsFitOnSheet(
+    IReadOnlyCollection<SolidWorks.Interop.sldworks.View> views, double scale, double sheetWidth, double sheetHeight, double lowerMargin)
 {
     const double horizontalMargin = 0.025;
-    const double lowerMargin = 0.085;
     const double upperMargin = 0.02;
     var boxes = views.Select(view => ScaledOutline(view, scale)).ToArray();
     if (boxes.Length == 0)
@@ -253,6 +269,22 @@ static void RemoveSurfaceFinishSymbols(DrawingDoc drawing, ModelDoc2 drawingMode
             drawingModel.Extension.DeleteSelection2(0);
         }
     }
+}
+
+static void AddAssemblyTechnicalRequirements(ModelDoc2 drawingModel)
+{
+    // Insert a free-standing native note, rather than an annotation tied to a
+    // projected view.  It therefore survives view edits and remains directly
+    // editable in the drawing, as technical requirements should be.
+    drawingModel.ClearSelection2(true);
+    var note = drawingModel.InsertNote(AssemblyTechnicalRequirements) as Note
+        ?? throw new InvalidOperationException("SolidWorks did not create the assembly technical requirements note.");
+    var annotation = note.GetAnnotation() as Annotation
+        ?? throw new InvalidOperationException("SolidWorks did not expose the requirements note annotation.");
+    // The standard A3 GOST title block occupies the lower-right corner.  Put
+    // the requirements directly above it (as in the enterprise macro), and
+    // reserve that zone when laying out the views.
+    annotation.SetPosition(AssemblyRequirementsLeft, AssemblyRequirementsTop, 0.0);
 }
 
 sealed class PalletDrawingData

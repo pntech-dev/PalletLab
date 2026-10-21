@@ -28,6 +28,16 @@ _VIEW_GAP = 25.0
 _MAX_VIEW_WIDTH = 260.0
 _STANDARD_SCALE_DENOMINATORS = (1, 2, 2.5, 4, 5, 10, 20, 25, 40, 50, 100, 200, 400, 500)
 _PALLET_VIEW_MASK = 0x01 | 0x04 | 0x10  # front, top, left
+_ASSEMBLY_TECHNICAL_REQUIREMENTS = (
+    "*Размеры для справок.",
+    "Сварные соединения по ГОСТ 14771-76.",
+    "Острые кромки притупить.",
+    "Общие допуски по ГОСТ 30893.1: Н14, h14, ±IТ14/2.",
+    "Общие допуски формы и расположения — ГОСТ 30893.2—К.",
+    "Остальные ТТ по СТБ 1022-96.",
+    "Все сварные швы зачистить Rz40.",
+)
+_KOMPAS_TEXT_ITEM_LIMIT = 100
 
 
 class KompasExportError(RuntimeError):
@@ -54,7 +64,14 @@ def create_drawings(model_directory: str | Path, scope: DrawingScope, configured
         drawings = directory / "Drawings"
         drawings.mkdir(exist_ok=True)
         for model in models:
-            _create_drawing(kompas, api["constants"], model, drawings / f"{model.stem}.cdw", template)
+            _create_drawing(
+                kompas,
+                api["constants"],
+                model,
+                drawings / f"{model.stem}.cdw",
+                template,
+                include_assembly_requirements=model.suffix.casefold() == ".a3d",
+            )
         return drawings
     except (DrawingExportError, DrawingTemplateError):
         raise
@@ -65,7 +82,14 @@ def create_drawings(model_directory: str | Path, scope: DrawingScope, configured
             api["pythoncom"].CoUninitialize()
 
 
-def _create_drawing(kompas, constants, model: Path, filename: Path, template: Path | None) -> None:
+def _create_drawing(
+    kompas,
+    constants,
+    model: Path,
+    filename: Path,
+    template: Path | None,
+    include_assembly_requirements: bool = False,
+) -> None:
     """Create a drawing through the KOMPAS API5 ``ksDocument2D`` interface.
 
     ``KOMPAS.Application.5.Document2D`` is an API5 object.  It deliberately
@@ -111,8 +135,52 @@ def _create_drawing(kompas, constants, model: Path, filename: Path, template: Pa
     # before this step leaves warning-marked, empty views in the drawing tree.
     if not document.ksRebuildDocument():
         raise DrawingExportError(f"КОМПАС-3D не перестроил ассоциативные виды для {model.name}.")
+    if include_assembly_requirements:
+        _add_assembly_technical_requirements(document, kompas, constants)
     if not document.ksSaveDocument(str(filename)):
         raise DrawingExportError(f"КОМПАС-3D не сохранил {filename.name}.")
+
+
+def _add_assembly_technical_requirements(document, kompas, constants) -> None:
+    """Insert the enterprise assembly requirements as KOMPAS's native TT object."""
+    if not document.ksOpenTechnicalDemand(None, 0):
+        raise DrawingExportError("КОМПАС-3D не открыл объект технических требований.")
+    try:
+        # API5 truncates the ``s`` field of a text item on some KOMPAS builds.
+        # Keep every item well below that limit, but retain explicit line feeds:
+        # the requirements stay a single native TT block and every item starts
+        # on the following visible line.
+        for text in _assembly_requirement_text_chunks():
+            item = kompas.GetParamStruct(constants.ko_TextItemParam)
+            item.Init()
+            item.s = text
+            if not document.ksTextLine(item):
+                raise DrawingExportError("КОМПАС-3D не создал текст технических требований.")
+    except Exception:
+        document.ksCloseTechnicalDemand()
+        raise
+    if not document.ksCloseTechnicalDemand():
+        raise DrawingExportError("КОМПАС-3D не завершил создание технических требований.")
+
+
+def _assembly_requirement_text_chunks() -> tuple[str, ...]:
+    """Split TT text into API5-safe items without losing visible line breaks."""
+    lines = tuple(
+        f"{number}. {requirement}"
+        for number, requirement in enumerate(_ASSEMBLY_TECHNICAL_REQUIREMENTS, start=1)
+    )
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = f"{current}\n{line}" if current else line
+        if current and len(candidate) > _KOMPAS_TEXT_ITEM_LIMIT:
+            chunks.append(f"{current}\n")
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return tuple(chunks)
 
 
 def _configure_standard_sheet(document_parameters, constants) -> None:

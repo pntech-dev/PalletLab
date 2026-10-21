@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("SolidWorksDrawingHelper")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b51d2e804bf9f1d402b4d42e4a0f9c7e9616c720")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ccd1420eac7b09ca3c0fbb5ee00e847ac77e40be")]
 [assembly: System.Reflection.AssemblyProductAttribute("SolidWorksDrawingHelper")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SolidWorksDrawingHelper")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

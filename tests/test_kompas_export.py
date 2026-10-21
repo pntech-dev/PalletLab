@@ -8,6 +8,8 @@ from palletlab.core.materials import get_material
 from types import SimpleNamespace
 
 from palletlab.exporters.kompas import (
+    _add_assembly_technical_requirements,
+    _assembly_requirement_text_chunks,
     _apply_material,
     _apply_wood_appearance,
     _create_drawing,
@@ -216,6 +218,58 @@ def test_kompas_drawing_opens_a_template_with_api5_methods(tmp_path):
 
     assert kompas.Document2D.calls[0] == ("open", str(template), False)
     assert kompas.Document2D.calls[-1] == ("save", str(output))
+
+
+def test_kompas_assembly_requirements_are_native_numbered_technical_demands():
+    class _Item:
+        def Init(self):
+            pass
+
+    class _Document:
+        def __init__(self):
+            self.calls = []
+            self.texts = []
+
+        def ksOpenTechnicalDemand(self, bounds, style):
+            self.calls.append(("open", bounds, style))
+            return True
+
+        def ksTextLine(self, item):
+            self.texts.append(item.s)
+            return True
+
+        def ksCloseTechnicalDemand(self):
+            self.calls.append(("close",))
+            return True
+
+    class _Kompas:
+        def GetParamStruct(self, _parameter_type):
+            return _Item()
+
+    document = _Document()
+    constants = SimpleNamespace(ko_TextItemParam="item")
+
+    _add_assembly_technical_requirements(document, _Kompas(), constants)
+
+    assert document.calls == [("open", None, 0), ("close",)]
+    assert all(len(text) <= 100 for text in document.texts)
+    assert "".join(document.texts).splitlines() == [
+        "1. *Размеры для справок.",
+        "2. Сварные соединения по ГОСТ 14771-76.",
+        "3. Острые кромки притупить.",
+        "4. Общие допуски по ГОСТ 30893.1: Н14, h14, ±IТ14/2.",
+        "5. Общие допуски формы и расположения — ГОСТ 30893.2—К.",
+        "6. Остальные ТТ по СТБ 1022-96.",
+        "7. Все сварные швы зачистить Rz40.",
+    ]
+
+
+def test_kompas_technical_requirement_chunks_preserve_every_line_break():
+    chunks = _assembly_requirement_text_chunks()
+
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 100 for chunk in chunks)
+    assert "".join(chunks).splitlines()[-1] == "7. Все сварные швы зачистить Rz40."
 
 
 def test_kompas_drawing_scale_uses_a_standard_reduction_for_large_models():
