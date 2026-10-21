@@ -22,8 +22,16 @@ from palletlab.core.models import BeamSection, DirectionInput, InsertionSlot, La
 from palletlab.core.persistence import ProjectPersistenceError
 from palletlab.core.project_state import ProjectHistory, ProjectState
 from palletlab.core.validation import CalculationError
-from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
-from palletlab.exporters.solidworks import SolidWorksExportError, SolidWorksMaterialLibraryError, SolidWorksTemplateError, available_materials, export_pallet
+from palletlab.exporters.kompas import KompasExportError, create_drawings as create_kompas_drawings, export_pallet as export_kompas_pallet
+from palletlab.exporters.drawings import DrawingExportError, DrawingScope, DrawingTemplateError
+from palletlab.exporters.solidworks import (
+    SolidWorksExportError,
+    SolidWorksMaterialLibraryError,
+    SolidWorksTemplateError,
+    available_materials,
+    create_drawings as create_solidworks_drawings,
+    export_pallet,
+)
 from palletlab.importers.step_import_protocol import consume_messages
 from palletlab.ui import resources_rc  # noqa: F401 - Registers SVGs used by the application QSS.
 from palletlab.ui.app_icon import application_icon
@@ -178,6 +186,47 @@ class ManualBeamDialog(BeamSectionDialog):
         self.layout().insertLayout(2, form)
         self.reference.currentIndexChanged.connect(lambda: self.pick_reference.setVisible(bool(self.reference.currentData())))
         self.pick_reference.clicked.connect(lambda: self.done(2))
+
+
+class DrawingOptionsDialog(QDialog):
+    """Ask for CAD target and document coverage before generating drawings."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Создание чертежей")
+        self.setModal(True)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Создать чертежи для уже экспортированных моделей."))
+
+        self.solidworks = QRadioButton("SolidWorks")
+        self.kompas = QRadioButton("КОМПАС-3D")
+        self.solidworks.setChecked(True)
+        cad_group = QButtonGroup(self)
+        cad_group.addButton(self.solidworks)
+        cad_group.addButton(self.kompas)
+        layout.addWidget(self.solidworks)
+        layout.addWidget(self.kompas)
+
+        self.assembly_only = QRadioButton("Только сборка")
+        self.parts_and_assembly = QRadioButton("Детали и сборка")
+        self.assembly_only.setChecked(True)
+        scope_group = QButtonGroup(self)
+        scope_group.addButton(self.parts_and_assembly)
+        scope_group.addButton(self.assembly_only)
+        layout.addWidget(QLabel("Какие чертежи создать:"))
+        layout.addWidget(self.assembly_only)
+        layout.addWidget(self.parts_and_assembly)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selection(self) -> tuple[str, DrawingScope]:
+        cad = "solidworks" if self.solidworks.isChecked() else "kompas"
+        scope = DrawingScope.PARTS_AND_ASSEMBLY if self.parts_and_assembly.isChecked() else DrawingScope.ASSEMBLY_ONLY
+        return cad, scope
 
 
 class MainWindow(QMainWindow):
@@ -615,6 +664,11 @@ class MainWindow(QMainWindow):
         self.export_solidworks_button.setObjectName("exportSolidWorksButton")
         self.export_solidworks_button.clicked.connect(self.export_to_solidworks)
         layout.addWidget(self.export_solidworks_button)
+        self.create_drawings_button = QPushButton("Создать чертежи")
+        self.create_drawings_button.setObjectName("createDrawingsButton")
+        self.create_drawings_button.setToolTip("Создать ассоциативные чертежи деталей и/или сборки из экспортированных моделей.")
+        self.create_drawings_button.clicked.connect(self.create_drawings)
+        layout.addWidget(self.create_drawings_button)
         return header
 
     @staticmethod
@@ -1329,6 +1383,74 @@ class MainWindow(QMainWindow):
             if QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
             self.export_solidworks_button.setEnabled(True)
+
+    def create_drawings(self) -> None:
+        """Generate native associative drawings from an existing CAD export."""
+        options = DrawingOptionsDialog(self)
+        if options.exec_() != QDialog.Accepted:
+            return
+        cad, scope = options.selection()
+        directory = QFileDialog.getExistingDirectory(self, "Выберите папку экспорта с моделями")
+        if not directory:
+            return
+        self.create_drawings_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        error: DrawingExportError | None = None
+        drawings: Path | None = None
+        try:
+            if cad == "solidworks":
+                drawings = self._create_solidworks_drawings(directory, scope)
+            else:
+                drawings = self._create_kompas_drawings(directory, scope)
+        except DrawingExportError as exc:
+            error = exc
+        finally:
+            if QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
+            self.create_drawings_button.setEnabled(True)
+        if error is not None:
+            QMessageBox.critical(self, "Создание чертежей", str(error))
+            self.statusBar().showMessage("Создание чертежей не выполнено.")
+        elif drawings is not None:
+            self.statusBar().showMessage(f"Создание чертежей завершено: {drawings}")
+            QMessageBox.information(self, "Создание чертежей", f"Чертежи сохранены в папке:\n{drawings}")
+
+    def _create_solidworks_drawings(self, directory: str, scope: DrawingScope) -> Path:
+        template = self._drawing_template("solidworks")
+        try:
+            return create_solidworks_drawings(directory, scope, template, self._last_result)
+        except DrawingTemplateError:
+            selected = self._select_drawing_template("solidworks")
+            if selected is None:
+                raise DrawingExportError("Создание чертежей SolidWorks отменено: не выбран шаблон.")
+            self._save_drawing_template("solidworks", selected)
+            return create_solidworks_drawings(directory, scope, selected, self._last_result)
+
+    def _create_kompas_drawings(self, directory: str, scope: DrawingScope) -> Path:
+        template = self._drawing_template("kompas")
+        try:
+            return create_kompas_drawings(directory, scope, template)
+        except DrawingTemplateError:
+            selected = self._select_drawing_template("kompas")
+            if selected is None:
+                # No chosen template deliberately means the CAD default.
+                return create_kompas_drawings(directory, scope, None)
+            self._save_drawing_template("kompas", selected)
+            return create_kompas_drawings(directory, scope, selected)
+
+    @staticmethod
+    def _drawing_template(cad: str) -> str | None:
+        return QSettings("PalletLab", "PalletLab").value(f"drawings/{cad}/template", "", type=str) or None
+
+    @staticmethod
+    def _save_drawing_template(cad: str, template: str) -> None:
+        QSettings("PalletLab", "PalletLab").setValue(f"drawings/{cad}/template", template)
+
+    def _select_drawing_template(self, cad: str) -> str | None:
+        extension = "*.drwdot" if cad == "solidworks" else "*.cdt"
+        label = "SolidWorks" if cad == "solidworks" else "КОМПАС-3D"
+        path, _ = QFileDialog.getOpenFileName(self, f"Выберите шаблон чертежа {label}", "", f"Шаблоны чертежей ({extension})")
+        return path or None
 
     @staticmethod
     def _solidworks_templates() -> tuple[str | None, str | None]:

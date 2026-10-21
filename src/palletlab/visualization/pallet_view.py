@@ -971,13 +971,23 @@ class PalletView(QtInteractor):
         for dimension in dimensions:
             start = (dimension.start[0], dimension.start[1], dimension.start[2] + 0.5)
             end = (dimension.end[0], dimension.end[1], dimension.end[2] + 0.5)
-            visual = self.add_mesh(pv.Line(start, end), color="#d28326", line_width=14,
+            # A temporarily invalid edit may put both ends at the same point.
+            # ``pv.Line(...).tube()`` then produces an empty mesh, which
+            # PyVista refuses to add to the scene.  Do not let one bad handle
+            # prevent the user from editing all of the remaining dimensions.
+            if not self._is_drawable_dimension_line(start, end):
+                continue
+            line = pv.Line(start, end)
+            hitbox_mesh = line.tube(radius=16.0, n_sides=8)
+            if hitbox_mesh.n_points == 0:
+                continue
+            visual = self.add_mesh(line, color="#d28326", line_width=14,
                                    opacity=0.14, pickable=False,
                                    name=f"editable-{dimension.layer_id}-dimension-{dimension.index}")
             # Keep the visible yellow backing unchanged.  The separate
             # transparent tube is only a forgiving click target around it.
             hitbox = self.add_mesh(
-                pv.Line(start, end).tube(radius=16.0, n_sides=8), color="#d28326", scalars=None,
+                hitbox_mesh, color="#d28326", scalars=None,
                 show_scalar_bar=False, opacity=0.001, pickable=True,
                 name=f"editable-hitbox-{dimension.layer_id}-dimension-{dimension.index}",
             )
@@ -988,6 +998,14 @@ class PalletView(QtInteractor):
             )
             self._distance_visual_actors[hitbox] = visual
         self.render()
+
+    @staticmethod
+    def _is_drawable_dimension_line(
+        start: tuple[float, float, float], end: tuple[float, float, float],
+    ) -> bool:
+        """Return whether a dimension has two finite, distinct endpoints."""
+        points = np.asarray((start, end), dtype=float)
+        return bool(np.isfinite(points).all() and np.linalg.norm(points[1] - points[0]) > 1e-6)
 
     def disable_distance_editing(self, *, render: bool = True) -> None:
         if not self._distance_editing_mode and not self._distance_actors:

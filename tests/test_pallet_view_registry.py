@@ -25,6 +25,12 @@ def test_beam_actor_names_are_stable_when_global_render_order_changes():
     assert PalletView._beam_actor_name(("middle", 2)) == "pallet-beam-middle-2"
 
 
+def test_distance_overlay_rejects_zero_length_and_nonfinite_lines():
+    assert PalletView._is_drawable_dimension_line((0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+    assert not PalletView._is_drawable_dimension_line((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    assert not PalletView._is_drawable_dimension_line((0.0, 0.0, 0.0), (float("nan"), 0.0, 0.0))
+
+
 def test_step_hover_is_rate_limited_to_thirty_picks_per_second():
     picked: list[None] = []
     displayed: list[int] = []

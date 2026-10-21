@@ -1,0 +1,53 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "SolidWorksDrawingHelper/1.0.0": {
+        "dependencies": {
+          "SolidWorks.Interop.sldworks": "33.5.0.53",
+          "SolidWorks.Interop.swconst": "33.5.0.53"
+        },
+        "runtime": {
+          "SolidWorksDrawingHelper.dll": {}
+        }
+      },
+      "SolidWorks.Interop.sldworks/33.5.0.53": {
+        "runtime": {
+          "SolidWorks.Interop.sldworks.dll": {
+            "assemblyVersion": "33.5.0.53",
+            "fileVersion": "33.5.0.53"
+          }
+        }
+      },
+      "SolidWorks.Interop.swconst/33.5.0.53": {
+        "runtime": {
+          "SolidWorks.Interop.swconst.dll": {
+            "assemblyVersion": "33.5.0.53",
+            "fileVersion": "33.5.0.53"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "SolidWorksDrawingHelper/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "SolidWorks.Interop.sldworks/33.5.0.53": {
+      "type": "reference",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "SolidWorks.Interop.swconst/33.5.0.53": {
+      "type": "reference",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

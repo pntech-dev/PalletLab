@@ -8,22 +8,34 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import json
 import logging
 from pathlib import Path
 import shutil
+import subprocess
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree
 
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
 from palletlab.core.materials import PalletMaterial, get_material
+from palletlab.exporters.drawings import DrawingExportError, DrawingScope, DrawingTemplateError
 
 
 LOGGER = logging.getLogger(__name__)
 
+# ГОСТ 2.302-68: permitted reduction scales for a large assembly drawing.
+# We deliberately never invent an arbitrary ratio merely to fill a sheet.
+GOST_REDUCTION_SCALES: tuple[tuple[int, int], ...] = (
+    (1, 1), (1, 2), (1, 5), (1, 10), (1, 15), (1, 20), (1, 25),
+    (1, 40), (1, 50), (1, 75), (1, 100), (1, 200), (1, 400),
+    (1, 500), (1, 800), (1, 1000),
+)
+
 
 BASE_PLANE_NAME = "Спереди"
 SOLIDWORKS_API_DIR = Path(r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist")
+DRAWING_HELPER = Path(__file__).resolve().parents[3] / "tools" / "SolidWorksDrawingHelper" / "bin" / "Debug" / "net10.0-windows" / "SolidWorksDrawingHelper.exe"
 
 class SolidWorksExportError(RuntimeError):
     """A user-facing failure while preparing or exporting a CAD model."""
@@ -46,6 +58,229 @@ class SolidWorksMaterialLibraryError(SolidWorksExportError):
 class TemplatePaths:
     part: Path
     assembly: Path
+
+
+def create_drawings(
+    model_directory: str | Path,
+    scope: DrawingScope,
+    configured_template: str | Path | None = None,
+    pallet_result: PalletResult | None = None,
+) -> Path:
+    """Create associative SolidWorks drawings for the exported native models.
+
+    A ``.drwdot`` selected by the operator takes priority.  When it is absent,
+    SolidWorks' own default drawing template is used, so an organisation's
+    ESKD/GOST styles remain intact.
+    """
+    directory = Path(model_directory)
+    metadata = _write_drawing_metadata(directory, pallet_result) if pallet_result else _drawing_metadata_path(directory)
+    models = sorted(directory.glob("*.SLDPRT"))
+    assembly = next(iter(directory.glob("*.SLDASM")), None)
+    if scope is DrawingScope.PARTS_AND_ASSEMBLY:
+        models_to_draw = [*models, *([assembly] if assembly else [])]
+    else:
+        models_to_draw = [assembly] if assembly else []
+    if not models_to_draw:
+        raise DrawingExportError("В выбранной папке не найдены модели SolidWorks для создания чертежей.")
+
+    api = None
+    try:
+        api = _load_solidworks_api()
+        api["pythoncom"].CoInitialize()
+        sw = api["SldWorks"]()
+        if sw is None:
+            raise DrawingExportError("Не удалось запустить SolidWorks.")
+        sw.Visible = True
+        template = _resolve_drawing_template(api, sw, configured_template)
+        drawings = directory / "Drawings"
+        drawings.mkdir(exist_ok=True)
+        for model in models_to_draw:
+            _create_drawing_with_helper(
+                template, model, drawings / f"{model.stem}.SLDDRW",
+                metadata if model.suffix.casefold() == ".sldasm" and metadata.is_file() else None,
+            )
+        return drawings
+    except (DrawingExportError, DrawingTemplateError):
+        raise
+    except Exception as exc:
+        raise DrawingExportError(f"Не удалось создать чертёж SolidWorks: {exc}") from exc
+    finally:
+        if api is not None:
+            api["pythoncom"].CoUninitialize()
+
+
+def _create_drawing_with_helper(template: Path, model_path: Path, filename: Path, metadata: Path | None = None) -> None:
+    """Use strongly typed .NET interop, avoiding pywin32's COM dispatch bugs."""
+    if not DRAWING_HELPER.is_file():
+        raise DrawingExportError(
+            "Не найден модуль создания чертежей SolidWorks. Соберите tools/SolidWorksDrawingHelper."
+        )
+    completed = subprocess.run(  # noqa: S603 - fixed local helper; arguments are passed without a shell.
+        [str(DRAWING_HELPER), str(template), str(model_path), str(filename), *([str(metadata)] if metadata else [])],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+    )
+    if completed.returncode:
+        detail = completed.stderr.strip() or completed.stdout.strip() or f"код {completed.returncode}"
+        raise DrawingExportError(f"Модуль SolidWorks не создал чертёж {model_path.name}: {detail}")
+
+
+def _drawing_metadata_path(directory: Path) -> Path:
+    return directory / ".palletlab-drawing.json"
+
+
+def _write_drawing_metadata(directory: Path, result: PalletResult) -> Path:
+    """Persist the pallet envelope used to choose the sheet scale and layout."""
+    metadata = _drawing_metadata_path(directory)
+    payload = {
+        "schema": 1,
+        "pallet": {
+            "length": result.pallet_length,
+            "width": result.pallet_width,
+            "height": result.pallet_height,
+        },
+    }
+    metadata.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return metadata
+
+
+def _resolve_drawing_template(api: dict[str, object], sw, configured_template: str | Path | None) -> Path:
+    configured = Path(configured_template) if configured_template else None
+    preferences = api["const"]["user_preferences"]
+    default = _solidworks_template(sw, preferences.swDefaultTemplateDrawing)
+    template = configured if configured and configured.is_file() else default
+    if template is None or not template.is_file():
+        raise DrawingTemplateError(
+            "Не найден шаблон чертежа SolidWorks (.drwdot). Выберите его или настройте стандартный шаблон чертежа в SolidWorks."
+        )
+    return template
+
+
+def _create_drawing(api: dict[str, object], sw, template: Path, model_path: Path, filename: Path) -> None:
+    model_path = _open_model_for_drawing(api, model_path)
+    try:
+        _new_document(sw, template, filename.name)
+    except Exception as exc:
+        raise DrawingExportError(f"SolidWorks не создал лист чертежа {filename.name}: {exc}") from exc
+    # NewDocument returns IModelDoc2 through pythonnet.  Drawing-only methods
+    # are exposed by the Automation DrawingDoc interface, so obtain the same
+    # active document via pywin32 (as is already done for IAssemblyDoc).
+    drawing = api["win32"].GetActiveObject("SldWorks.Application").ActiveDoc
+    if drawing is None:
+        raise DrawingExportError("Не удалось получить документ чертежа SolidWorks.")
+    try:
+        _flag_methods(drawing, "Create3rdAngleViews2", "ForceRebuild3", "ViewZoomtofit2")
+        created = drawing.Create3rdAngleViews2(str(model_path))
+    except Exception as exc:
+        raise DrawingExportError(f"SolidWorks не вставил стандартные виды для {model_path.name}: {exc}") from exc
+    if not created:
+        raise DrawingExportError(f"SolidWorks не создал стандартные виды для {model_path.name}.")
+    _use_sheet_scale_and_fit(drawing)
+    _remove_surface_finish_symbols(drawing)
+    # Standard views are associative.  GOST/ESKD appearance, projection
+    # convention and annotation styles are supplied by the .drwdot file.
+    for method, args in (("ForceRebuild3", (True,)), ("ViewZoomtofit2", ())):
+        try:
+            _flag_methods(drawing, method)
+            getattr(drawing, method)(*args)
+        except Exception:
+            LOGGER.debug("SolidWorks does not expose optional drawing method %s.", method, exc_info=True)
+    try:
+        _save_drawing(api, drawing, filename)
+    except Exception as exc:
+        raise DrawingExportError(f"SolidWorks не сохранил чертёж {filename.name}: {exc}") from exc
+
+
+def _open_model_for_drawing(api: dict[str, object], model_path: Path) -> Path:
+    """Open the model with correctly typed COM ``out`` parameters.
+
+    ``OpenDoc6`` requires ByRef integer variables for Errors and Warnings.
+    Plain Python integers cause DISP_E_TYPEMISMATCH in pywin32.
+    """
+    document_type = 2 if model_path.suffix.casefold() == ".sldasm" else 1  # swDocASSEMBLY / swDocPART
+    try:
+        application = api["win32"].GetActiveObject("SldWorks.Application")
+        byref_i4 = api["pythoncom"].VT_BYREF | api["pythoncom"].VT_I4
+        errors = api["win32"].VARIANT(byref_i4, 0)
+        warnings = api["win32"].VARIANT(byref_i4, 0)
+        opened = application.OpenDoc6(str(model_path), document_type, 1, "", errors, warnings)
+        if isinstance(opened, tuple):
+            opened = opened[0]
+    except Exception as exc:
+        raise DrawingExportError(f"SolidWorks не открыл модель {model_path.name} (OpenDoc6): {exc}") from exc
+    if opened is None:
+        raise DrawingExportError(
+            f"SolidWorks не открыл модель {model_path.name}; код загрузки: {errors.value}, предупреждения: {warnings.value}."
+        )
+    return model_path
+
+
+def _save_drawing(api: dict[str, object], drawing, filename: Path) -> None:
+    """Save a DrawingDoc without ModelDoc-only calls such as ClearSelection2."""
+    version = api["Convert"].ToInt32(api["const"]["save_version"].swSaveAsCurrentVersion)
+    options = api["Convert"].ToInt32(api["const"]["save_options"].swSaveAsOptions_Silent)
+    try:
+        _flag_methods(drawing, "SaveAs3")
+        drawing.SaveAs3(str(filename), version, options)
+    except Exception:
+        extension = drawing.Extension
+        _flag_methods(extension, "SaveAs")
+        extension.SaveAs(str(filename), version, options, None)
+    if not filename.exists():
+        raise DrawingExportError(f"SolidWorks не записал файл {filename.name}.")
+
+
+def _use_sheet_scale_and_fit(drawing) -> None:
+    """Use a GOST scale on the sheet and make every model view inherit it."""
+    try:
+        sheet = drawing.GetCurrentSheet()
+        numerator, denominator = _sheet_scale(sheet)
+        scale = _nearest_gost_reduction_scale(numerator / denominator)
+        _flag_methods(sheet, "SetScale")
+        sheet.SetScale(scale[0], scale[1], True, True)
+        for view in _model_views(drawing):
+            view.UseSheetScale = True
+    except Exception:
+        # A custom template can expose a limited Sheet interface.  Its existing
+        # scale remains valid; do not prevent a drawing from being saved.
+        LOGGER.debug("SolidWorks did not expose sheet-scale controls.", exc_info=True)
+
+
+def _sheet_scale(sheet) -> tuple[int, int]:
+    """Read ITableAnnotation-compatible COM variants returned by GetScale."""
+    scale = sheet.GetScale()
+    if isinstance(scale, (tuple, list)) and len(scale) >= 2:
+        return int(scale[0]), int(scale[1])
+    raise ValueError("SolidWorks did not return a sheet scale.")
+
+
+def _nearest_gost_reduction_scale(maximum: float) -> tuple[int, int]:
+    """Return the largest permitted GOST scale not exceeding ``maximum``."""
+    allowed = [(numerator / denominator, numerator, denominator) for numerator, denominator in GOST_REDUCTION_SCALES]
+    return next((numerator, denominator) for value, numerator, denominator in allowed if value <= maximum + 1e-9)
+
+
+def _model_views(drawing):
+    view = drawing.GetFirstView()
+    if view is not None:
+        view = view.GetNextView()  # the first item is the sheet, not a model view
+    while view is not None:
+        yield view
+        view = view.GetNextView()
+
+
+def _remove_surface_finish_symbols(drawing) -> None:
+    """Remove template-inherited surface-roughness annotations from assemblies."""
+    try:
+        for view in _model_views(drawing):
+            for annotation in view.GetAnnotations() or ():
+                specific = annotation.GetSpecificAnnotation()
+                # ISFSymbol is the only annotation type with this member set;
+                # Delete is intentionally best-effort for older SW releases.
+                if specific is not None and specific.__class__.__name__.lower().endswith("sfsymbol"):
+                    annotation.Select3(False, None)
+                    drawing.Extension.DeleteSelection2(0)
+    except Exception:
+        LOGGER.debug("SolidWorks did not expose removable surface-finish symbols.", exc_info=True)
 
 
 def _format_number(value: float) -> str:

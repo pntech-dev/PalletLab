@@ -10,6 +10,7 @@ from palletlab.exporters.solidworks import (
     SolidWorksTemplateError,
     _apply_material,
     _active_configuration_name,
+    _create_drawing,
     _ensure_material_library_is_configured,
     available_materials,
     _part_document,
@@ -189,3 +190,60 @@ def test_solidworks_part_document_is_obtained_through_dispatch():
             return _Application()
 
     assert _part_document({"win32": _Win32()}, object()) is part
+
+
+def test_drawing_uses_the_automation_drawing_document(monkeypatch, tmp_path):
+    class _Drawing:
+        def __init__(self):
+            self.created = []
+            self.Extension = type("Extension", (), {"SelectByID2": lambda *_args: True})()
+
+        def GetCurrentSheet(self):
+            return type("Sheet", (), {"GetScale": lambda *_args: (1, 10), "SetScale": lambda *_args: None})()
+
+        def GetFirstView(self):
+            return type("SheetView", (), {"GetNextView": lambda *_args: None})()
+
+        def ClearSelection2(self, _value):
+            pass
+
+        def ActivateView(self, _name):
+            return True
+
+        def _FlagAsMethod(self, _name):
+            pass
+
+        def Create3rdAngleViews2(self, model):
+            self.created.append(model)
+            return True
+
+        def AutoDimension(self, *_args):
+            return 0
+
+        def ForceRebuild3(self, _value):
+            pass
+
+        def ViewZoomtofit2(self):
+            pass
+
+    drawing = _Drawing()
+
+    class _Application:
+        ActiveDoc = drawing
+
+    class _Win32:
+        def GetActiveObject(self, _name):
+            return _Application()
+
+    class _SolidWorks:
+        IActiveDoc2 = object()
+
+        def NewDocument(self, *_args):
+            return object()
+
+    monkeypatch.setattr("palletlab.exporters.solidworks._save_drawing", lambda *_args: None)
+    model = tmp_path / "part.SLDPRT"
+    monkeypatch.setattr("palletlab.exporters.solidworks._open_model_for_drawing", lambda *_args: model)
+    _create_drawing({"win32": _Win32()}, _SolidWorks(), Path(__file__), model, tmp_path / "part.SLDDRW")
+
+    assert drawing.created == [str(model)]

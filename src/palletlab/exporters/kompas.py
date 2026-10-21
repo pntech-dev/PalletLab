@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
 from palletlab.core.materials import PalletMaterial, get_material
+from palletlab.exporters.drawings import DrawingExportError, DrawingScope, DrawingTemplateError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -18,6 +19,53 @@ LOGGER = logging.getLogger(__name__)
 
 class KompasExportError(RuntimeError):
     """A user-facing failure while preparing or exporting a KOMPAS model."""
+
+
+def create_drawings(model_directory: str | Path, scope: DrawingScope, configured_template: str | Path | None = None) -> Path:
+    """Create KOMPAS associative standard views from native models."""
+    directory = Path(model_directory)
+    parts = sorted(directory.glob("*.m3d"))
+    assembly = next(iter(directory.glob("*.a3d")), None)
+    models = [*parts, *([assembly] if assembly else [])] if scope is DrawingScope.PARTS_AND_ASSEMBLY else ([assembly] if assembly else [])
+    if not models:
+        raise DrawingExportError("В выбранной папке не найдены модели КОМПАС-3D для создания чертежей.")
+    template = Path(configured_template) if configured_template else None
+    if template is not None and not template.is_file():
+        raise DrawingTemplateError("Указанный шаблон чертежа КОМПАС-3D (.cdt) не найден.")
+    api = None
+    try:
+        api = _load_kompas_api()
+        api["pythoncom"].CoInitialize()
+        kompas = api["Dispatch"]("KOMPAS.Application.5")
+        kompas.Visible = True
+        drawings = directory / "Drawings"
+        drawings.mkdir(exist_ok=True)
+        for model in models:
+            _create_drawing(kompas, api["constants"], model, drawings / f"{model.stem}.cdw", template)
+        return drawings
+    except (DrawingExportError, DrawingTemplateError):
+        raise
+    except Exception as exc:
+        raise DrawingExportError(f"Не удалось создать чертёж КОМПАС-3D: {exc}") from exc
+    finally:
+        if api is not None:
+            api["pythoncom"].CoUninitialize()
+
+
+def _create_drawing(kompas, constants, model: Path, filename: Path, template: Path | None) -> None:
+    document = kompas.Document2D
+    if template is not None:
+        if not document.Open(str(template), False):
+            raise DrawingTemplateError(f"КОМПАС-3D не открыл шаблон {template.name}.")
+    elif not document.Create(False, False):
+        raise DrawingExportError("КОМПАС-3D не создал документ чертежа по стандартному шаблону.")
+    parameters = kompas.GetParamStruct(constants.ko_AssociationViewParam)
+    parameters.Init()
+    parameters.fileName = str(model)
+    if not document.ksCreateSheetStandartViews(parameters, 7, 0, 0):
+        raise DrawingExportError(f"КОМПАС-3D не создал стандартные виды для {model.name}.")
+    if not document.SaveAs(str(filename)):
+        raise DrawingExportError(f"КОМПАС-3D не сохранил {filename.name}.")
 
 
 def _format_number(value: float) -> str:
