@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 import logging
 import math
 from pathlib import Path
@@ -12,7 +13,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
 from palletlab.core.materials import PalletMaterial, get_material
-from palletlab.exporters.drawings import DrawingExportError, DrawingScope, DrawingTemplateError
+from palletlab.exporters.drawings import (
+    DrawingExportError,
+    DrawingScope,
+    DrawingTemplateError,
+    SpecificationRow,
+    assembly_specification_rows,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -38,13 +45,22 @@ _ASSEMBLY_TECHNICAL_REQUIREMENTS = (
     "Все сварные швы зачистить Rz40.",
 )
 _KOMPAS_TEXT_ITEM_LIMIT = 100
+_SPECIFICATION_LEFT = 250.0
+_SPECIFICATION_TOP = 150.0
+_SPECIFICATION_ROW_HEIGHT = 7.0
+_SPECIFICATION_COLUMNS = (12.0, 35.0, 65.0, 16.0)
 
 
 class KompasExportError(RuntimeError):
     """A user-facing failure while preparing or exporting a KOMPAS model."""
 
 
-def create_drawings(model_directory: str | Path, scope: DrawingScope, configured_template: str | Path | None = None) -> Path:
+def create_drawings(
+    model_directory: str | Path,
+    scope: DrawingScope,
+    configured_template: str | Path | None = None,
+    pallet_result: PalletResult | None = None,
+) -> Path:
     """Create KOMPAS associative standard views from native models."""
     directory = Path(model_directory)
     parts = sorted(directory.glob("*.m3d"))
@@ -71,6 +87,12 @@ def create_drawings(model_directory: str | Path, scope: DrawingScope, configured
                 drawings / f"{model.stem}.cdw",
                 template,
                 include_assembly_requirements=model.suffix.casefold() == ".a3d",
+                specification_rows=(
+                    assembly_specification_rows(pallet_result)
+                    if model.suffix.casefold() == ".a3d" and pallet_result
+                    else _stored_specification_rows(directory) if model.suffix.casefold() == ".a3d" else ()
+                ),
+                overall_dimensions=_overall_dimensions(model, directory, pallet_result),
             )
         return drawings
     except (DrawingExportError, DrawingTemplateError):
@@ -89,6 +111,8 @@ def _create_drawing(
     filename: Path,
     template: Path | None,
     include_assembly_requirements: bool = False,
+    specification_rows: tuple[SpecificationRow, ...] = (),
+    overall_dimensions: tuple[float, float, float] | None = None,
 ) -> None:
     """Create a drawing through the KOMPAS API5 ``ksDocument2D`` interface.
 
@@ -135,10 +159,66 @@ def _create_drawing(
     # before this step leaves warning-marked, empty views in the drawing tree.
     if not document.ksRebuildDocument():
         raise DrawingExportError(f"КОМПАС-3D не перестроил ассоциативные виды для {model.name}.")
+    if overall_dimensions is not None:
+        _add_overall_dimensions(document, kompas, constants, model, overall_dimensions)
     if include_assembly_requirements:
         _add_assembly_technical_requirements(document, kompas, constants)
+        _add_assembly_specification(document, specification_rows)
     if not document.ksSaveDocument(str(filename)):
         raise DrawingExportError(f"КОМПАС-3D не сохранил {filename.name}.")
+
+
+def _add_overall_dimensions(
+    document, kompas, constants, model: Path, dimensions: tuple[float, float, float],
+) -> None:
+    """Create exactly three native linear reference dimensions with arrows."""
+    length, width, height = dimensions
+    scale = _drawing_scale(model)
+    side_width, side_height = length * scale, height * scale
+    end_width = width * scale
+    side_left, side_bottom = _VIEW_ORIGIN_X - side_width / 2.0, _VIEW_ORIGIN_Y - side_height / 2.0
+    end_left = _VIEW_ORIGIN_X + side_width / 2.0 + _VIEW_GAP
+
+    _add_reference_linear_dimension(
+        document, kompas, constants,
+        side_left, side_bottom, side_left + side_width, side_bottom,
+        length, 0, 0.0, -15.0,
+    )
+    _add_reference_linear_dimension(
+        document, kompas, constants,
+        end_left, side_bottom, end_left + end_width, side_bottom,
+        width, 0, 0.0, -15.0,
+    )
+    _add_reference_linear_dimension(
+        document, kompas, constants,
+        end_left + end_width, side_bottom, end_left + end_width, side_bottom + side_height,
+        height, 1, 15.0, 0.0,
+    )
+
+
+def _add_reference_linear_dimension(
+    document, kompas, constants, x1: float, y1: float, x2: float, y2: float,
+    value: float, orientation: int, dx: float, dy: float,
+) -> None:
+    """Create one native KOMPAS linear dimension with a ``*`` suffix."""
+    dimension = kompas.GetParamStruct(constants.ko_LDimParam)
+    drawing = dimension.GetDPar()
+    source = dimension.GetSPar()
+    text = dimension.GetTPar()
+    drawing.Init()
+    source.Init()
+    source.ps = orientation
+    source.x1, source.y1, source.x2, source.y2 = x1, y1, x2, y2
+    source.dx, source.dy, source.basePoint = dx, dy, 1
+    text.Init(False)
+    text.SetBitFlagValue(constants._SUFFIX, True)
+    text_array = text.GetTextArr()
+    for value_text in (_format_dimension(value), "*"):
+        item = kompas.GetParamStruct(constants.ko_Char255)
+        item.str = value_text
+        text_array.ksAddArrayItem(-1, item)
+    if not document.ksLinDimension(dimension):
+        raise DrawingExportError("КОМПАС-3D не добавил общий габаритный размер.")
 
 
 def _add_assembly_technical_requirements(document, kompas, constants) -> None:
@@ -183,6 +263,46 @@ def _assembly_requirement_text_chunks() -> tuple[str, ...]:
     return tuple(chunks)
 
 
+def _add_assembly_specification(document, rows: tuple[SpecificationRow, ...]) -> None:
+    """Create an editable native KOMPAS table with the assembly composition."""
+    if not rows:
+        return
+    row_count = len(rows) + 1
+    width = sum(_SPECIFICATION_COLUMNS)
+    height = row_count * _SPECIFICATION_ROW_HEIGHT
+    if not document.ksTable():
+        raise DrawingExportError("КОМПАС-3D не начал создание таблицы спецификации.")
+    try:
+        for row in range(row_count + 1):
+            y = _SPECIFICATION_TOP - row * _SPECIFICATION_ROW_HEIGHT
+            if not document.ksLineSeg(_SPECIFICATION_LEFT, y, _SPECIFICATION_LEFT + width, y, 2):
+                raise DrawingExportError("КОМПАС-3D не создал строку таблицы спецификации.")
+        x = _SPECIFICATION_LEFT
+        for column_width in _SPECIFICATION_COLUMNS:
+            if not document.ksLineSeg(x, _SPECIFICATION_TOP, x, _SPECIFICATION_TOP - height, 2):
+                raise DrawingExportError("КОМПАС-3D не создал столбец таблицы спецификации.")
+            x += column_width
+        if not document.ksLineSeg(x, _SPECIFICATION_TOP, x, _SPECIFICATION_TOP - height, 2):
+            raise DrawingExportError("КОМПАС-3D не завершил рамку таблицы спецификации.")
+    except Exception:
+        document.ksEndObj()
+        raise
+    if not document.ksEndObj():
+        raise DrawingExportError("КОМПАС-3D не завершил создание таблицы спецификации.")
+    # API5 permits the table grid to be built as a compound object, but on
+    # recent KOMPAS versions rejects text creation while that object is open.
+    # Add ordinary editable drawing texts immediately after closing the grid.
+    values = (("Поз.", "Наименование", "Размеры, мм", "Кол."), *(
+        (str(row.position), row.name, row.dimensions, str(row.quantity)) for row in rows
+    ))
+    for row_index, values_in_row in enumerate(values):
+        x = _SPECIFICATION_LEFT
+        y = _SPECIFICATION_TOP - (row_index + 0.72) * _SPECIFICATION_ROW_HEIGHT
+        for column_width, value in zip(_SPECIFICATION_COLUMNS, values_in_row, strict=True):
+            document.ksText(x + 1.5, y, 0.0, 3.5, 1, 0, value)
+            x += column_width
+
+
 def _configure_standard_sheet(document_parameters, constants) -> None:
     """Prepare an A3 landscape sheet with KOMPAS's native frame and stamp."""
     layout_parameters = document_parameters.GetLayoutParam()
@@ -193,6 +313,47 @@ def _configure_standard_sheet(document_parameters, constants) -> None:
     sheet_parameters.multiply = 1
     # In the API5 standard-sheet parameters this selects the long-side layout.
     sheet_parameters.direct = 1
+
+
+def _stored_specification_rows(directory: Path) -> tuple[SpecificationRow, ...]:
+    """Read the composition persisted beside the native assembly export."""
+    metadata = directory / ".palletlab-drawing.json"
+    try:
+        payload = json.loads(metadata.read_text(encoding="utf-8"))
+        return tuple(
+            SpecificationRow(
+                position=int(row["position"]),
+                name=str(row["name"]),
+                dimensions=str(row["dimensions"]),
+                quantity=int(row["quantity"]),
+            )
+            for row in payload.get("specification", ())
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return ()
+
+
+def _overall_dimensions(
+    model: Path, directory: Path, pallet_result: PalletResult | None,
+) -> tuple[float, float, float] | None:
+    """Return the length, width and height of the document's own envelope."""
+    model_dimensions = _dimensions_from_model_name(model)
+    if len(model_dimensions) == 3:
+        return (model_dimensions[0], model_dimensions[1], model_dimensions[2])
+    if model.suffix.casefold() != ".a3d" or len(model_dimensions) != 2:
+        return None
+    if pallet_result is not None:
+        return (pallet_result.pallet_length, pallet_result.pallet_width, pallet_result.pallet_height)
+    try:
+        payload = json.loads((directory / ".palletlab-drawing.json").read_text(encoding="utf-8"))
+        pallet = payload["pallet"]
+        return (float(pallet["length"]), float(pallet["width"]), float(pallet["height"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _format_dimension(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else f"{value:g}"
 
 
 def _drawing_scale(model: Path) -> float:
@@ -296,7 +457,32 @@ def _export(api: dict[str, object], result: PalletResult, output: Path, material
 
     assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.a3d"
     _create_assembly(kompas, constants3d, result, parts, assembly_file)
+    _write_drawing_metadata(output, result)
     return output
+
+
+def _write_drawing_metadata(directory: Path, result: PalletResult) -> None:
+    """Persist assembly composition so drawings can be generated after restart."""
+    payload = {
+        "schema": 2,
+        "pallet": {
+            "length": result.pallet_length,
+            "width": result.pallet_width,
+            "height": result.pallet_height,
+        },
+        "specification": [
+            {
+                "position": row.position,
+                "name": row.name,
+                "dimensions": row.dimensions,
+                "quantity": row.quantity,
+            }
+            for row in assembly_specification_rows(result)
+        ],
+    }
+    (directory / ".palletlab-drawing.json").write_text(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+    )
 
 
 def _create_beam(kompas, constants3d, material: PalletMaterial, length: float, width: float, height: float, filename: Path) -> None:

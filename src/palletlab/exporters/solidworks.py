@@ -19,7 +19,12 @@ from xml.etree import ElementTree
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
 from palletlab.core.materials import PalletMaterial, get_material
-from palletlab.exporters.drawings import DrawingExportError, DrawingScope, DrawingTemplateError
+from palletlab.exporters.drawings import (
+    DrawingExportError,
+    DrawingScope,
+    DrawingTemplateError,
+    assembly_specification_rows,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -132,12 +137,21 @@ def _write_drawing_metadata(directory: Path, result: PalletResult) -> Path:
     """Persist the pallet envelope used to choose the sheet scale and layout."""
     metadata = _drawing_metadata_path(directory)
     payload = {
-        "schema": 1,
+        "schema": 2,
         "pallet": {
             "length": result.pallet_length,
             "width": result.pallet_width,
             "height": result.pallet_height,
         },
+        "specification": [
+            {
+                "position": row.position,
+                "name": row.name,
+                "dimensions": row.dimensions,
+                "quantity": row.quantity,
+            }
+            for row in assembly_specification_rows(result)
+        ],
     }
     metadata.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     return metadata
@@ -392,6 +406,7 @@ def _export(api: dict[str, object], result: PalletResult, parent_directory: Path
 
         assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
         _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
+        _write_drawing_metadata(output, result)
         return output
     except Exception:
         shutil.rmtree(output, ignore_errors=True)

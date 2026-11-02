@@ -1429,14 +1429,14 @@ class MainWindow(QMainWindow):
     def _create_kompas_drawings(self, directory: str, scope: DrawingScope) -> Path:
         template = self._drawing_template("kompas")
         try:
-            return create_kompas_drawings(directory, scope, template)
+            return create_kompas_drawings(directory, scope, template, self._last_result)
         except DrawingTemplateError:
             selected = self._select_drawing_template("kompas")
             if selected is None:
                 # No chosen template deliberately means the CAD default.
-                return create_kompas_drawings(directory, scope, None)
+                return create_kompas_drawings(directory, scope, None, self._last_result)
             self._save_drawing_template("kompas", selected)
-            return create_kompas_drawings(directory, scope, selected)
+            return create_kompas_drawings(directory, scope, selected, self._last_result)
 
     @staticmethod
     def _drawing_template(cad: str) -> str | None:

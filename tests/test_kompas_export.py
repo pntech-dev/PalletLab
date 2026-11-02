@@ -8,15 +8,19 @@ from palletlab.core.materials import get_material
 from types import SimpleNamespace
 
 from palletlab.exporters.kompas import (
+    _add_assembly_specification,
     _add_assembly_technical_requirements,
+    _add_overall_dimensions,
     _assembly_requirement_text_chunks,
     _apply_material,
     _apply_wood_appearance,
     _create_drawing,
     _drawing_scale,
     _placement,
+    _overall_dimensions,
     create_output_directory,
 )
+from palletlab.exporters.drawings import SpecificationRow
 
 
 def _result():
@@ -272,6 +276,111 @@ def test_kompas_technical_requirement_chunks_preserve_every_line_break():
     assert "".join(chunks).splitlines()[-1] == "7. Все сварные швы зачистить Rz40."
 
 
+def test_kompas_assembly_specification_is_an_editable_native_table():
+    class _Document:
+        def __init__(self):
+            self.calls = []
+
+        def ksTable(self):
+            self.calls.append(("table",))
+            return True
+
+        def ksLineSeg(self, *args):
+            self.calls.append(("line", *args))
+            return True
+
+        def ksText(self, *args):
+            self.calls.append(("text", *args))
+            return True
+
+        def ksEndObj(self):
+            self.calls.append(("end",))
+            return True
+
+    document = _Document()
+    _add_assembly_specification(document, (SpecificationRow(1, "Брус", "2000×100×70", 4),))
+
+    assert document.calls[0] == ("table",)
+    assert ("end",) in document.calls
+    assert [call[-1] for call in document.calls if call[0] == "text"] == [
+        "Поз.", "Наименование", "Размеры, мм", "Кол.", "1", "Брус", "2000×100×70", "4",
+    ]
+
+
 def test_kompas_drawing_scale_uses_a_standard_reduction_for_large_models():
     assert _drawing_scale(Path("Pallet_4200x1950.a3d")) == 1 / 20
     assert _drawing_scale(Path("Beam_1_1000x100x70.m3d")) == 1 / 4
+
+
+def test_kompas_adds_only_three_native_reference_dimensions_with_a_star_suffix(tmp_path):
+    class _Drawing:
+        def Init(self):
+            pass
+
+    class _Source:
+        def Init(self):
+            pass
+
+    class _TextArray:
+        def __init__(self):
+            self.items = []
+
+        def ksAddArrayItem(self, _index, item):
+            self.items.append(item.str)
+
+    class _Text:
+        def __init__(self):
+            self.array = _TextArray()
+
+        def Init(self, _manual):
+            pass
+
+        def SetBitFlagValue(self, _flag, _enabled):
+            pass
+
+        def GetTextArr(self):
+            return self.array
+
+    class _Dimension:
+        def __init__(self):
+            self.drawing = _Drawing()
+            self.source = _Source()
+            self.text = _Text()
+
+        def GetDPar(self):
+            return self.drawing
+
+        def GetSPar(self):
+            return self.source
+
+        def GetTPar(self):
+            return self.text
+
+    class _Document:
+        def __init__(self):
+            self.dimensions = []
+
+        def ksLinDimension(self, dimension):
+            self.dimensions.append(dimension)
+            return True
+
+    class _Kompas:
+        def GetParamStruct(self, parameter_type):
+            return _Dimension() if parameter_type == "dimension" else type("Char", (), {})()
+
+    document = _Document()
+    constants = SimpleNamespace(ko_LDimParam="dimension", ko_Char255="char", _SUFFIX="suffix")
+    _add_overall_dimensions(document, _Kompas(), constants, tmp_path / "Pallet_1200x800.a3d", (1200, 800, 145.5))
+
+    assert len(document.dimensions) == 3
+    assert [dimension.text.array.items for dimension in document.dimensions] == [
+        ["1200", "*"], ["800", "*"], ["145.5", "*"],
+    ]
+
+
+def test_kompas_assembly_dimensions_are_read_from_saved_pallet_envelope(tmp_path):
+    (tmp_path / ".palletlab-drawing.json").write_text(
+        '{"pallet":{"length":1200,"width":800,"height":145}}', encoding="utf-8"
+    )
+
+    assert _overall_dimensions(tmp_path / "Pallet_1200x800.a3d", tmp_path, None) == (1200.0, 800.0, 145.0)

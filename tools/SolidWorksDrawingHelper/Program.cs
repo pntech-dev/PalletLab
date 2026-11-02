@@ -51,9 +51,10 @@ try
         throw new InvalidOperationException("SolidWorks did not create a drawing document.");
     var drawing = (DrawingDoc)(sw.IActiveDoc2 ?? throw new InvalidOperationException("Drawing document is not active."));
     var drawingModel = (ModelDoc2)drawing;
+    PalletViewLayout? palletViewLayout = null;
     ApplyGostSheetScale(sw, drawing, pallet, hasAssemblyRequirements);
     if (pallet?.Pallet is not null)
-        CreatePalletOrthographicViews(drawing, model, modelPath, pallet, hasAssemblyRequirements);
+        palletViewLayout = CreatePalletOrthographicViews(drawing, model, modelPath, pallet, hasAssemblyRequirements);
     else if (!drawing.Create3rdAngleViews2(modelPath))
         throw new InvalidOperationException("SolidWorks did not create standard views.");
     // View insertion can apply the user's automatic-scale preference.  Apply
@@ -61,8 +62,15 @@ try
     ApplyGostSheetScale(sw, drawing, pallet, hasAssemblyRequirements);
     drawingModel.ForceRebuild3(false);
     RemoveSurfaceFinishSymbols(drawing, drawingModel);
+    // Assembly views have an explicitly controlled layout, so the three
+    // reference dimensions can be placed precisely on their outside edges.
+    if (pallet?.Pallet is not null && palletViewLayout is not null)
+        AddOverallDimensions(drawing, pallet.Pallet, palletViewLayout);
     if (hasAssemblyRequirements)
+    {
         AddAssemblyTechnicalRequirements(drawingModel);
+        AddAssemblySpecification(drawingModel, pallet?.Specification);
+    }
     drawingModel.ForceRebuild3(false);
     drawingModel.GraphicsRedraw2();
     drawingModel.SaveAs3(Path.GetFullPath(args[2]), (int)swSaveAsVersion_e.swSaveAsCurrentVersion, (int)swSaveAsOptions_e.swSaveAsOptions_Silent);
@@ -143,7 +151,7 @@ static void CenterProjectedViewGroup(
     };
 }
 
-static void CreatePalletOrthographicViews(
+static PalletViewLayout CreatePalletOrthographicViews(
     DrawingDoc drawing, ModelDoc2 model, string modelPath, PalletDrawingData pallet, bool reserveAssemblyRequirements)
 {
     var sheet = (Sheet)drawing.GetCurrentSheet();
@@ -203,6 +211,10 @@ static void CreatePalletOrthographicViews(
     if (!top.AlignWithView((int)swAlignViewTypes_e.swAlignViewVerticalCenter, side)
         || !end.AlignWithView((int)swAlignViewTypes_e.swAlignViewHorizontalCenter, side))
         throw new InvalidOperationException("SolidWorks did not preserve the projected-view alignment.");
+    return new PalletViewLayout(
+        sideX - sideWidth / 2d, sideY - sideHeight / 2d, sideWidth, sideHeight,
+        topX - sideWidth / 2d, topY - topHeight / 2d, topHeight,
+        endX - endWidth / 2d, endY - sideHeight / 2d, endWidth);
 }
 
 static string ResolveStandardViewName(ModelDoc2 model, params string[] fragments)
@@ -287,9 +299,88 @@ static void AddAssemblyTechnicalRequirements(ModelDoc2 drawingModel)
     annotation.SetPosition(AssemblyRequirementsLeft, AssemblyRequirementsTop, 0.0);
 }
 
+static void AddOverallDimensions(DrawingDoc drawing, PalletEnvelope dimensions, PalletViewLayout layout)
+{
+    // CreateLinearDim4 makes native dimension objects with extension lines
+    // and arrows.  The dimensions are deliberately non-associative reference
+    // dimensions: they show only the pallet envelope, exactly as requested.
+    CreateReferenceLinearDimension(
+        drawing, layout.SideLeft, layout.SideBottom - 0.015, layout.SideLeft + layout.SideWidth, layout.SideBottom - 0.015,
+        layout.SideLeft, layout.SideBottom, layout.SideLeft + layout.SideWidth, layout.SideBottom,
+        dimensions.Length, 0d);
+    CreateReferenceLinearDimension(
+        drawing, layout.EndLeft, layout.EndBottom - 0.015, layout.EndLeft + layout.EndWidth, layout.EndBottom - 0.015,
+        layout.EndLeft, layout.EndBottom, layout.EndLeft + layout.EndWidth, layout.EndBottom,
+        dimensions.Width, 0d);
+    CreateReferenceLinearDimension(
+        drawing, layout.EndLeft + layout.EndWidth + 0.015, layout.EndBottom, layout.EndLeft + layout.EndWidth + 0.015, layout.EndBottom + layout.SideHeight,
+        layout.EndLeft + layout.EndWidth, layout.EndBottom, layout.EndLeft + layout.EndWidth, layout.EndBottom + layout.SideHeight,
+        dimensions.Height, Math.PI / 2d);
+}
+
+static void CreateReferenceLinearDimension(
+    DrawingDoc drawing, double dimensionX1, double dimensionY1, double dimensionX2, double dimensionY2,
+    double extensionX1, double extensionY1, double extensionX2, double extensionY2, double value, double textAngle)
+{
+    var center = new[] { (dimensionX1 + dimensionX2) / 2d, (dimensionY1 + dimensionY2) / 2d, 0d };
+    var result = drawing.CreateLinearDim4(
+        new[] { dimensionX1, dimensionY1, 0d }, new[] { dimensionX2, dimensionY2, 0d }, new[] { 0d, 0d, 1d },
+        new[] { extensionX1, extensionY1, 0d }, new[] { extensionX2, extensionY2, 0d }, center,
+        value / 1000d, textAngle, 0.004d) as DisplayDimension
+        ?? throw new InvalidOperationException("SolidWorks did not create an overall dimension.");
+    result.SetText((int)swDimensionTextParts_e.swDimensionTextSuffix, "*");
+}
+
+static void AddAssemblySpecification(ModelDoc2 drawingModel, SpecificationRow[]? rows)
+{
+    if (rows is not { Length: > 0 })
+        return;
+
+    // A native General Table is deliberately used instead of an image or a
+    // pasted spreadsheet: every cell remains editable in SolidWorks.
+    var table = drawingModel.Extension.InsertGeneralTableAnnotation(
+        true, 0.050, 0.080,
+        (int)swBOMConfigurationAnchorType_e.swBOMConfigurationAnchor_TopLeft,
+        "", rows.Length + 1, 4)
+        ?? throw new InvalidOperationException("SolidWorks did not create the assembly specification table.");
+    var annotation = table.GetAnnotation()
+        ?? throw new InvalidOperationException("SolidWorks did not expose the specification table annotation.");
+    // InsertGeneralTableAnnotation may initially attach a new table to the
+    // graphics viewport.  Reposition it explicitly in the active sheet's
+    // coordinates; this keeps it inside the lower-left working area.
+    if (!annotation.SetPosition(0.050, 0.080, 0.0))
+        throw new InvalidOperationException("SolidWorks did not position the assembly specification table on the sheet.");
+    var headers = new[] { "Поз.", "Наименование", "Размеры, мм", "Кол." };
+    for (var column = 0; column < headers.Length; column++)
+        table.Text[0, column] = headers[column];
+
+    for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
+    {
+        var row = rows[rowIndex];
+        var tableRow = rowIndex + 1;
+        table.Text[tableRow, 0] = row.Position.ToString();
+        table.Text[tableRow, 1] = row.Name;
+        table.Text[tableRow, 2] = row.Dimensions;
+        table.Text[tableRow, 3] = row.Quantity.ToString();
+    }
+    table.SetColumnWidth(0, 0.015, 0);
+    table.SetColumnWidth(1, 0.040, 0);
+    table.SetColumnWidth(2, 0.050, 0);
+    table.SetColumnWidth(3, 0.015, 0);
+}
+
 sealed class PalletDrawingData
 {
     public PalletEnvelope? Pallet { get; init; }
+    public SpecificationRow[]? Specification { get; init; }
+}
+
+sealed class SpecificationRow
+{
+    public int Position { get; init; }
+    public string Name { get; init; } = "";
+    public string Dimensions { get; init; } = "";
+    public int Quantity { get; init; }
 }
 
 sealed class PalletEnvelope
@@ -298,4 +389,9 @@ sealed class PalletEnvelope
     public double Width { get; init; }
     public double Height { get; init; }
 }
+
+sealed record PalletViewLayout(
+    double SideLeft, double SideBottom, double SideWidth, double SideHeight,
+    double TopLeft, double TopBottom, double TopHeight,
+    double EndLeft, double EndBottom, double EndWidth);
 
