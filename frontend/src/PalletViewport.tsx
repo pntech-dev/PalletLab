@@ -1,4 +1,4 @@
-import { Line, OrbitControls, Text } from "@react-three/drei";
+import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { useEffect } from "react";
 
@@ -9,7 +9,10 @@ export type ViewportBeam = {
   size: [number, number, number];
 };
 export type CameraPreset = "isometric" | "top" | "front" | "side";
-export type ViewportDimension = { value: number; start: [number, number, number]; end: [number, number, number] };
+export type ViewportDimension = {
+  value: number; start: [number, number, number]; end: [number, number, number];
+  startExtension: [number, number, number] | null; endExtension: [number, number, number] | null;
+};
 
 function point([x, y, z]: [number, number, number]): [number, number, number] { return [x / 1000, z / 1000, y / 1000]; }
 
@@ -36,7 +39,12 @@ export default function PalletViewport({ beams, dimensions, preset }: { beams: V
     {dimensions.map((dimension, index) => {
       const start = point(dimension.start); const end = point(dimension.end);
       const middle: [number, number, number] = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2, (start[2] + end[2]) / 2];
-      return <group key={index}><Line points={[start, end]} color="#315b6c" lineWidth={1.5} /><Text position={middle} fontSize={0.045} color="#1d2a33" anchorX="center" anchorY="middle">{dimension.value.toFixed(0)}</Text></group>;
+      return <group key={index}>
+        {dimension.startExtension ? <Line points={[point(dimension.startExtension), start]} color="#315b6c" lineWidth={1} /> : null}
+        {dimension.endExtension ? <Line points={[point(dimension.endExtension), end]} color="#315b6c" lineWidth={1} /> : null}
+        <Line points={[start, end]} color="#315b6c" lineWidth={1.5} />
+        <Html position={middle} center distanceFactor={12} style={{ pointerEvents: "none" }}><span className="dimension-label">{dimension.value.toFixed(0)}</span></Html>
+      </group>;
     })}
     <OrbitControls makeDefault />
   </Canvas></div>;
