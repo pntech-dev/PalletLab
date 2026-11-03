@@ -43,13 +43,18 @@ export function App() {
   const [calculation, setCalculation] = useState<CalculationResponse | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [materials, setMaterials] = useState<Material[]>([]);
+  const [distanceText, setDistanceText] = useState<Record<"length" | "width", string>>({ length: "", width: "" });
 
   useEffect(() => {
     function connect() {
       const api = window.pywebview?.api;
       if (!api) return;
       api.status().then(setStatus).catch(() => setStatus(null));
-      api.default_project().then((value) => setProject(value as Project));
+      api.default_project().then((value) => {
+        const project = value as Project;
+        setProject(project);
+        setDistanceText({ length: project.pallet.length.support_distances.join(" "), width: project.pallet.width.support_distances.join(" ") });
+      });
       api.materials().then(setMaterials);
     }
 
@@ -78,9 +83,18 @@ export function App() {
 
   function updateDirection(axis: "length" | "width", field: keyof Direction, value: string) {
     if (!project) return;
-    const parsed = field === "support_distances"
-      ? value.split(/\s+/).filter(Boolean).map(Number)
-      : Number(value);
+    if (field === "support_distances") {
+      setDistanceText({ ...distanceText, [axis]: value });
+      const distances = value.split(/\s+/).filter(Boolean).map(Number);
+      if (distances.some(Number.isNaN)) return;
+      updateDirectionValue(axis, field, distances);
+      return;
+    }
+    updateDirectionValue(axis, field, Number(value));
+  }
+
+  function updateDirectionValue(axis: "length" | "width", field: keyof Direction, parsed: number | number[]) {
+    if (!project) return;
     const direction = { ...project.pallet[axis], [field]: parsed } as Direction;
     setProject({ ...project, pallet: {
       ...project.pallet,
@@ -148,7 +162,7 @@ export function App() {
             <legend>{axis === "length" ? "Length direction" : "Width direction"}</legend>
             {(["beam_height", "beam_width", "support_distances", "first_edge_to_support", "last_support_to_edge", "margin_start", "margin_end"] as const).map((field) => <label key={field}>
               {field.replaceAll("_", " ")}
-              <input value={Array.isArray(project.pallet[axis][field]) ? project.pallet[axis][field].join(" ") : project.pallet[axis][field]}
+              <input value={field === "support_distances" ? distanceText[axis] : project.pallet[axis][field]}
                 onChange={(event) => updateDirection(axis, field, event.target.value)} />
             </label>)}
           </fieldset>)}
