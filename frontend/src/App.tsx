@@ -30,6 +30,8 @@ declare global {
         default_project: () => Promise<object>;
         calculate: (project: object) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;
+        save_project: (project: object) => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
+        open_project: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string; project?: Project }>;
       };
     };
   }
@@ -59,6 +61,12 @@ export function App() {
     const api = window.pywebview?.api;
     if (!api) return;
     if (project) setCalculation(await api.calculate(project));
+  }
+
+  async function saveProject() { if (project) setCalculation(await window.pywebview!.api!.save_project(project) as CalculationResponse); }
+  async function openProject() {
+    const response = await window.pywebview!.api!.open_project();
+    if (response.project) setProject(response.project);
   }
 
   function updateDirection(axis: "length" | "width", field: keyof Direction, value: string) {
@@ -95,6 +103,7 @@ export function App() {
         <button type="button" onClick={calculateDefaultProject} disabled={!status}>
           Calculate project
         </button>
+        <div className="file-actions"><button type="button" onClick={openProject} disabled={!status}>Open</button><button type="button" onClick={saveProject} disabled={!project}>Save</button></div>
         {project ? <div className="directions">
           <fieldset className="rounding">
             <legend>Pallet rounding</legend>

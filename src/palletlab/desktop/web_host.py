@@ -14,6 +14,12 @@ from palletlab.version import __version__
 class WebApplicationApi:
     """Minimal bridge exposed to JavaScript while application commands migrate."""
 
+    def __init__(self) -> None:
+        self._window: Any | None = None
+
+    def attach_window(self, window: Any) -> None:
+        self._window = window
+
     def status(self) -> dict[str, Any]:
         """Return a dependency-free handshake for the frontend shell."""
         return {"application": "PalletLab", "version": __version__, "snapshotVersion": SNAPSHOT_VERSION}
@@ -29,6 +35,26 @@ class WebApplicationApi:
     def materials(self) -> list[dict[str, str]]:
         return ApplicationService().materials()
 
+    def save_project(self, project: object) -> dict[str, Any]:
+        path = self._choose_file("save")
+        return {"ok": False, "cancelled": True} if path is None else ApplicationService().save(project, path)
+
+    def open_project(self) -> dict[str, Any]:
+        path = self._choose_file("open")
+        return {"ok": False, "cancelled": True} if path is None else ApplicationService().load(path)
+
+    def _choose_file(self, mode: str) -> str | None:
+        if self._window is None:
+            raise RuntimeError("Web window is not ready.")
+        import webview
+
+        selected = self._window.create_file_dialog(
+            webview.FileDialog.SAVE if mode == "save" else webview.FileDialog.OPEN,
+            save_filename="project.palletlab.json",
+            file_types=("PalletLab project (*.palletlab.json)",),
+        )
+        return str(selected[0]) if selected else None
+
 
 def frontend_entrypoint() -> Path:
     """Locate the Vite entrypoint in source and frozen PyInstaller builds."""
@@ -43,13 +69,15 @@ def run_web_application() -> None:
     """Open the compiled React application in a native Windows webview."""
     import webview
 
-    webview.create_window(
+    api = WebApplicationApi()
+    window = webview.create_window(
         f"PalletLab {__version__}",
         url=str(frontend_entrypoint()),
-        js_api=WebApplicationApi(),
+        js_api=api,
         width=1400,
         height=900,
         min_size=(900, 650),
         maximized=True,
     )
+    api.attach_window(window)
     webview.start()

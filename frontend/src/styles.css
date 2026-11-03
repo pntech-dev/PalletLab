@@ -8,6 +8,7 @@ h1 { margin: 0; font-size: 1.75rem; }
 .status { margin-top: 24px; color: #3f5965; font-family: Consolas, monospace; }
 button { border: 0; border-radius: 6px; background: #315b6c; color: #fff; cursor: pointer; padding: 10px 14px; }
 button:disabled { cursor: wait; opacity: 0.55; }
+.file-actions { display: flex; gap: 8px; margin-top: 12px; }
 .result { color: #245b42; font-weight: 600; }
 .error { color: #a12f2f; }
 .directions { display: grid; gap: 16px; margin-top: 24px; }
