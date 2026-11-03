@@ -57,11 +57,17 @@ export function App() {
     return () => window.removeEventListener("pywebviewready", connect);
   }, []);
 
-  async function calculateDefaultProject() {
+  async function calculateProject() {
     const api = window.pywebview?.api;
     if (!api) return;
     if (project) setCalculation(await api.calculate(project));
   }
+
+  useEffect(() => {
+    if (!status || !project) return;
+    const timeout = window.setTimeout(() => { void calculateProject(); }, 300);
+    return () => window.clearTimeout(timeout);
+  }, [project, status]);
 
   async function saveProject() { if (project) setCalculation(await window.pywebview!.api!.save_project(project) as CalculationResponse); }
   async function openProject() {
@@ -100,7 +106,7 @@ export function App() {
         <p className="status">
           {status ? `${status.application} ${status.version} · API ${status.snapshotVersion}` : "Connecting to Python…"}
         </p>
-        <button type="button" onClick={calculateDefaultProject} disabled={!status}>
+        <button type="button" onClick={calculateProject} disabled={!status}>
           Calculate project
         </button>
         <div className="file-actions"><button type="button" onClick={openProject} disabled={!status}>Open</button><button type="button" onClick={saveProject} disabled={!project}>Save</button></div>
