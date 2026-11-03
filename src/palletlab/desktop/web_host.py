@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from palletlab.application.service import ApplicationService
 from palletlab.application.snapshots import SNAPSHOT_VERSION
 from palletlab.version import __version__
 
@@ -16,6 +17,10 @@ class WebApplicationApi:
     def status(self) -> dict[str, Any]:
         """Return a dependency-free handshake for the frontend shell."""
         return {"application": "PalletLab", "version": __version__, "snapshotVersion": SNAPSHOT_VERSION}
+
+    def calculate(self, project: object) -> dict[str, Any]:
+        """Calculate a persisted project payload for the React frontend."""
+        return ApplicationService().calculate(project)
 
 
 def frontend_entrypoint() -> Path:
