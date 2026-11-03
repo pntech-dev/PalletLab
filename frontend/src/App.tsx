@@ -19,7 +19,7 @@ type Direction = {
   first_edge_to_support: number; last_support_to_edge: number; margin_start: number; margin_end: number;
   round_pallet_size: boolean; rounding_step: 5 | 50;
 };
-type Layer = { axis: "length" | "width"; direction: Direction };
+type Layer = { id: string; axis: "length" | "width"; direction: Direction };
 type Project = { pallet: { length: Direction; width: Direction; layers: Layer[]; upper_layer: "length" | "width"; material_id: string } };
 type Material = { id: string; name: string };
 
@@ -118,6 +118,25 @@ export function App() {
     } });
   }
 
+  function updateLayerAxis(index: number, axis: "length" | "width") {
+    if (!project) return;
+    const layers = project.pallet.layers.map((layer, layerIndex) => layerIndex === index
+      ? { ...layer, axis, direction: project.pallet[axis] }
+      : layer);
+    setProject({ ...project, pallet: { ...project.pallet, layers } });
+  }
+
+  function addLayer() {
+    if (!project) return;
+    const layerId = `layer-${project.pallet.layers.length}`;
+    setProject({ ...project, pallet: { ...project.pallet, layers: [...project.pallet.layers, { id: layerId, axis: "length", direction: project.pallet.length }] } });
+  }
+
+  function removeLayer(index: number) {
+    if (!project || project.pallet.layers.length <= 2) return;
+    setProject({ ...project, pallet: { ...project.pallet, layers: project.pallet.layers.filter((_, layerIndex) => layerIndex !== index) } });
+  }
+
   const rounding = project?.pallet.length.round_pallet_size
     ? String(project.pallet.length.rounding_step) as "5" | "50"
     : "none";
@@ -157,6 +176,17 @@ export function App() {
                 {materials.map((material) => <option key={material.id} value={material.id}>{material.name}</option>)}
               </select>
             </label>
+          </fieldset>
+          <fieldset className="layers">
+            <legend>Layers</legend>
+            {project.pallet.layers.map((layer, index) => <div className="layer-row" key={layer.id}>
+              <span>{index + 1}. {layer.id}</span>
+              <select value={layer.axis} onChange={(event) => updateLayerAxis(index, event.target.value as "length" | "width")}>
+                <option value="length">Length</option><option value="width">Width</option>
+              </select>
+              <button type="button" onClick={() => removeLayer(index)} disabled={project.pallet.layers.length <= 2}>Remove</button>
+            </div>)}
+            <button type="button" onClick={addLayer}>Add layer</button>
           </fieldset>
           {(["length", "width"] as const).map((axis) => <fieldset key={axis}>
             <legend>{axis === "length" ? "Length direction" : "Width direction"}</legend>
