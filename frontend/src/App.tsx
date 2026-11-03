@@ -19,7 +19,8 @@ type Direction = {
   first_edge_to_support: number; last_support_to_edge: number; margin_start: number; margin_end: number;
   round_pallet_size: boolean; rounding_step: 5 | 50;
 };
-type Project = { pallet: { length: Direction; width: Direction; upper_layer: "length" | "width"; material_id: string } };
+type Layer = { axis: "length" | "width"; direction: Direction };
+type Project = { pallet: { length: Direction; width: Direction; layers: Layer[]; upper_layer: "length" | "width"; material_id: string } };
 type Material = { id: string; name: string };
 
 declare global {
@@ -80,7 +81,12 @@ export function App() {
     const parsed = field === "support_distances"
       ? value.split(/\s+/).filter(Boolean).map(Number)
       : Number(value);
-    setProject({ ...project, pallet: { ...project.pallet, [axis]: { ...project.pallet[axis], [field]: parsed } } });
+    const direction = { ...project.pallet[axis], [field]: parsed } as Direction;
+    setProject({ ...project, pallet: {
+      ...project.pallet,
+      [axis]: direction,
+      layers: project.pallet.layers.map((layer) => layer.axis === axis ? { ...layer, direction } : layer),
+    } });
   }
 
   function setRounding(value: "none" | "5" | "50") {
@@ -90,7 +96,12 @@ export function App() {
       round_pallet_size: value !== "none",
       rounding_step: value === "50" ? 50 : 5,
     });
-    setProject({ ...project, pallet: { ...project.pallet, length: update(project.pallet.length), width: update(project.pallet.width) } });
+    const length = update(project.pallet.length);
+    const width = update(project.pallet.width);
+    setProject({ ...project, pallet: {
+      ...project.pallet, length, width,
+      layers: project.pallet.layers.map((layer) => ({ ...layer, direction: update(layer.direction) })),
+    } });
   }
 
   const rounding = project?.pallet.length.round_pallet_size
