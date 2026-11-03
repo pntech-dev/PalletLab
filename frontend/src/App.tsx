@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import type { CameraPreset, ViewportBeam } from "./PalletViewport";
+import type { CameraPreset, ViewportBeam, ViewportDimension } from "./PalletViewport";
 
 const PalletViewport = lazy(() => import("./PalletViewport"));
 
@@ -13,7 +13,7 @@ type CalculationResponse = {
   ok: boolean;
   error?: string;
   snapshot?: {
-    pallet: { size: { length: number; width: number; height: number }; beams: ViewportBeam[] } | null;
+    pallet: { size: { length: number; width: number; height: number }; beams: ViewportBeam[]; dimensions: ViewportDimension[] } | null;
   };
 };
 
@@ -205,7 +205,7 @@ export function App() {
           <><p className="result">
             {calculation.snapshot.pallet.size.length} × {calculation.snapshot.pallet.size.width} × {calculation.snapshot.pallet.size.height} mm
             · {calculation.snapshot.pallet.beams.length} beams
-          </p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}</div><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} preset={camera} /></Suspense></>
+          </p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}</div><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} /></Suspense></>
         ) : null}
         {calculation && !calculation.ok ? <p className="error">{calculation.error}</p> : null}
       </section>
