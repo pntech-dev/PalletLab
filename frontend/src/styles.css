@@ -1,8 +1,8 @@
 :root { font-family: "Segoe UI", sans-serif; color: #1d2a33; background: #edf1f3; }
 * { box-sizing: border-box; }
 body { margin: 0; }
-.migration-shell { display: grid; min-height: 100vh; place-items: center; padding: 32px; }
-.migration-shell section { width: min(560px, 100%); border: 1px solid #d6dde1; border-radius: 12px; background: #fff; padding: 32px; box-shadow: 0 12px 32px rgb(20 38 48 / 8%); }
+.migration-shell { min-height: 100vh; padding: 24px; }
+.migration-shell section { width: 100%; min-height: calc(100vh - 48px); border: 1px solid #d6dde1; border-radius: 12px; background: #fff; padding: 28px; box-shadow: 0 12px 32px rgb(20 38 48 / 8%); }
 .eyebrow { margin: 0 0 8px; color: #607580; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 h1 { margin: 0; font-size: 1.75rem; }
 .status { margin-top: 24px; color: #3f5965; font-family: Consolas, monospace; }
@@ -11,15 +11,16 @@ button:disabled { cursor: wait; opacity: 0.55; }
 .file-actions { display: flex; gap: 8px; margin-top: 12px; }
 .result { color: #245b42; font-weight: 600; }
 .error { color: #a12f2f; }
-.viewport { height: 420px; margin-top: 16px; overflow: hidden; border: 1px solid #d6dde1; border-radius: 8px; }
+.viewport { height: min(58vh, 680px); margin-top: 16px; overflow: hidden; border: 1px solid #d6dde1; border-radius: 8px; }
 .camera-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.directions { display: grid; gap: 16px; margin-top: 24px; }
+.directions { display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap: 16px; margin-top: 24px; }
 fieldset { display: grid; gap: 8px; border: 1px solid #d6dde1; border-radius: 8px; padding: 12px; }
 .rounding { grid-template-columns: repeat(3, max-content); align-items: center; }
 .project-options { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
-.layers { gap: 10px; }
+.layers { grid-column: 1 / -1; gap: 10px; }
 .layer-row { display: grid; grid-template-columns: minmax(100px, 1fr) 160px auto; align-items: center; gap: 8px; }
 legend { padding: 0 4px; font-weight: 700; }
 label { display: grid; gap: 4px; color: #4a5a63; font-size: 0.8rem; }
 input { border: 1px solid #bdc8cd; border-radius: 4px; padding: 7px; font: inherit; }
 select { border: 1px solid #bdc8cd; border-radius: 4px; padding: 7px; font: inherit; }
+@media (max-width: 900px) { .directions { grid-template-columns: 1fr; } .project-options, .layers { grid-column: auto; } }

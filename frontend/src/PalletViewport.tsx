@@ -26,8 +26,8 @@ export default function PalletViewport({ beams, preset }: { beams: ViewportBeam[
     <ambientLight intensity={1.5} />
     <directionalLight position={[5, 8, 4]} intensity={2} castShadow />
     <gridHelper args={[10, 20, "#aab9c1", "#d9e1e5"]} />
-    {beams.map((beam) => <mesh key={`${beam.layerId}:${beam.index}`} position={beam.center.map((value) => value / 1000) as [number, number, number]}>
-      <boxGeometry args={beam.size.map((value) => value / 1000) as [number, number, number]} />
+    {beams.map((beam) => <mesh key={`${beam.layerId}:${beam.index}`} position={[beam.center[0] / 1000, beam.center[2] / 1000, beam.center[1] / 1000]}>
+      <boxGeometry args={[beam.size[0] / 1000, beam.size[2] / 1000, beam.size[1] / 1000]} />
       <meshStandardMaterial color="#b88254" roughness={0.72} />
     </mesh>)}
     <OrbitControls makeDefault />
