@@ -48,6 +48,7 @@ export function App() {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [distanceText, setDistanceText] = useState<Record<"length" | "width", string>>({ length: "", width: "" });
   const [camera, setCamera] = useState<CameraPreset>("isometric");
+  const [selectedBeam, setSelectedBeam] = useState<number | null>(null);
 
   useEffect(() => {
     function connect() {
@@ -205,7 +206,7 @@ export function App() {
           <><p className="result">
             {calculation.snapshot.pallet.size.length} × {calculation.snapshot.pallet.size.width} × {calculation.snapshot.pallet.size.height} mm
             · {calculation.snapshot.pallet.beams.length} beams
-          </p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}</div><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} /></Suspense></>
+          </p><p className="selection-status">{selectedBeam === null ? "Select a beam in the 3D view" : `Selected beam: ${selectedBeam + 1}`}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}</div><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeam={selectedBeam} onSelectBeam={setSelectedBeam} /></Suspense></>
         ) : null}
         {calculation && !calculation.ok ? <p className="error">{calculation.error}</p> : null}
       </section>
