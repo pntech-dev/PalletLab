@@ -17,8 +17,9 @@ type CalculationResponse = {
 type Direction = {
   beam_height: number; beam_width: number; support_distances: number[];
   first_edge_to_support: number; last_support_to_edge: number; margin_start: number; margin_end: number;
+  round_pallet_size: boolean; rounding_step: 5 | 50;
 };
-type Project = { pallet: { length: Direction; width: Direction } };
+type Project = { pallet: { length: Direction; width: Direction; upper_layer: "length" | "width" } };
 
 declare global {
   interface Window {
@@ -64,6 +65,20 @@ export function App() {
     setProject({ ...project, pallet: { ...project.pallet, [axis]: { ...project.pallet[axis], [field]: parsed } } });
   }
 
+  function setRounding(value: "none" | "5" | "50") {
+    if (!project) return;
+    const update = (direction: Direction): Direction => ({
+      ...direction,
+      round_pallet_size: value !== "none",
+      rounding_step: value === "50" ? 50 : 5,
+    });
+    setProject({ ...project, pallet: { ...project.pallet, length: update(project.pallet.length), width: update(project.pallet.width) } });
+  }
+
+  const rounding = project?.pallet.length.round_pallet_size
+    ? String(project.pallet.length.rounding_step) as "5" | "50"
+    : "none";
+
   return (
     <main className="migration-shell">
       <section>
@@ -77,6 +92,15 @@ export function App() {
           Calculate project
         </button>
         {project ? <div className="directions">
+          <fieldset className="rounding">
+            <legend>Pallet rounding</legend>
+            {(["none", "5", "50"] as const).map((value) => <label key={value}>
+              <input type="radio" name="rounding" value={value}
+                checked={rounding === value}
+                onChange={() => setRounding(value)} />
+              {value === "none" ? "No rounding" : `Round ${value} mm`}
+            </label>)}
+          </fieldset>
           {(["length", "width"] as const).map((axis) => <fieldset key={axis}>
             <legend>{axis === "length" ? "Length direction" : "Width direction"}</legend>
             {(["beam_height", "beam_width", "support_distances", "first_edge_to_support", "last_support_to_edge", "margin_start", "margin_end"] as const).map((field) => <label key={field}>

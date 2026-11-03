@@ -12,6 +12,7 @@ button:disabled { cursor: wait; opacity: 0.55; }
 .error { color: #a12f2f; }
 .directions { display: grid; gap: 16px; margin-top: 24px; }
 fieldset { display: grid; gap: 8px; border: 1px solid #d6dde1; border-radius: 8px; padding: 12px; }
+.rounding { grid-template-columns: repeat(3, max-content); align-items: center; }
 legend { padding: 0 4px; font-weight: 700; }
 label { display: grid; gap: 4px; color: #4a5a63; font-size: 0.8rem; }
 input { border: 1px solid #bdc8cd; border-radius: 4px; padding: 7px; font: inherit; }
