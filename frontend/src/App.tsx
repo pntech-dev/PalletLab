@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
+import type { ViewportBeam } from "./PalletViewport";
+
+const PalletViewport = lazy(() => import("./PalletViewport"));
 
 type ApplicationStatus = {
   application: string;
@@ -10,7 +13,7 @@ type CalculationResponse = {
   ok: boolean;
   error?: string;
   snapshot?: {
-    pallet: { size: { length: number; width: number; height: number }; beams: unknown[] } | null;
+    pallet: { size: { length: number; width: number; height: number }; beams: ViewportBeam[] } | null;
   };
 };
 
@@ -198,10 +201,10 @@ export function App() {
           </fieldset>)}
         </div> : null}
         {calculation?.ok && calculation.snapshot?.pallet ? (
-          <p className="result">
+          <><p className="result">
             {calculation.snapshot.pallet.size.length} × {calculation.snapshot.pallet.size.width} × {calculation.snapshot.pallet.size.height} mm
             · {calculation.snapshot.pallet.beams.length} beams
-          </p>
+          </p><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} /></Suspense></>
         ) : null}
         {calculation && !calculation.ok ? <p className="error">{calculation.error}</p> : null}
       </section>
