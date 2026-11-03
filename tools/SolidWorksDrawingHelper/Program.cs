@@ -8,9 +8,10 @@ const double WorkingLowerReserve = 0.080;
 const double WorkingUpperMargin = 0.020;
 const double ProjectedViewGap = 0.015;
 const double ManualAnnotationReserve = 0.035;
-const double AssemblyRequirementsLeft = 0.230;
-const double AssemblyRequirementsTop = 0.095;
-const double AssemblyRequirementsLowerReserve = 0.110;
+// Coordinates are in metres in the active drawing sheet.
+const double AssemblyRequirementsLeftMargin = 0.025;
+const double AssemblyRequirementsBottomMargin = 0.010;
+const double AssemblyRequirementsLowerReserve = 0.135;
 const string AssemblyTechnicalRequirements =
     "1. *Размеры для справок.\n" +
     "2. Сварные соединения по ГОСТ 14771-76.\n" +
@@ -68,8 +69,8 @@ try
         AddOverallDimensions(drawing, pallet.Pallet, palletViewLayout);
     if (hasAssemblyRequirements)
     {
-        AddAssemblyTechnicalRequirements(drawingModel);
         AddAssemblySpecification(drawingModel, pallet?.Specification);
+        AddAssemblyTechnicalRequirements(drawing, drawingModel);
     }
     drawingModel.ForceRebuild3(false);
     drawingModel.GraphicsRedraw2();
@@ -283,7 +284,7 @@ static void RemoveSurfaceFinishSymbols(DrawingDoc drawing, ModelDoc2 drawingMode
     }
 }
 
-static void AddAssemblyTechnicalRequirements(ModelDoc2 drawingModel)
+static void AddAssemblyTechnicalRequirements(DrawingDoc drawing, ModelDoc2 drawingModel)
 {
     // Insert a free-standing native note, rather than an annotation tied to a
     // projected view.  It therefore survives view edits and remains directly
@@ -293,10 +294,45 @@ static void AddAssemblyTechnicalRequirements(ModelDoc2 drawingModel)
         ?? throw new InvalidOperationException("SolidWorks did not create the assembly technical requirements note.");
     var annotation = note.GetAnnotation() as Annotation
         ?? throw new InvalidOperationException("SolidWorks did not expose the requirements note annotation.");
-    // The standard A3 GOST title block occupies the lower-right corner.  Put
-    // the requirements directly above it (as in the enterprise macro), and
-    // reserve that zone when laying out the views.
-    annotation.SetPosition(AssemblyRequirementsLeft, AssemblyRequirementsTop, 0.0);
+    // A note's position is its upper-left corner, not its lower-left corner.
+    // Seed it at the upper edge of the sheet, measure its actual text bounds,
+    // then translate those bounds so their lower-left corner has the requested
+    // margins: 25 mm from the left sheet edge and 10 mm from the bottom edge.
+    // This remains correct if a drafting standard changes the font, line
+    // spacing, or number of requirement lines.
+    var sheet = (Sheet)drawing.GetCurrentSheet();
+    var properties = (Array)sheet.GetProperties2();
+    var sheetHeight = Convert.ToDouble(properties.GetValue(6));
+    if (!annotation.SetPosition2(
+            AssemblyRequirementsLeftMargin,
+            sheetHeight - AssemblyRequirementsBottomMargin,
+            0.0))
+        throw new InvalidOperationException("SolidWorks did not set the initial position of the technical requirements.");
+
+    drawingModel.ForceRebuild3(false);
+    var initialExtent = GetNoteExtent(note);
+    var initialPosition = (Array)annotation.GetPosition();
+    var targetX = Convert.ToDouble(initialPosition.GetValue(0))
+        + AssemblyRequirementsLeftMargin - initialExtent.Left;
+    var targetY = Convert.ToDouble(initialPosition.GetValue(1))
+        + AssemblyRequirementsBottomMargin - initialExtent.Bottom;
+    if (!annotation.SetPosition2(targetX, targetY, 0.0))
+        throw new InvalidOperationException("SolidWorks did not position the technical requirements on the sheet.");
+
+    // SetPosition2 is the current API and SolidWorks may apply its own
+    // display rounding while rebuilding a sheet. The calculated position is
+    // still retained; do not turn that benign normalization into a failed
+    // drawing export.
+    drawingModel.ForceRebuild3(false);
+}
+
+static (double Left, double Bottom, double Right, double Top) GetNoteExtent(Note note)
+{
+    if (note.GetExtent() is not Array extent || extent.Length < 6)
+        throw new InvalidOperationException("SolidWorks did not return the technical requirements bounds.");
+    return (
+        Convert.ToDouble(extent.GetValue(0)), Convert.ToDouble(extent.GetValue(1)),
+        Convert.ToDouble(extent.GetValue(3)), Convert.ToDouble(extent.GetValue(4)));
 }
 
 static void AddOverallDimensions(DrawingDoc drawing, PalletEnvelope dimensions, PalletViewLayout layout)
