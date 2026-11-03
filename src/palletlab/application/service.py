@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from math import isfinite
 from pathlib import Path
 from typing import Any, cast
 
 from palletlab.application.snapshots import project_snapshot
 from palletlab.controllers.pallet_controller import PalletController
-from palletlab.core.models import DirectionInput, LayerInput
+from palletlab.core.models import BeamSection, DirectionInput, LayerInput
 from palletlab.core.materials import MATERIALS
 from palletlab.core.persistence import ProjectPersistenceError, load_project, project_from_dict, project_to_dict, save_project
 from palletlab.core.project_state import ProjectState
@@ -50,6 +51,29 @@ class ApplicationService:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось удалить выбранные брусья."}
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось пересчитать поддон."}
+        return {"ok": True, "snapshot": project_snapshot(state)}
+
+    def change_beam_sections(self, project: object, selection: object, section: object) -> dict[str, Any]:
+        """Apply one validated cross-section to selected rendered beams."""
+        try:
+            state = project_from_dict(project)
+        except ProjectPersistenceError as exc:
+            return {"ok": False, "error": str(exc)}
+        selections, error = _deletion_selection(selection)
+        if error:
+            return {"ok": False, "error": error}
+        beam_section, error = _beam_section(section)
+        if error:
+            return {"ok": False, "error": error}
+
+        controller, errors = self._controller_for(state)
+        if controller.recalculate_from_state(show_error=False) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
+        for layer_id, indices in selections.items():
+            for index in indices:
+                controller.set_section_selection(layer_id, index, True)
+        if controller.apply_section_change(beam_section) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось изменить сечение бруса."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
     def default_project(self) -> dict[str, Any]:
@@ -117,6 +141,26 @@ def _deletion_selection(selection: object) -> tuple[dict[str, tuple[int, ...]], 
             return {}, "Некорректный набор брусьев для удаления."
         validated[layer_id] = unique_indices
     return validated, None
+
+
+def _beam_section(section: object) -> tuple[BeamSection | None, str | None]:
+    """Parse the frontend cross-section without accepting malformed numbers."""
+    if not isinstance(section, dict):
+        return None, "Некорректное сечение бруса."
+    height = section.get("height")
+    width = section.get("width")
+    if (
+        not isinstance(height, (int, float))
+        or isinstance(height, bool)
+        or not isinstance(width, (int, float))
+        or isinstance(width, bool)
+        or not isfinite(height)
+        or not isfinite(width)
+        or height <= 0
+        or width <= 0
+    ):
+        return None, "Высота и ширина сечения должны быть положительными числами."
+    return BeamSection(float(height), float(width)), None
 
 
 class _Signal:

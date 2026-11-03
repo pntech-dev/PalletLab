@@ -26,6 +26,7 @@ type Direction = {
 type Layer = { id: string; axis: "length" | "width"; direction: Direction };
 type Project = { pallet: { length: Direction; width: Direction; layers: Layer[]; upper_layer: "length" | "width"; material_id: string } };
 type Material = { id: string; name: string };
+type BeamSection = { height: number; width: number };
 
 declare global {
   interface Window {
@@ -36,6 +37,7 @@ declare global {
         calculate: (project: object) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;
         delete_beams: (project: object, selection: Record<string, number[]>) => Promise<CalculationResponse>;
+        change_beam_sections: (project: object, selection: Record<string, number[]>, section: BeamSection) => Promise<CalculationResponse>;
         save_project: (project: object) => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
         open_project: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string; project?: Project }>;
       };
@@ -51,6 +53,7 @@ export function App() {
   const [distanceText, setDistanceText] = useState<Record<"length" | "width", string>>({ length: "", width: "" });
   const [camera, setCamera] = useState<CameraPreset>("isometric");
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
+  const [section, setSection] = useState<BeamSection>({ height: 70, width: 50 });
 
   useEffect(() => {
     function connect() {
@@ -105,6 +108,21 @@ export function App() {
       return byLayer;
     }, {});
     const response = await api.delete_beams(project, selection);
+    setCalculation(response);
+    if (response.ok && response.snapshot) {
+      setProject(response.snapshot.project);
+      setSelectedBeams([]);
+    }
+  }
+
+  async function changeSelectedBeamSections() {
+    const api = window.pywebview?.api;
+    if (!api || !project || selectedBeams.length === 0) return;
+    const selection = selectedBeams.reduce<Record<string, number[]>>((byLayer, beam) => {
+      (byLayer[beam.layerId] ??= []).push(beam.layerIndex);
+      return byLayer;
+    }, {});
+    const response = await api.change_beam_sections(project, selection, section);
     setCalculation(response);
     if (response.ok && response.snapshot) {
       setProject(response.snapshot.project);
@@ -232,7 +250,7 @@ export function App() {
           <><p className="result">
             {calculation.snapshot.pallet.size.length} × {calculation.snapshot.pallet.size.width} × {calculation.snapshot.pallet.size.height} mm
             · {calculation.snapshot.pallet.beams.length} beams
-          </p><p className="selection-status">{selectedBeams.length ? `Selected beams: ${selectedBeams.length}` : "Select beams in the 3D view"}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}<button type="button" onClick={deleteSelectedBeams} disabled={selectedBeams.length === 0}>Delete selected ({selectedBeams.length})</button></div><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeams={selectedBeams.map((beam) => `${beam.layerId}:${beam.layerIndex}`)} onToggleBeam={toggleBeam} /></Suspense></>
+          </p><p className="selection-status">{selectedBeams.length ? `Selected beams: ${selectedBeams.length}` : "Select beams in the 3D view"}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}<label>Section height<input type="number" min="1" value={section.height} onChange={(event) => setSection({ ...section, height: Number(event.target.value) })} /></label><label>Section width<input type="number" min="1" value={section.width} onChange={(event) => setSection({ ...section, width: Number(event.target.value) })} /></label><button type="button" onClick={changeSelectedBeamSections} disabled={selectedBeams.length === 0}>Change section</button><button type="button" onClick={deleteSelectedBeams} disabled={selectedBeams.length === 0}>Delete selected ({selectedBeams.length})</button></div><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeams={selectedBeams.map((beam) => `${beam.layerId}:${beam.layerIndex}`)} onToggleBeam={toggleBeam} /></Suspense></>
         ) : null}
         {calculation && !calculation.ok ? <p className="error">{calculation.error}</p> : null}
       </section>

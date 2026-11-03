@@ -32,6 +32,10 @@ class WebApplicationApi:
         """Apply a web viewport beam selection through the domain controller."""
         return ApplicationService().delete_beams(project, selection)
 
+    def change_beam_sections(self, project: object, selection: object, section: object) -> dict[str, Any]:
+        """Change selected beam cross-sections through the domain controller."""
+        return ApplicationService().change_beam_sections(project, selection, section)
+
     def default_project(self) -> dict[str, Any]:
         """Provide the temporary frontend with a valid starting project."""
         return ApplicationService().default_project()

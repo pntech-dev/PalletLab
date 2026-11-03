@@ -58,6 +58,27 @@ def test_delete_beams_rejects_an_empty_selection() -> None:
     assert response == {"ok": False, "error": "Выберите хотя бы один брус для удаления."}
 
 
+def test_change_beam_sections_updates_selected_beam_geometry() -> None:
+    service = ApplicationService()
+    calculated = service.calculate(service.default_project())
+    pallet = calculated["snapshot"]["pallet"]
+    beam = next(item for item in pallet["beams"] if item["layerId"] == "length" and item["layerIndex"] == 1)
+
+    response = service.change_beam_sections(
+        calculated["snapshot"]["project"],
+        {beam["layerId"]: [beam["layerIndex"]]},
+        {"height": 100, "width": 75},
+    )
+
+    assert response["ok"] is True
+    updated = next(
+        item
+        for item in response["snapshot"]["pallet"]["beams"]
+        if item["layerId"] == beam["layerId"] and item["layerIndex"] == beam["layerIndex"]
+    )
+    assert updated["size"] == [75.0, beam["size"][1], 100.0]
+
+
 def test_materials_expose_stable_ids_and_names() -> None:
     assert ApplicationService().materials() == [
         {"id": "pine", "name": "Сосна"},
