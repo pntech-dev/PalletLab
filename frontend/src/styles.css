@@ -13,7 +13,7 @@ button:disabled { cursor: wait; opacity: 0.55; }
 .error { color: #a12f2f; }
 .viewport { height: min(58vh, 680px); margin-top: 16px; overflow: hidden; border: 1px solid #d6dde1; border-radius: 8px; }
 .camera-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.dimension-label { display: block; padding: 2px 4px; border-radius: 3px; background: rgb(255 255 255 / 82%); color: #173f51; font: 600 12px/1 "Segoe UI", sans-serif; white-space: nowrap; }
+.dimension-label { display: block; padding: 2px 4px; border-radius: 3px; background: rgb(255 255 255 / 82%); color: #173f51; font: 600 11px/1 "Segoe UI", sans-serif; white-space: nowrap; }
 .directions { display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap: 16px; margin-top: 24px; }
 fieldset { display: grid; gap: 8px; border: 1px solid #d6dde1; border-radius: 8px; padding: 12px; }
 .rounding { grid-template-columns: repeat(3, max-content); align-items: center; }

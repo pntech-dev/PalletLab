@@ -39,11 +39,22 @@ export default function PalletViewport({ beams, dimensions, preset }: { beams: V
     {dimensions.map((dimension, index) => {
       const start = point(dimension.start); const end = point(dimension.end);
       const middle: [number, number, number] = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2, (start[2] + end[2]) / 2];
+      const length = Math.hypot(end[0] - start[0], end[1] - start[1], end[2] - start[2]);
+      const scale = Math.min(0.06, length / 5);
+      const unit: [number, number, number] = [(end[0] - start[0]) / length, (end[1] - start[1]) / length, (end[2] - start[2]) / length];
+      const side: [number, number, number] = Math.abs(unit[1]) < 0.9 ? [-unit[2], 0, unit[0]] : [unit[1], -unit[0], 0];
+      const arrow = (origin: [number, number, number], direction: number) => [
+        [origin[0] + (unit[0] * direction + side[0]) * scale, origin[1] + (unit[1] * direction + side[1]) * scale, origin[2] + (unit[2] * direction + side[2]) * scale],
+        origin,
+        [origin[0] + (unit[0] * direction - side[0]) * scale, origin[1] + (unit[1] * direction - side[1]) * scale, origin[2] + (unit[2] * direction - side[2]) * scale],
+      ] as [number, number, number][];
       return <group key={index}>
         {dimension.startExtension ? <Line points={[point(dimension.startExtension), start]} color="#315b6c" lineWidth={1} /> : null}
         {dimension.endExtension ? <Line points={[point(dimension.endExtension), end]} color="#315b6c" lineWidth={1} /> : null}
         <Line points={[start, end]} color="#315b6c" lineWidth={1.5} />
-        <Html position={middle} center distanceFactor={12} style={{ pointerEvents: "none" }}><span className="dimension-label">{dimension.value.toFixed(0)}</span></Html>
+        <Line points={arrow(start, 1)} color="#315b6c" lineWidth={1.5} />
+        <Line points={arrow(end, -1)} color="#315b6c" lineWidth={1.5} />
+        <Html position={middle} center style={{ pointerEvents: "none" }}><span className="dimension-label">{dimension.value.toFixed(0)}</span></Html>
       </group>;
     })}
     <OrbitControls makeDefault />
