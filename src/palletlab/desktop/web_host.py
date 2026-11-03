@@ -47,5 +47,6 @@ def run_web_application() -> None:
         width=1400,
         height=900,
         min_size=(900, 650),
+        maximized=True,
     )
     webview.start()
