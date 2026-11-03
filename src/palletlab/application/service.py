@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from palletlab.application.snapshots import project_snapshot
 from palletlab.controllers.pallet_controller import PalletController
-from palletlab.core.persistence import ProjectPersistenceError, project_from_dict
+from palletlab.core.models import DirectionInput, LayerInput
+from palletlab.core.persistence import ProjectPersistenceError, project_from_dict, project_to_dict
+from palletlab.core.project_state import ProjectState
 
 
 class ApplicationService:
@@ -32,6 +34,23 @@ class ApplicationService:
         if result is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
         return {"ok": True, "snapshot": project_snapshot(state)}
+
+    def default_project(self) -> dict[str, Any]:
+        """Return the same starting configuration as the current desktop reset."""
+        length = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100)
+        width = DirectionInput(70, 50, (560, 720), 277, 179, 100, 100)
+        layers = [
+            LayerInput("length", "length", length),
+            LayerInput("width", "width", width),
+            LayerInput("layer-1", "length", length),
+        ]
+        state = ProjectState(
+            length_input=length,
+            width_input=width,
+            layers=layers,
+            multi_layer_mode=True,
+        )
+        return cast(dict[str, Any], project_to_dict(state))
 
 
 class _Signal:

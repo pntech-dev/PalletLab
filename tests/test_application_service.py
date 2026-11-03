@@ -21,3 +21,13 @@ def test_calculate_returns_a_user_facing_validation_error() -> None:
 
     assert response["ok"] is False
     assert isinstance(response["error"], str)
+
+
+def test_default_project_matches_the_current_multilayer_starting_point() -> None:
+    service = ApplicationService()
+
+    response = service.calculate(service.default_project())
+
+    assert response["ok"] is True
+    assert response["snapshot"]["project"]["pallet"]["multi_layer_mode"] is True
+    assert len(response["snapshot"]["pallet"]["layers"]) == 3

@@ -22,6 +22,10 @@ class WebApplicationApi:
         """Calculate a persisted project payload for the React frontend."""
         return ApplicationService().calculate(project)
 
+    def default_project(self) -> dict[str, Any]:
+        """Provide the temporary frontend with a valid starting project."""
+        return ApplicationService().default_project()
+
 
 def frontend_entrypoint() -> Path:
     """Locate the Vite entrypoint in source and frozen PyInstaller builds."""
