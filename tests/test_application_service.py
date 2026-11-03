@@ -58,6 +58,16 @@ def test_delete_beams_rejects_an_empty_selection() -> None:
     assert response == {"ok": False, "error": "Выберите хотя бы один брус для удаления."}
 
 
+def test_delete_an_edge_beam_keeps_the_viewport_snapshot_available() -> None:
+    service = ApplicationService()
+    calculated = service.calculate(service.default_project())
+
+    response = service.delete_beams(calculated["snapshot"]["project"], {"length": [0]})
+
+    assert response["ok"] is True
+    assert response["snapshot"]["pallet"] is not None
+
+
 def test_change_beam_sections_updates_selected_beam_geometry() -> None:
     service = ApplicationService()
     calculated = service.calculate(service.default_project())

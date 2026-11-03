@@ -59,6 +59,12 @@ def insertion_markers(result: PalletResult, slots: tuple[InsertionSlot, ...]) ->
     for slot in slots:
         layer_id = slot.layer_id or slot.axis
         faces = beam_faces(result, layer_id)
+        if slot.after_beam_index < 0 or slot.after_beam_index + 1 >= len(faces):
+            # A deleted edge beam remains represented in the direction input
+            # so it can be restored by project editing, but it has no rendered
+            # neighbour for an insertion marker.  Do not reinterpret its stale
+            # index as a different visible gap.
+            continue
         start = faces[slot.after_beam_index][1]
         end = faces[slot.after_beam_index + 1][0]
         position = (start + end) / 2
