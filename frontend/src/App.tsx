@@ -13,6 +13,7 @@ type CalculationResponse = {
   ok: boolean;
   error?: string;
   snapshot?: {
+    project: Project;
     pallet: { size: { length: number; width: number; height: number }; beams: ViewportBeam[]; dimensions: ViewportDimension[] } | null;
   };
 };
@@ -34,6 +35,7 @@ declare global {
         default_project: () => Promise<object>;
         calculate: (project: object) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;
+        delete_beams: (project: object, selection: Record<string, number[]>) => Promise<CalculationResponse>;
         save_project: (project: object) => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
         open_project: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string; project?: Project }>;
       };
@@ -48,7 +50,7 @@ export function App() {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [distanceText, setDistanceText] = useState<Record<"length" | "width", string>>({ length: "", width: "" });
   const [camera, setCamera] = useState<CameraPreset>("isometric");
-  const [selectedBeam, setSelectedBeam] = useState<number | null>(null);
+  const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
 
   useEffect(() => {
     function connect() {
@@ -84,6 +86,30 @@ export function App() {
   async function openProject() {
     const response = await window.pywebview!.api!.open_project();
     if (response.project) setProject(response.project);
+  }
+
+  function toggleBeam(beam: ViewportBeam) {
+    setSelectedBeams((selected) => {
+      const alreadySelected = selected.some((item) => item.layerId === beam.layerId && item.layerIndex === beam.layerIndex);
+      return alreadySelected
+        ? selected.filter((item) => item.layerId !== beam.layerId || item.layerIndex !== beam.layerIndex)
+        : [...selected, beam];
+    });
+  }
+
+  async function deleteSelectedBeams() {
+    const api = window.pywebview?.api;
+    if (!api || !project || selectedBeams.length === 0) return;
+    const selection = selectedBeams.reduce<Record<string, number[]>>((byLayer, beam) => {
+      (byLayer[beam.layerId] ??= []).push(beam.layerIndex);
+      return byLayer;
+    }, {});
+    const response = await api.delete_beams(project, selection);
+    setCalculation(response);
+    if (response.ok && response.snapshot) {
+      setProject(response.snapshot.project);
+      setSelectedBeams([]);
+    }
   }
 
   function updateDirection(axis: "length" | "width", field: keyof Direction, value: string) {
@@ -206,7 +232,7 @@ export function App() {
           <><p className="result">
             {calculation.snapshot.pallet.size.length} × {calculation.snapshot.pallet.size.width} × {calculation.snapshot.pallet.size.height} mm
             · {calculation.snapshot.pallet.beams.length} beams
-          </p><p className="selection-status">{selectedBeam === null ? "Select a beam in the 3D view" : `Selected beam: ${selectedBeam + 1}`}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}</div><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeam={selectedBeam} onSelectBeam={setSelectedBeam} /></Suspense></>
+          </p><p className="selection-status">{selectedBeams.length ? `Selected beams: ${selectedBeams.length}` : "Select beams in the 3D view"}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}<button type="button" onClick={deleteSelectedBeams} disabled={selectedBeams.length === 0}>Delete selected ({selectedBeams.length})</button></div><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeams={selectedBeams.map((beam) => `${beam.layerId}:${beam.layerIndex}`)} onToggleBeam={toggleBeam} /></Suspense></>
         ) : null}
         {calculation && !calculation.ok ? <p className="error">{calculation.error}</p> : null}
       </section>

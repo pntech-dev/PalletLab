@@ -5,6 +5,7 @@ import { useEffect } from "react";
 export type ViewportBeam = {
   index: number;
   layerId: string;
+  layerIndex: number;
   center: [number, number, number];
   size: [number, number, number];
 };
@@ -25,16 +26,16 @@ function Camera({ preset }: { preset: CameraPreset }) {
   return null;
 }
 
-export default function PalletViewport({ beams, dimensions, preset, selectedBeam, onSelectBeam }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeam: number | null; onSelectBeam: (index: number) => void }) {
+export default function PalletViewport({ beams, dimensions, preset, selectedBeams, onToggleBeam }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; onToggleBeam: (beam: ViewportBeam) => void }) {
   return <div className="viewport"><Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
     <Camera preset={preset} />
     <color attach="background" args={["#edf1f3"]} />
     <ambientLight intensity={1.5} />
     <directionalLight position={[5, 8, 4]} intensity={2} castShadow />
     <gridHelper args={[10, 20, "#aab9c1", "#d9e1e5"]} />
-    {beams.map((beam) => <mesh key={`${beam.layerId}:${beam.index}`} position={[beam.center[0] / 1000, beam.center[2] / 1000, beam.center[1] / 1000]} onClick={(event) => { event.stopPropagation(); onSelectBeam(beam.index); }}>
+    {beams.map((beam) => <mesh key={`${beam.layerId}:${beam.index}`} position={[beam.center[0] / 1000, beam.center[2] / 1000, beam.center[1] / 1000]} onClick={(event) => { event.stopPropagation(); onToggleBeam(beam); }}>
       <boxGeometry args={[beam.size[0] / 1000, beam.size[2] / 1000, beam.size[1] / 1000]} />
-      <meshStandardMaterial color={selectedBeam === beam.index ? "#d83a3a" : "#b88254"} roughness={0.72} />
+      <meshStandardMaterial color={selectedBeams.includes(`${beam.layerId}:${beam.layerIndex}`) ? "#d83a3a" : "#b88254"} roughness={0.72} />
     </mesh>)}
     {dimensions.map((dimension, index) => {
       const start = point(dimension.start); const end = point(dimension.end);

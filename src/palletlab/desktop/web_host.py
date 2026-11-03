@@ -28,6 +28,10 @@ class WebApplicationApi:
         """Calculate a persisted project payload for the React frontend."""
         return ApplicationService().calculate(project)
 
+    def delete_beams(self, project: object, selection: object) -> dict[str, Any]:
+        """Apply a web viewport beam selection through the domain controller."""
+        return ApplicationService().delete_beams(project, selection)
+
     def default_project(self) -> dict[str, Any]:
         """Provide the temporary frontend with a valid starting project."""
         return ApplicationService().default_project()

@@ -33,6 +33,31 @@ def test_default_project_matches_the_current_multilayer_starting_point() -> None
     assert len(response["snapshot"]["pallet"]["layers"]) == 3
 
 
+def test_delete_beams_uses_rendered_layer_indices_and_returns_updated_snapshot() -> None:
+    service = ApplicationService()
+    calculated = service.calculate(service.default_project())
+    pallet = calculated["snapshot"]["pallet"]
+    beam = next(item for item in pallet["beams"] if item["layerId"] == "length" and item["layerIndex"] == 1)
+
+    response = service.delete_beams(
+        calculated["snapshot"]["project"],
+        {beam["layerId"]: [beam["layerIndex"]]},
+    )
+
+    assert response["ok"] is True
+    updated_pallet = response["snapshot"]["pallet"]
+    assert len(updated_pallet["beams"]) == len(pallet["beams"]) - 1
+    assert sum(item["layerId"] == "length" for item in updated_pallet["beams"]) == (
+        sum(item["layerId"] == "length" for item in pallet["beams"]) - 1
+    )
+
+
+def test_delete_beams_rejects_an_empty_selection() -> None:
+    response = ApplicationService().delete_beams(ApplicationService().default_project(), {})
+
+    assert response == {"ok": False, "error": "Выберите хотя бы один брус для удаления."}
+
+
 def test_materials_expose_stable_ids_and_names() -> None:
     assert ApplicationService().materials() == [
         {"id": "pine", "name": "Сосна"},

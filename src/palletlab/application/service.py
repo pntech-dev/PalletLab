@@ -23,18 +23,33 @@ class ApplicationService:
         except ProjectPersistenceError as exc:
             return {"ok": False, "error": str(exc)}
 
-        errors: list[str] = []
-        controller = PalletController(
-            state,
-            _HeadlessView(),
-            on_calculated=lambda _result: None,
-            on_error=lambda error, _show: errors.append(str(error)),
-            on_stale_changed=lambda _stale: None,
-            timer=_HeadlessTimer(),
-        )
+        controller, errors = self._controller_for(state)
         result = controller.recalculate_from_state(show_error=False)
         if result is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
+        return {"ok": True, "snapshot": project_snapshot(state)}
+
+    def delete_beams(self, project: object, selection: object) -> dict[str, Any]:
+        """Delete the selected rendered beams through the existing controller command."""
+        try:
+            state = project_from_dict(project)
+        except ProjectPersistenceError as exc:
+            return {"ok": False, "error": str(exc)}
+        selections, error = _deletion_selection(selection)
+        if error:
+            return {"ok": False, "error": error}
+
+        controller, errors = self._controller_for(state)
+        if controller.recalculate_from_state(show_error=False) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
+        for layer_id, indices in selections.items():
+            for index in indices:
+                if not controller.set_deletion_selection(layer_id, index, True):
+                    return {"ok": False, "error": errors[-1] if errors else "Выбранный брус больше не существует."}
+        if controller.confirm_deletion() is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось удалить выбранные брусья."}
+        if controller.recalculate_from_state(show_error=False) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось пересчитать поддон."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
     def default_project(self) -> dict[str, Any]:
@@ -71,6 +86,37 @@ class ApplicationService:
             return {"ok": True, "project": project_to_dict(load_project(Path(path)))}
         except (OSError, ProjectPersistenceError) as exc:
             return {"ok": False, "error": str(exc)}
+
+    @staticmethod
+    def _controller_for(state: ProjectState) -> tuple[PalletController, list[str]]:
+        errors: list[str] = []
+        controller = PalletController(
+            state,
+            _HeadlessView(),
+            on_calculated=lambda _result: None,
+            on_error=lambda error, _show: errors.append(str(error)),
+            on_stale_changed=lambda _stale: None,
+            timer=_HeadlessTimer(),
+        )
+        return controller, errors
+
+
+def _deletion_selection(selection: object) -> tuple[dict[str, tuple[int, ...]], str | None]:
+    """Validate the small bridge payload before it reaches controller state."""
+    if not isinstance(selection, dict) or not selection:
+        return {}, "Выберите хотя бы один брус для удаления."
+
+    validated: dict[str, tuple[int, ...]] = {}
+    for layer_id, indices in selection.items():
+        if not isinstance(layer_id, str) or not isinstance(indices, list):
+            return {}, "Некорректный набор брусьев для удаления."
+        if any(not isinstance(index, int) or isinstance(index, bool) or index < 0 for index in indices):
+            return {}, "Некорректный набор брусьев для удаления."
+        unique_indices = tuple(sorted(set(indices)))
+        if not unique_indices:
+            return {}, "Некорректный набор брусьев для удаления."
+        validated[layer_id] = unique_indices
+    return validated, None
 
 
 class _Signal:
