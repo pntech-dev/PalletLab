@@ -10,6 +10,9 @@ test_scripts/.step_cache/
 htmlcov/
 build/
 dist/
+frontend/dist/
+frontend/node_modules/
+frontend/*.tsbuildinfo
 *.spec.tmp
 .idea/
 .vscode/
