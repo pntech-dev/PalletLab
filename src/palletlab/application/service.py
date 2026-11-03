@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 
 from palletlab.application.snapshots import project_snapshot
 from palletlab.controllers.pallet_controller import PalletController
 from palletlab.core.models import DirectionInput, LayerInput
-from palletlab.core.persistence import ProjectPersistenceError, project_from_dict, project_to_dict
+from palletlab.core.materials import MATERIALS
+from palletlab.core.persistence import ProjectPersistenceError, load_project, project_from_dict, project_to_dict, save_project
 from palletlab.core.project_state import ProjectState
 
 
@@ -51,6 +53,24 @@ class ApplicationService:
             multi_layer_mode=True,
         )
         return cast(dict[str, Any], project_to_dict(state))
+
+    def materials(self) -> list[dict[str, str]]:
+        """Return selectable pallet materials without leaking CAD-specific fields."""
+        return [{"id": material.id, "name": material.name} for material in MATERIALS.values()]
+
+    def save(self, project: object, path: str) -> dict[str, Any]:
+        try:
+            state = project_from_dict(project)
+            save_project(Path(path), state)
+        except (OSError, ProjectPersistenceError) as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True}
+
+    def load(self, path: str) -> dict[str, Any]:
+        try:
+            return {"ok": True, "project": project_to_dict(load_project(Path(path)))}
+        except (OSError, ProjectPersistenceError) as exc:
+            return {"ok": False, "error": str(exc)}
 
 
 class _Signal:

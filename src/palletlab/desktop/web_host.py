@@ -26,6 +26,9 @@ class WebApplicationApi:
         """Provide the temporary frontend with a valid starting project."""
         return ApplicationService().default_project()
 
+    def materials(self) -> list[dict[str, str]]:
+        return ApplicationService().materials()
+
 
 def frontend_entrypoint() -> Path:
     """Locate the Vite entrypoint in source and frozen PyInstaller builds."""

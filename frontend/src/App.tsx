@@ -19,7 +19,8 @@ type Direction = {
   first_edge_to_support: number; last_support_to_edge: number; margin_start: number; margin_end: number;
   round_pallet_size: boolean; rounding_step: 5 | 50;
 };
-type Project = { pallet: { length: Direction; width: Direction; upper_layer: "length" | "width" } };
+type Project = { pallet: { length: Direction; width: Direction; upper_layer: "length" | "width"; material_id: string } };
+type Material = { id: string; name: string };
 
 declare global {
   interface Window {
@@ -28,6 +29,7 @@ declare global {
         status: () => Promise<ApplicationStatus>;
         default_project: () => Promise<object>;
         calculate: (project: object) => Promise<CalculationResponse>;
+        materials: () => Promise<Material[]>;
       };
     };
   }
@@ -37,6 +39,7 @@ export function App() {
   const [status, setStatus] = useState<ApplicationStatus | null>(null);
   const [calculation, setCalculation] = useState<CalculationResponse | null>(null);
   const [project, setProject] = useState<Project | null>(null);
+  const [materials, setMaterials] = useState<Material[]>([]);
 
   useEffect(() => {
     function connect() {
@@ -44,6 +47,7 @@ export function App() {
       if (!api) return;
       api.status().then(setStatus).catch(() => setStatus(null));
       api.default_project().then((value) => setProject(value as Project));
+      api.materials().then(setMaterials);
     }
 
     window.addEventListener("pywebviewready", connect, { once: true });
@@ -100,6 +104,19 @@ export function App() {
                 onChange={() => setRounding(value)} />
               {value === "none" ? "No rounding" : `Round ${value} mm`}
             </label>)}
+          </fieldset>
+          <fieldset className="project-options">
+            <legend>Project options</legend>
+            <label>Upper layer
+              <select value={project.pallet.upper_layer} onChange={(event) => setProject({ ...project, pallet: { ...project.pallet, upper_layer: event.target.value as "length" | "width" } })}>
+                <option value="length">Length</option><option value="width">Width</option>
+              </select>
+            </label>
+            <label>Material
+              <select value={project.pallet.material_id} onChange={(event) => setProject({ ...project, pallet: { ...project.pallet, material_id: event.target.value } })}>
+                {materials.map((material) => <option key={material.id} value={material.id}>{material.name}</option>)}
+              </select>
+            </label>
           </fieldset>
           {(["length", "width"] as const).map((axis) => <fieldset key={axis}>
             <legend>{axis === "length" ? "Length direction" : "Width direction"}</legend>

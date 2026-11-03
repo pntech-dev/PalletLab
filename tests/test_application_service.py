@@ -31,3 +31,22 @@ def test_default_project_matches_the_current_multilayer_starting_point() -> None
     assert response["ok"] is True
     assert response["snapshot"]["project"]["pallet"]["multi_layer_mode"] is True
     assert len(response["snapshot"]["pallet"]["layers"]) == 3
+
+
+def test_materials_expose_stable_ids_and_names() -> None:
+    assert ApplicationService().materials() == [
+        {"id": "pine", "name": "Сосна"},
+        {"id": "spruce", "name": "Ель"},
+    ]
+
+
+def test_save_and_load_preserve_a_valid_project(tmp_path) -> None:
+    service = ApplicationService()
+    path = tmp_path / "project.palletlab.json"
+
+    saved = service.save(service.default_project(), str(path))
+    loaded = service.load(str(path))
+
+    assert saved == {"ok": True}
+    assert loaded["ok"] is True
+    assert loaded["project"]["pallet"]["material_id"] == "pine"
