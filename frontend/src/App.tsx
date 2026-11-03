@@ -38,9 +38,16 @@ export function App() {
   const [project, setProject] = useState<Project | null>(null);
 
   useEffect(() => {
-    const api = window.pywebview?.api;
-    api?.status().then(setStatus).catch(() => setStatus(null));
-    api?.default_project().then((value) => setProject(value as Project));
+    function connect() {
+      const api = window.pywebview?.api;
+      if (!api) return;
+      api.status().then(setStatus).catch(() => setStatus(null));
+      api.default_project().then((value) => setProject(value as Project));
+    }
+
+    window.addEventListener("pywebviewready", connect, { once: true });
+    connect();
+    return () => window.removeEventListener("pywebviewready", connect);
   }, []);
 
   async function calculateDefaultProject() {
