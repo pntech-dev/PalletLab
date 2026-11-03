@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import type { ViewportBeam } from "./PalletViewport";
+import type { CameraPreset, ViewportBeam } from "./PalletViewport";
 
 const PalletViewport = lazy(() => import("./PalletViewport"));
 
@@ -47,6 +47,7 @@ export function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [distanceText, setDistanceText] = useState<Record<"length" | "width", string>>({ length: "", width: "" });
+  const [camera, setCamera] = useState<CameraPreset>("isometric");
 
   useEffect(() => {
     function connect() {
@@ -204,7 +205,7 @@ export function App() {
           <><p className="result">
             {calculation.snapshot.pallet.size.length} × {calculation.snapshot.pallet.size.width} × {calculation.snapshot.pallet.size.height} mm
             · {calculation.snapshot.pallet.beams.length} beams
-          </p><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} /></Suspense></>
+          </p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}</div><Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} preset={camera} /></Suspense></>
         ) : null}
         {calculation && !calculation.ok ? <p className="error">{calculation.error}</p> : null}
       </section>
