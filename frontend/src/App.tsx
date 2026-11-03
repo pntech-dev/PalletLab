@@ -14,6 +14,12 @@ type CalculationResponse = {
   };
 };
 
+type Direction = {
+  beam_height: number; beam_width: number; support_distances: number[];
+  first_edge_to_support: number; last_support_to_edge: number; margin_start: number; margin_end: number;
+};
+type Project = { pallet: { length: Direction; width: Direction } };
+
 declare global {
   interface Window {
     pywebview?: {
@@ -29,16 +35,26 @@ declare global {
 export function App() {
   const [status, setStatus] = useState<ApplicationStatus | null>(null);
   const [calculation, setCalculation] = useState<CalculationResponse | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
 
   useEffect(() => {
-    window.pywebview?.api?.status().then(setStatus).catch(() => setStatus(null));
+    const api = window.pywebview?.api;
+    api?.status().then(setStatus).catch(() => setStatus(null));
+    api?.default_project().then((value) => setProject(value as Project));
   }, []);
 
   async function calculateDefaultProject() {
     const api = window.pywebview?.api;
     if (!api) return;
-    const project = await api.default_project();
-    setCalculation(await api.calculate(project));
+    if (project) setCalculation(await api.calculate(project));
+  }
+
+  function updateDirection(axis: "length" | "width", field: keyof Direction, value: string) {
+    if (!project) return;
+    const parsed = field === "support_distances"
+      ? value.split(/\s+/).filter(Boolean).map(Number)
+      : Number(value);
+    setProject({ ...project, pallet: { ...project.pallet, [axis]: { ...project.pallet[axis], [field]: parsed } } });
   }
 
   return (
@@ -51,8 +67,18 @@ export function App() {
           {status ? `${status.application} ${status.version} · API ${status.snapshotVersion}` : "Connecting to Python…"}
         </p>
         <button type="button" onClick={calculateDefaultProject} disabled={!status}>
-          Calculate current default project
+          Calculate project
         </button>
+        {project ? <div className="directions">
+          {(["length", "width"] as const).map((axis) => <fieldset key={axis}>
+            <legend>{axis === "length" ? "Length direction" : "Width direction"}</legend>
+            {(["beam_height", "beam_width", "support_distances", "first_edge_to_support", "last_support_to_edge", "margin_start", "margin_end"] as const).map((field) => <label key={field}>
+              {field.replaceAll("_", " ")}
+              <input value={Array.isArray(project.pallet[axis][field]) ? project.pallet[axis][field].join(" ") : project.pallet[axis][field]}
+                onChange={(event) => updateDirection(axis, field, event.target.value)} />
+            </label>)}
+          </fieldset>)}
+        </div> : null}
         {calculation?.ok && calculation.snapshot?.pallet ? (
           <p className="result">
             {calculation.snapshot.pallet.size.length} × {calculation.snapshot.pallet.size.width} × {calculation.snapshot.pallet.size.height} mm
