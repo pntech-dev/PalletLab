@@ -49,6 +49,7 @@ class SpecificationRow:
     name: str
     dimensions: str
     quantity: int
+    designation: str = ""
 
 
 def assembly_specification_rows(result: PalletResult) -> tuple[SpecificationRow, ...]:
@@ -67,6 +68,7 @@ def assembly_specification_rows(result: PalletResult) -> tuple[SpecificationRow,
             name="Брус",
             dimensions="×".join(number(value) for value in dimensions),
             quantity=quantity,
+            designation=f"Beam_{index}_{'x'.join(number(value) for value in dimensions)}",
         )
         for index, (dimensions, quantity) in enumerate(sorted(groups.items()), start=1)
     )

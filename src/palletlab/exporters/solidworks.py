@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree
 
@@ -40,7 +41,18 @@ GOST_REDUCTION_SCALES: tuple[tuple[int, int], ...] = (
 
 BASE_PLANE_NAME = "Спереди"
 SOLIDWORKS_API_DIR = Path(r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist")
-DRAWING_HELPER = Path(__file__).resolve().parents[3] / "tools" / "SolidWorksDrawingHelper" / "bin" / "Debug" / "net10.0-windows" / "SolidWorksDrawingHelper.exe"
+_HELPER_RELATIVE_PATH = Path("tools") / "SolidWorksDrawingHelper" / "bin" / "Debug" / "net10.0-windows" / "SolidWorksDrawingHelper.exe"
+
+
+def _drawing_helper_path() -> Path:
+    """Locate the helper both in a source checkout and a PyInstaller build."""
+    bundled_root = getattr(sys, "_MEIPASS", None)
+    if bundled_root:
+        return Path(bundled_root) / _HELPER_RELATIVE_PATH
+    return Path(__file__).resolve().parents[3] / _HELPER_RELATIVE_PATH
+
+
+DRAWING_HELPER = _drawing_helper_path()
 
 class SolidWorksExportError(RuntimeError):
     """A user-facing failure while preparing or exporting a CAD model."""
@@ -149,6 +161,7 @@ def _write_drawing_metadata(directory: Path, result: PalletResult) -> Path:
                 "name": row.name,
                 "dimensions": row.dimensions,
                 "quantity": row.quantity,
+                "designation": row.designation,
             }
             for row in assembly_specification_rows(result)
         ],
