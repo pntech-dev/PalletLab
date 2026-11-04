@@ -143,6 +143,19 @@ def test_add_manual_beam_uses_two_viewport_supports() -> None:
 
     assert response["ok"] is True
     assert any(beam["layerId"].startswith("manual-") for beam in response["snapshot"]["pallet"]["beams"])
+
+
+def test_add_manual_beam_rejects_supports_from_different_layers() -> None:
+    service = ApplicationService()
+    calculated = service.calculate(service.default_project())
+
+    response = service.add_manual_beam(
+        calculated["snapshot"]["project"],
+        [{"layerId": "length", "layerIndex": 1}, {"layerId": "layer-1", "layerIndex": 2}],
+        {"distance": 100, "section": {"height": 70, "width": 50}},
+    )
+
+    assert response["ok"] is False
     assert service.change_beam_distance(service.default_project(), {"layerId": "length", "beamIndex": 1}, float("inf")) == {
         "ok": False,
         "error": "Расстояние должно быть конечным числом.",

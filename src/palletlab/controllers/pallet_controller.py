@@ -645,6 +645,7 @@ class PalletController:
         reference = supports.get(reference_support) if reference_support is not None else None
         valid_faces = {"top", "bottom"}
         if (first is None or second is None or first is second
+                or first.layer_id != second.layer_id
                 or first.orientation != second.orientation
                 or first_face not in valid_faces or second_face not in valid_faces
                 or first_face != second_face

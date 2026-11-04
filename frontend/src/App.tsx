@@ -216,6 +216,10 @@ export function App() {
         setManualReference(beam);
         return;
       }
+      if (manualSupports.length === 1 && manualSupports[0].beam.layerId !== beam.layerId) {
+        setCalculationError("Вторую опору нужно выбрать на том же слое, что и первую.");
+        return;
+      }
       const support = {
         beam,
         point:
