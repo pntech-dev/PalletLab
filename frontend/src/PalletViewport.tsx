@@ -217,6 +217,7 @@ export default function PalletViewport({
   manualHud?: ReactNode;
 }) {
   const [cursor, setCursor] = useState<[number, number]>([16, 16]);
+  const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
   const bounds = useMemo(() => {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -306,6 +307,8 @@ export default function PalletViewport({
               if (manualMode) onToggleBeam(beam, point);
               else onToggleBeam(beam, point);
             }}
+            onPointerOver={(event) => { event.stopPropagation(); setHoveredBeam(`${beam.layerId}:${beam.layerIndex}`); }}
+            onPointerOut={() => setHoveredBeam(null)}
           >
             <boxGeometry
               args={[
@@ -318,6 +321,8 @@ export default function PalletViewport({
               color={
                 selectedBeams.includes(`${beam.layerId}:${beam.layerIndex}`)
                   ? "#d83a3a"
+                  : hoveredBeam === `${beam.layerId}:${beam.layerIndex}`
+                    ? "#d9a56f"
                   : "#b88254"
               }
               roughness={0.72}
