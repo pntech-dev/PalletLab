@@ -19,12 +19,24 @@ export type ViewportDimension = {
 
 function point([x, y, z]: [number, number, number]): [number, number, number] { return [x / 1000, z / 1000, y / 1000]; }
 
-function Camera({ preset }: { preset: CameraPreset }) {
+type ViewportBounds = { center: [number, number, number]; span: number };
+
+function Camera({ preset, bounds }: { preset: CameraPreset; bounds: ViewportBounds }) {
   const { camera } = useThree();
   useEffect(() => {
-    const positions: Record<CameraPreset, [number, number, number]> = { isometric: [5, 4, 5], top: [0, 6, 0.001], front: [0, -6, 0], side: [-6, 0, 0] };
-    camera.position.set(...positions[preset]); camera.lookAt(0, 0, 0);
-  }, [camera, preset]);
+    const [x, y, z] = bounds.center;
+    const distance = Math.max(3, bounds.span * 1.45);
+    const positions: Record<CameraPreset, [number, number, number]> = {
+      isometric: [x + distance, y + distance * 0.75, z + distance],
+      top: [x, y + distance * 1.35, z + 0.001],
+      front: [x, y + distance * 0.35, z + distance],
+      side: [x + distance, y + distance * 0.35, z],
+    };
+    if (preset === "top") camera.up.set(0, 0, -1);
+    else camera.up.set(0, 1, 0);
+    camera.position.set(...positions[preset]);
+    camera.lookAt(x, y, z);
+  }, [bounds, camera, preset]);
   return null;
 }
 
@@ -85,6 +97,19 @@ function DimensionLabel({ value, position, dimension, canEdit, onSelect, onHover
 }
 
 export default function PalletViewport({ beams, dimensions, preset, selectedBeams, dimensionEditing, hoveredDimension, onToggleBeam, onSelectDimension, onHoverDimension }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; dimensionEditing: boolean; hoveredDimension: string | null; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void; onHoverDimension: (dimension: ViewportDimension | null) => void }) {
+  const bounds = useMemo(() => {
+    const min = [Infinity, Infinity, Infinity]; const max = [-Infinity, -Infinity, -Infinity];
+    for (const beam of beams) {
+      const center: [number, number, number] = [beam.center[0] / 1000, beam.center[2] / 1000, beam.center[1] / 1000];
+      const size: [number, number, number] = [beam.size[0] / 1000, beam.size[2] / 1000, beam.size[1] / 1000];
+      for (let axis = 0; axis < 3; axis += 1) {
+        min[axis] = Math.min(min[axis], center[axis] - size[axis] / 2);
+        max[axis] = Math.max(max[axis], center[axis] + size[axis] / 2);
+      }
+    }
+    const center = min.map((value, axis) => (value + max[axis]) / 2) as [number, number, number];
+    return { center, span: Math.max(...max.map((value, axis) => value - min[axis])) };
+  }, [beams]);
   const grid = useMemo(() => {
     const length = Math.max(...beams.map((beam) => beam.center[0] + beam.size[0] / 2)) / 1000;
     const width = Math.max(...beams.map((beam) => beam.center[1] + beam.size[1] / 2)) / 1000;
@@ -93,7 +118,7 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
     return { size, divisions: Math.round(size / section), position: [length / 2, 0, width / 2] as [number, number, number] };
   }, [beams]);
   return <div className="viewport"><Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
-    <Camera preset={preset} />
+    <Camera preset={preset} bounds={bounds} />
     <color attach="background" args={["#edf1f3"]} />
     <ambientLight intensity={1.5} />
     <directionalLight position={[5, 8, 4]} intensity={2} castShadow />
@@ -126,6 +151,6 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
         <DimensionLabel value={dimension.value} position={middle} dimension={dimension} canEdit={dimensionEditing} onSelect={onSelectDimension} onHover={onHoverDimension} />
       </group>;
     })}
-    <OrbitControls makeDefault />
+    <OrbitControls makeDefault target={bounds.center} />
   </Canvas></div>;
 }
