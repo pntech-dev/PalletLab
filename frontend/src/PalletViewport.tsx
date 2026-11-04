@@ -27,9 +27,20 @@ function Camera({ preset }: { preset: CameraPreset }) {
   return null;
 }
 
+function DimensionRaycaster() {
+  const { raycaster } = useThree();
+  useEffect(() => {
+    // Three's default line hit tolerance is effectively one pixel. Dimension
+    // lines are deliberately fine, so give them a 80 mm world-space hit area.
+    raycaster.params.Line.threshold = 0.08;
+  }, [raycaster]);
+  return null;
+}
+
 export default function PalletViewport({ beams, dimensions, preset, selectedBeams, onToggleBeam, onSelectDimension }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void }) {
   return <div className="viewport"><Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
     <Camera preset={preset} />
+    <DimensionRaycaster />
     <color attach="background" args={["#edf1f3"]} />
     <ambientLight intensity={1.5} />
     <directionalLight position={[5, 8, 4]} intensity={2} castShadow />
@@ -56,7 +67,9 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
         <Line points={[start, end]} color={dimension.editable ? "#315b6c" : "#718087"} lineWidth={dimension.editable ? 2 : 1.5} />
         <Line points={arrow(start, 1)} color="#315b6c" lineWidth={1.5} />
         <Line points={arrow(end, -1)} color="#315b6c" lineWidth={1.5} />
-        <Html position={middle} center style={{ pointerEvents: "none" }}><span className="dimension-label">{dimension.value.toFixed(0)}</span></Html>
+        <Html position={middle} center occlude={false} zIndexRange={[1000000, 0]} style={{ pointerEvents: "none" }}>
+          <span className="dimension-label">{dimension.value.toFixed(0)}</span>
+        </Html>
       </group>;
     })}
     <OrbitControls makeDefault />

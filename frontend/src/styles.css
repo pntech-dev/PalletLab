@@ -6,6 +6,7 @@ body { margin: 0; }
 .distance-editor { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 16px 0; padding: 12px; border: 1px solid #9ec1d1; border-radius: 8px; background: #f3f9fb; }
 .distance-editor label { display: grid; gap: 4px; }
 .dimension-hint { color: #315b6c; }
+.dimension-label { display: inline-block; min-width: 2.8em; padding: 2px 4px; border-radius: 3px; background: rgb(255 255 255 / 92%); color: #183f52; font: 600 11px/1.15 system-ui, sans-serif; text-align: center; white-space: nowrap; box-shadow: 0 1px 3px rgb(20 38 48 / 18%); }
 .eyebrow { margin: 0 0 8px; color: #607580; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 h1 { margin: 0; font-size: 1.75rem; }
 .status { margin-top: 24px; color: #3f5965; font-family: Consolas, monospace; }
