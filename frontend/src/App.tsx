@@ -59,6 +59,14 @@ export function App() {
   const [selectedDimension, setSelectedDimension] = useState<ViewportDimension | null>(null);
   const [distanceValue, setDistanceValue] = useState(0);
 
+  function applyProject(nextProject: Project) {
+    setProject(nextProject);
+    setDistanceText({
+      length: nextProject.pallet.length.support_distances.join(" "),
+      width: nextProject.pallet.width.support_distances.join(" "),
+    });
+  }
+
   useEffect(() => {
     function connect() {
       const api = window.pywebview?.api;
@@ -66,8 +74,7 @@ export function App() {
       api.status().then(setStatus).catch(() => setStatus(null));
       api.default_project().then((value) => {
         const project = value as Project;
-        setProject(project);
-        setDistanceText({ length: project.pallet.length.support_distances.join(" "), width: project.pallet.width.support_distances.join(" ") });
+        applyProject(project);
       });
       api.materials().then(setMaterials);
     }
@@ -92,7 +99,7 @@ export function App() {
   async function saveProject() { if (project) setCalculation(await window.pywebview!.api!.save_project(project) as CalculationResponse); }
   async function openProject() {
     const response = await window.pywebview!.api!.open_project();
-    if (response.project) setProject(response.project);
+    if (response.project) applyProject(response.project);
   }
 
   function toggleBeam(beam: ViewportBeam) {
@@ -114,7 +121,7 @@ export function App() {
     const response = await api.delete_beams(project, selection);
     setCalculation(response);
     if (response.ok && response.snapshot) {
-      setProject(response.snapshot.project);
+      applyProject(response.snapshot.project);
       setSelectedBeams([]);
     }
   }
@@ -129,7 +136,7 @@ export function App() {
     const response = await api.change_beam_sections(project, selection, section);
     setCalculation(response);
     if (response.ok && response.snapshot) {
-      setProject(response.snapshot.project);
+      applyProject(response.snapshot.project);
       setSelectedBeams([]);
     }
   }
@@ -150,7 +157,7 @@ export function App() {
     );
     setCalculation(response);
     if (response.ok && response.snapshot) {
-      setProject(response.snapshot.project);
+      applyProject(response.snapshot.project);
       setSelectedDimension(null);
     }
   }
