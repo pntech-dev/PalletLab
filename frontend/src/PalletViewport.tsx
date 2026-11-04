@@ -331,7 +331,7 @@ export default function PalletViewport({
             />
           </mesh>
         ))}
-        {manualSupports.map(({ beam, point }) => (
+        {manualSupports.slice(0, 1).map(({ beam, point }) => (
           <mesh
             key={`manual-point:${beam.layerId}:${beam.layerIndex}`}
             position={[point[0], point[1] + 0.08, point[2]]}

@@ -643,9 +643,11 @@ class PalletController:
         supports = {(beam.layer_id, beam.layer_index): beam for beam in current.beams_3d} if current else {}
         first, second = supports.get(first_support), supports.get(second_support)
         reference = supports.get(reference_support) if reference_support is not None else None
+        project_layer_ids = {layer.layer_id for layer in self.state.layers}
         valid_faces = {"top", "bottom"}
         if (first is None or second is None or first is second
                 or first.layer_id != second.layer_id
+                or first.layer_id not in project_layer_ids
                 or first.orientation != second.orientation
                 or first_face not in valid_faces or second_face not in valid_faces
                 or first_face != second_face
