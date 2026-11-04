@@ -10,6 +10,7 @@ export type ViewportBeam = {
   center: [number, number, number];
   size: [number, number, number];
 };
+export type ViewportPoint = [number, number, number];
 export type CameraPreset = "isometric" | "top" | "front" | "side";
 export type ViewportDimension = {
   layerId: string; axis: "length" | "width"; index: number; editValue: number | null; editable: boolean;
@@ -106,7 +107,7 @@ function DimensionLabel({ value, position, dimension, canEdit, onSelect, onHover
   </sprite>;
 }
 
-export default function PalletViewport({ beams, dimensions, preset, selectedBeams, dimensionEditing, hoveredDimension, onToggleBeam, onSelectDimension, onHoverDimension, insertionMarkers, insertionMode, selectedSlot, onSelectInsertion }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; dimensionEditing: boolean; hoveredDimension: string | null; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void; onHoverDimension: (dimension: ViewportDimension | null) => void; insertionMarkers: ViewportInsertionMarker[]; insertionMode: boolean; selectedSlot: { layerId: string; afterBeamIndex: number } | null; onSelectInsertion: (marker: ViewportInsertionMarker) => void }) {
+export default function PalletViewport({ beams, dimensions, preset, selectedBeams, dimensionEditing, hoveredDimension, onToggleBeam, onSelectDimension, onHoverDimension, insertionMarkers, insertionMode, selectedSlot, onSelectInsertion, manualMode = insertionMode, manualSupports = [], onSelectManualSupport = () => {} }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; dimensionEditing: boolean; hoveredDimension: string | null; onToggleBeam: (beam: ViewportBeam, point?: ViewportPoint) => void; onSelectDimension: (dimension: ViewportDimension) => void; onHoverDimension: (dimension: ViewportDimension | null) => void; insertionMarkers: ViewportInsertionMarker[]; insertionMode: boolean; selectedSlot: { layerId: string; afterBeamIndex: number } | null; onSelectInsertion: (marker: ViewportInsertionMarker) => void; manualMode?: boolean; manualSupports?: { beam: ViewportBeam; point: ViewportPoint }[]; onSelectManualSupport?: (beam: ViewportBeam, point: ViewportPoint) => void }) {
   const bounds = useMemo(() => {
     const min = [Infinity, Infinity, Infinity]; const max = [-Infinity, -Infinity, -Infinity];
     for (const beam of beams) {
@@ -133,9 +134,12 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
     <ambientLight intensity={1.5} />
     <directionalLight position={[5, 8, 4]} intensity={2} castShadow />
     <gridHelper args={[grid.size, grid.divisions, "#aab9c1", "#d9e1e5"]} position={grid.position} />
-    {beams.map((beam) => <mesh key={`${beam.layerId}:${beam.index}`} position={[beam.center[0] / 1000, beam.center[2] / 1000, beam.center[1] / 1000]} onClick={(event) => { event.stopPropagation(); onToggleBeam(beam); }}>
+    {beams.map((beam) => <mesh key={`${beam.layerId}:${beam.index}`} position={[beam.center[0] / 1000, beam.center[2] / 1000, beam.center[1] / 1000]} onClick={(event) => { event.stopPropagation(); const point: ViewportPoint = [event.point.x, event.point.y, event.point.z]; if (manualMode) onToggleBeam(beam, point); else onToggleBeam(beam, point); }}>
       <boxGeometry args={[beam.size[0] / 1000, beam.size[2] / 1000, beam.size[1] / 1000]} />
       <meshStandardMaterial color={selectedBeams.includes(`${beam.layerId}:${beam.layerIndex}`) ? "#d83a3a" : "#b88254"} roughness={0.72} />
+    </mesh>)}
+    {manualSupports.map(({ beam, point }) => <mesh key={`manual-point:${beam.layerId}:${beam.layerIndex}`} position={point}>
+      <sphereGeometry args={[0.07, 16, 12]} /><meshStandardMaterial color="#e07822" emissive="#7a3307" />
     </mesh>)}
     {insertionMode ? insertionMarkers.map((marker) => {
       const selected = selectedSlot?.layerId === marker.slot.layerId && selectedSlot?.afterBeamIndex === marker.slot.afterBeamIndex;
