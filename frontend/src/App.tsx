@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import type {
   CameraPreset,
   ViewportBeam,
@@ -319,6 +319,7 @@ export function App() {
     setSelectedSlot(null);
     setManualSupports([]);
     setManualReference(null);
+    setSelectedBeams([]);
   }
 
   async function insertSelectedBeam() {
@@ -363,6 +364,7 @@ export function App() {
     if (response.ok && response.snapshot) {
       applyProject(response.snapshot.project);
       setManualSupports([]);
+      setSelectedBeams([]);
     }
   }
 
@@ -477,6 +479,12 @@ export function App() {
   const rounding = project?.pallet.length.round_pallet_size
     ? (String(project.pallet.length.rounding_step) as "5" | "50")
     : "none";
+  const manualHud: ReactNode = insertionMode ? (
+    <div className="manual-hud">
+      <strong>{manualSupports.length === 0 ? "Click the first support beam." : manualSupports.length === 1 ? "Click a second parallel support beam." : "Configure the new beam."}</strong>
+      {manualSupports.length === 2 ? <><label>Reference <select value={manualReferenceMode} onChange={(event) => { setManualReferenceMode(event.target.value as "base" | "face"); if (event.target.value === "base") setManualReference(null); }}><option value="base">Base point</option><option value="face">Selected beam face</option></select></label>{manualReferenceMode === "face" ? <span>{manualReference ? `Reference beam: ${manualReference.layerId} ${manualReference.layerIndex + 1}` : "Click a beam as reference."}</span> : null}<label>Distance<input type="number" value={manualDistance} onChange={(event) => setManualDistance(Number(event.target.value))} onKeyDown={(event) => { if (event.key === "Enter") void addManualBeam(); if (event.key === "Escape") stopInsertion(); }} /></label><button type="button" onClick={addManualBeam}>Add beam</button><button type="button" onClick={stopInsertion}>Cancel</button></> : null}
+    </div>
+  ) : null;
 
   return (
     <main className="migration-shell">
@@ -783,11 +791,12 @@ export function App() {
                 manualMode={insertionMode}
                 manualSupports={manualSupports}
                 onSelectManualSupport={selectManualSupport}
+                manualHud={manualHud}
               />
             </Suspense>
           </>
         ) : null}
-        {insertionMode && manualSupports.length === 2 ? (
+        {false && insertionMode && manualSupports.length === 2 ? (
           <div className="distance-editor">
             <span>
               Two supports selected. Set the offset from the base point.
@@ -797,7 +806,7 @@ export function App() {
               <label><input type="radio" checked={manualReferenceMode === "base"} onChange={() => { setManualReferenceMode("base"); setManualReference(null); }} />Base point</label>
               <label><input type="radio" checked={manualReferenceMode === "face"} onChange={() => setManualReferenceMode("face")} />Selected beam face</label>
             </fieldset>
-            {manualReferenceMode === "face" ? <><p>{manualReference ? `Reference: ${manualReference.layerId} · beam ${manualReference.layerIndex + 1}` : "Click a beam to choose the reference."}</p><label>Face<select value={manualReferenceFace} onChange={(event) => setManualReferenceFace(event.target.value as "x_min" | "x_max" | "y_min" | "y_max")}><option value="x_min">X minimum</option><option value="x_max">X maximum</option><option value="y_min">Y minimum</option><option value="y_max">Y maximum</option></select></label></> : null}
+            {manualReferenceMode === "face" ? <><p>{manualReference ? `Reference: ${manualReference?.layerId} · beam ${(manualReference?.layerIndex ?? 0) + 1}` : "Click a beam to choose the reference."}</p><label>Face<select value={manualReferenceFace} onChange={(event) => setManualReferenceFace(event.target.value as "x_min" | "x_max" | "y_min" | "y_max")}><option value="x_min">X minimum</option><option value="x_max">X maximum</option><option value="y_min">Y minimum</option><option value="y_max">Y maximum</option></select></label></> : null}
             <label>
               Distance
               <input

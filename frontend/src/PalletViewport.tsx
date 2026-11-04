@@ -1,7 +1,7 @@
 import { Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { CanvasTexture, LinearFilter } from "three";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 export type ViewportBeam = {
   index: number;
@@ -196,6 +196,7 @@ export default function PalletViewport({
   manualMode = insertionMode,
   manualSupports = [],
   onSelectManualSupport = () => {},
+  manualHud,
 }: {
   beams: ViewportBeam[];
   dimensions: ViewportDimension[];
@@ -213,7 +214,9 @@ export default function PalletViewport({
   manualMode?: boolean;
   manualSupports?: { beam: ViewportBeam; point: ViewportPoint }[];
   onSelectManualSupport?: (beam: ViewportBeam, point: ViewportPoint) => void;
+  manualHud?: ReactNode;
 }) {
+  const [cursor, setCursor] = useState<[number, number]>([16, 16]);
   const bounds = useMemo(() => {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -275,7 +278,7 @@ export default function PalletViewport({
     };
   }, [manualSupports]);
   return (
-    <div className="viewport">
+    <div className="viewport" onPointerMove={(event) => { const box = event.currentTarget.getBoundingClientRect(); setCursor([event.clientX - box.left + 14, event.clientY - box.top + 14]); }}>
       <Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
         <Camera preset={preset} bounds={bounds} />
         <color attach="background" args={["#edf1f3"]} />
@@ -324,10 +327,11 @@ export default function PalletViewport({
         {manualSupports.map(({ beam, point }) => (
           <mesh
             key={`manual-point:${beam.layerId}:${beam.layerIndex}`}
-            position={point}
+            position={[point[0], point[1] + 0.08, point[2]]}
+            renderOrder={20}
           >
             <sphereGeometry args={[0.07, 16, 12]} />
-            <meshStandardMaterial color="#e07822" emissive="#7a3307" />
+            <meshStandardMaterial color="#e07822" emissive="#7a3307" depthTest={false} />
           </mesh>
         ))}
         {manualPreview ? <mesh position={manualPreview.position}>
@@ -478,6 +482,7 @@ export default function PalletViewport({
         })}
         <OrbitControls makeDefault target={bounds.center} />
       </Canvas>
+      {manualHud ? <div className="viewport-hud" style={{ left: cursor[0], top: cursor[1] }}>{manualHud}</div> : null}
     </div>
   );
 }
