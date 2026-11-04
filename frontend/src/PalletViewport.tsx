@@ -141,7 +141,7 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
     {manualSupports.map(({ beam, point }) => <mesh key={`manual-point:${beam.layerId}:${beam.layerIndex}`} position={point}>
       <sphereGeometry args={[0.07, 16, 12]} /><meshStandardMaterial color="#e07822" emissive="#7a3307" />
     </mesh>)}
-    {insertionMode ? insertionMarkers.map((marker) => {
+    {false ? insertionMarkers.map((marker) => {
       const selected = selectedSlot?.layerId === marker.slot.layerId && selectedSlot?.afterBeamIndex === marker.slot.afterBeamIndex;
       return <group key={`${marker.slot.layerId}:${marker.slot.afterBeamIndex}`}>
         <mesh position={[marker.center[0] / 1000, marker.center[2] / 1000, marker.center[1] / 1000]} onClick={(event) => { event.stopPropagation(); onSelectInsertion(marker); }}>
