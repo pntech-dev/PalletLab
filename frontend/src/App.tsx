@@ -50,6 +50,7 @@ declare global {
 export function App() {
   const [status, setStatus] = useState<ApplicationStatus | null>(null);
   const [calculation, setCalculation] = useState<CalculationResponse | null>(null);
+  const [calculationError, setCalculationError] = useState<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [distanceText, setDistanceText] = useState<Record<"length" | "width", string>>({ length: "", width: "" });
@@ -65,6 +66,17 @@ export function App() {
       length: nextProject.pallet.length.support_distances.join(" "),
       width: nextProject.pallet.width.support_distances.join(" "),
     });
+  }
+
+  function applyCalculation(response: CalculationResponse) {
+    // Invalid intermediate form values must not discard the last valid 3D
+    // snapshot. Keeping it visible lets a user correct the input immediately.
+    if (response.ok && response.snapshot) {
+      setCalculation(response);
+      setCalculationError(null);
+    } else {
+      setCalculationError(response.error ?? "Не удалось рассчитать поддон.");
+    }
   }
 
   useEffect(() => {
@@ -87,7 +99,7 @@ export function App() {
   async function calculateProject() {
     const api = window.pywebview?.api;
     if (!api) return;
-    if (project) setCalculation(await api.calculate(project));
+    if (project) applyCalculation(await api.calculate(project));
   }
 
   useEffect(() => {
@@ -96,10 +108,19 @@ export function App() {
     return () => window.clearTimeout(timeout);
   }, [project, status]);
 
-  async function saveProject() { if (project) setCalculation(await window.pywebview!.api!.save_project(project) as CalculationResponse); }
+  async function saveProject() {
+    if (!project) return;
+    const response = await window.pywebview!.api!.save_project(project);
+    if (!response.ok && !response.cancelled) setCalculationError(response.error ?? "Не удалось сохранить проект.");
+  }
   async function openProject() {
     const response = await window.pywebview!.api!.open_project();
-    if (response.project) applyProject(response.project);
+    if (response.project) {
+      applyProject(response.project);
+      setCalculationError(null);
+    } else if (!response.cancelled) {
+      setCalculationError(response.error ?? "Не удалось открыть проект.");
+    }
   }
 
   function toggleBeam(beam: ViewportBeam) {
@@ -119,7 +140,7 @@ export function App() {
       return byLayer;
     }, {});
     const response = await api.delete_beams(project, selection);
-    setCalculation(response);
+    applyCalculation(response);
     if (response.ok && response.snapshot) {
       applyProject(response.snapshot.project);
       setSelectedBeams([]);
@@ -134,7 +155,7 @@ export function App() {
       return byLayer;
     }, {});
     const response = await api.change_beam_sections(project, selection, section);
-    setCalculation(response);
+    applyCalculation(response);
     if (response.ok && response.snapshot) {
       applyProject(response.snapshot.project);
       setSelectedBeams([]);
@@ -155,7 +176,7 @@ export function App() {
       { layerId: selectedDimension.layerId, beamIndex: selectedDimension.index },
       distanceValue,
     );
-    setCalculation(response);
+    applyCalculation(response);
     if (response.ok && response.snapshot) {
       applyProject(response.snapshot.project);
       setSelectedDimension(null);
@@ -284,7 +305,7 @@ export function App() {
             · {calculation.snapshot.pallet.beams.length} beams
           </p><p className="selection-status">{selectedBeams.length ? `Selected beams: ${selectedBeams.length}` : "Select beams in the 3D view"}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}<label>Section height<input type="number" min="1" value={section.height} onChange={(event) => setSection({ ...section, height: Number(event.target.value) })} /></label><label>Section width<input type="number" min="1" value={section.width} onChange={(event) => setSection({ ...section, width: Number(event.target.value) })} /></label><button type="button" onClick={changeSelectedBeamSections} disabled={selectedBeams.length === 0}>Change section</button><button type="button" onClick={deleteSelectedBeams} disabled={selectedBeams.length === 0}>Delete selected ({selectedBeams.length})</button></div>{selectedDimension ? <div className="distance-editor"><span>Selected dimension: {selectedDimension.value.toFixed(0)} mm</span><label>New face distance<input type="number" value={distanceValue} onChange={(event) => setDistanceValue(Number(event.target.value))} /></label><button type="button" onClick={changeSelectedDistance}>Apply distance</button><button type="button" onClick={() => setSelectedDimension(null)}>Cancel</button></div> : <p className="dimension-hint">Click a dimension line in the 3D view to edit its distance.</p>}<Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeams={selectedBeams.map((beam) => `${beam.layerId}:${beam.layerIndex}`)} onToggleBeam={toggleBeam} onSelectDimension={selectDimension} /></Suspense></>
         ) : null}
-        {calculation && !calculation.ok ? <p className="error">{calculation.error}</p> : null}
+        {calculationError ? <p className="error">{calculationError}</p> : null}
       </section>
     </main>
   );

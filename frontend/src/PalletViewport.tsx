@@ -1,6 +1,7 @@
-import { Html, Line, OrbitControls } from "@react-three/drei";
+import { Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
-import { useEffect } from "react";
+import { CanvasTexture, LinearFilter } from "three";
+import { useEffect, useMemo } from "react";
 
 export type ViewportBeam = {
   index: number;
@@ -46,6 +47,37 @@ function DimensionHitArea({ dimension, start, end, middle, onSelect }: {
   </mesh>;
 }
 
+function DimensionLabel({ value, position, dimension, onSelect }: {
+  value: number;
+  position: [number, number, number];
+  dimension: ViewportDimension;
+  onSelect: (dimension: ViewportDimension) => void;
+}) {
+  const texture = useMemo(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 160;
+    canvas.height = 64;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas 2D is unavailable for dimension labels.");
+    context.fillStyle = "rgba(255, 255, 255, 0.94)";
+    context.roundRect(2, 2, 156, 60, 8);
+    context.fill();
+    context.fillStyle = "#183f52";
+    context.font = "600 31px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(value.toFixed(0), 80, 33);
+    const result = new CanvasTexture(canvas);
+    result.minFilter = LinearFilter;
+    return result;
+  }, [value]);
+  useEffect(() => () => texture.dispose(), [texture]);
+  return <sprite position={position} scale={[0.38, 0.15, 1]} renderOrder={10}
+    onClick={(event) => { event.stopPropagation(); if (dimension.editable) onSelect(dimension); }}>
+    <spriteMaterial map={texture} transparent depthTest={false} depthWrite={false} />
+  </sprite>;
+}
+
 export default function PalletViewport({ beams, dimensions, preset, selectedBeams, onToggleBeam, onSelectDimension }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void }) {
   return <div className="viewport"><Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
     <Camera preset={preset} />
@@ -76,9 +108,7 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
         <Line points={arrow(start, 1)} color="#315b6c" lineWidth={1.5} />
         <Line points={arrow(end, -1)} color="#315b6c" lineWidth={1.5} />
         {dimension.editable ? <DimensionHitArea dimension={dimension} start={start} end={end} middle={middle} onSelect={onSelectDimension} /> : null}
-        <Html position={middle} center occlude={false} zIndexRange={[1000000, 1000]} style={{ pointerEvents: "none" }}>
-          <span className="dimension-label">{dimension.value.toFixed(0)}</span>
-        </Html>
+        <DimensionLabel value={dimension.value} position={middle} dimension={dimension} onSelect={onSelectDimension} />
       </group>;
     })}
     <OrbitControls makeDefault />
