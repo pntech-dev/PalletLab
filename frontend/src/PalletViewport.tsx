@@ -7,6 +7,7 @@ export type ViewportBeam = {
   index: number;
   layerId: string;
   layerIndex: number;
+  orientation: string;
   center: [number, number, number];
   size: [number, number, number];
 };
@@ -260,6 +261,19 @@ export default function PalletViewport({
       position: [length / 2, 0, width / 2] as [number, number, number],
     };
   }, [beams]);
+  const manualPreview = useMemo(() => {
+    if (manualSupports.length !== 2) return null;
+    const [first, second] = manualSupports;
+    const alongX = first.beam.size[0] >= first.beam.size[1];
+    const length = Math.abs((alongX ? second.point[2] - first.point[2] : second.point[0] - first.point[0]));
+    if (length < 0.001) return null;
+    const thickness = Math.min(first.beam.size[0], first.beam.size[1]) / 1000;
+    const height = first.beam.size[2] / 1000;
+    return {
+      position: [(first.point[0] + second.point[0]) / 2, first.point[1] + height / 2, (first.point[2] + second.point[2]) / 2] as ViewportPoint,
+      size: alongX ? [thickness, height, length] as [number, number, number] : [length, height, thickness] as [number, number, number],
+    };
+  }, [manualSupports]);
   return (
     <div className="viewport">
       <Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
@@ -316,6 +330,10 @@ export default function PalletViewport({
             <meshStandardMaterial color="#e07822" emissive="#7a3307" />
           </mesh>
         ))}
+        {manualPreview ? <mesh position={manualPreview.position}>
+          <boxGeometry args={manualPreview.size} />
+          <meshStandardMaterial color="#36b778" transparent opacity={0.42} depthWrite={false} />
+        </mesh> : null}
         {false
           ? insertionMarkers.map((marker) => {
               const selected =
