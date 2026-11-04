@@ -1,4 +1,4 @@
-import { Line, OrbitControls } from "@react-three/drei";
+import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
 import { CanvasTexture, LinearFilter } from "three";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -480,9 +480,10 @@ export default function PalletViewport({
             </group>
           );
         })}
+        {manualHud && manualSupports[0] ? <Html position={[manualSupports[0].point[0], manualSupports[0].point[1] + 0.24, manualSupports[0].point[2]]} center>{manualHud}</Html> : null}
         <OrbitControls makeDefault target={bounds.center} />
       </Canvas>
-      {manualHud ? <div className="viewport-hud" style={{ left: cursor[0], top: cursor[1] }}>{manualHud}</div> : null}
+      {manualMode ? <div className="viewport-hint" style={{ left: cursor[0], top: cursor[1] }}>{manualSupports.length === 0 ? "Select the first support" : manualSupports.length === 1 ? "Select the second support" : "Configure the new beam"}</div> : null}
     </div>
   );
 }
