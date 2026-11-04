@@ -36,6 +36,10 @@ class WebApplicationApi:
         """Change selected beam cross-sections through the domain controller."""
         return ApplicationService().change_beam_sections(project, selection, section)
 
+    def change_beam_distance(self, project: object, target: object, face_distance: object) -> dict[str, Any]:
+        """Apply an editable viewport dimension through the domain controller."""
+        return ApplicationService().change_beam_distance(project, target, face_distance)
+
     def default_project(self) -> dict[str, Any]:
         """Provide the temporary frontend with a valid starting project."""
         return ApplicationService().default_project()

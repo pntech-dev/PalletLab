@@ -76,6 +76,38 @@ class ApplicationService:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось изменить сечение бруса."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
+    def change_beam_distance(self, project: object, target: object, face_distance: object) -> dict[str, Any]:
+        """Move a rendered beam face using the established controller rules.
+
+        The viewport sends the identity already present in an editable dimension
+        snapshot.  Keeping the conversion here means React never needs to know
+        how support distances, manual beams, or pallet envelope dimensions are
+        represented in the persisted project.
+        """
+        try:
+            state = project_from_dict(project)
+        except ProjectPersistenceError as exc:
+            return {"ok": False, "error": str(exc)}
+        layer_id, beam_index, error = _distance_target(target)
+        if error:
+            return {"ok": False, "error": error}
+        if (
+            not isinstance(face_distance, (int, float))
+            or isinstance(face_distance, bool)
+            or not isfinite(face_distance)
+        ):
+            return {"ok": False, "error": "Расстояние должно быть конечным числом."}
+
+        controller, errors = self._controller_for(state)
+        if controller.recalculate_from_state(show_error=False) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
+        controller.begin_distance_edit(layer_id, beam_index)
+        if controller.confirm_distance_edit(float(face_distance)) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось изменить расстояние."}
+        if controller.recalculate_from_state(show_error=False) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось пересчитать поддон."}
+        return {"ok": True, "snapshot": project_snapshot(state)}
+
     def default_project(self) -> dict[str, Any]:
         """Return the same starting configuration as the current desktop reset."""
         length = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100)
@@ -161,6 +193,23 @@ def _beam_section(section: object) -> tuple[BeamSection | None, str | None]:
     ):
         return None, "Высота и ширина сечения должны быть положительными числами."
     return BeamSection(float(height), float(width)), None
+
+
+def _distance_target(target: object) -> tuple[str, int, str | None]:
+    """Validate an editable-dimension identity received over the web bridge."""
+    if not isinstance(target, dict):
+        return "", 0, "Некорректная размерная линия."
+    layer_id = target.get("layerId")
+    beam_index = target.get("beamIndex")
+    if (
+        not isinstance(layer_id, str)
+        or not layer_id
+        or not isinstance(beam_index, int)
+        or isinstance(beam_index, bool)
+        or beam_index < 0
+    ):
+        return "", 0, "Некорректная размерная линия."
+    return layer_id, beam_index, None
 
 
 class _Signal:

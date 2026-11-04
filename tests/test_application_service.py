@@ -89,6 +89,38 @@ def test_change_beam_sections_updates_selected_beam_geometry() -> None:
     assert updated["size"] == [75.0, beam["size"][1], 100.0]
 
 
+def test_change_beam_distance_updates_the_selected_dimension() -> None:
+    service = ApplicationService()
+    calculated = service.calculate(service.default_project())
+    dimension = next(item for item in calculated["snapshot"]["pallet"]["dimensions"] if item["editable"])
+
+    response = service.change_beam_distance(
+        calculated["snapshot"]["project"],
+        {"layerId": dimension["layerId"], "beamIndex": dimension["index"]},
+        dimension["value"] + 100,
+    )
+
+    assert response["ok"] is True
+    updated = next(
+        item for item in response["snapshot"]["pallet"]["dimensions"]
+        if item["layerId"] == dimension["layerId"] and item["index"] == dimension["index"]
+    )
+    assert updated["value"] == dimension["value"] + 100
+
+
+def test_change_beam_distance_rejects_invalid_viewport_payloads() -> None:
+    service = ApplicationService()
+
+    assert service.change_beam_distance(service.default_project(), {}, 100) == {
+        "ok": False,
+        "error": "Некорректная размерная линия.",
+    }
+    assert service.change_beam_distance(service.default_project(), {"layerId": "length", "beamIndex": 1}, float("inf")) == {
+        "ok": False,
+        "error": "Расстояние должно быть конечным числом.",
+    }
+
+
 def test_materials_expose_stable_ids_and_names() -> None:
     assert ApplicationService().materials() == [
         {"id": "pine", "name": "Сосна"},

@@ -11,6 +11,7 @@ export type ViewportBeam = {
 };
 export type CameraPreset = "isometric" | "top" | "front" | "side";
 export type ViewportDimension = {
+  layerId: string; axis: "length" | "width"; index: number; editValue: number | null; editable: boolean;
   value: number; start: [number, number, number]; end: [number, number, number];
   startExtension: [number, number, number] | null; endExtension: [number, number, number] | null;
 };
@@ -26,7 +27,7 @@ function Camera({ preset }: { preset: CameraPreset }) {
   return null;
 }
 
-export default function PalletViewport({ beams, dimensions, preset, selectedBeams, onToggleBeam }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; onToggleBeam: (beam: ViewportBeam) => void }) {
+export default function PalletViewport({ beams, dimensions, preset, selectedBeams, onToggleBeam, onSelectDimension }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void }) {
   return <div className="viewport"><Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
     <Camera preset={preset} />
     <color attach="background" args={["#edf1f3"]} />
@@ -49,10 +50,10 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
         origin,
         [origin[0] + (unit[0] * direction - side[0]) * scale, origin[1] + (unit[1] * direction - side[1]) * scale, origin[2] + (unit[2] * direction - side[2]) * scale],
       ] as [number, number, number][];
-      return <group key={index}>
+      return <group key={index} onClick={(event) => { event.stopPropagation(); if (dimension.editable) onSelectDimension(dimension); }}>
         {dimension.startExtension ? <Line points={[point(dimension.startExtension), start]} color="#315b6c" lineWidth={1} /> : null}
         {dimension.endExtension ? <Line points={[point(dimension.endExtension), end]} color="#315b6c" lineWidth={1} /> : null}
-        <Line points={[start, end]} color="#315b6c" lineWidth={1.5} />
+        <Line points={[start, end]} color={dimension.editable ? "#315b6c" : "#718087"} lineWidth={dimension.editable ? 2 : 1.5} />
         <Line points={arrow(start, 1)} color="#315b6c" lineWidth={1.5} />
         <Line points={arrow(end, -1)} color="#315b6c" lineWidth={1.5} />
         <Html position={middle} center style={{ pointerEvents: "none" }}><span className="dimension-label">{dimension.value.toFixed(0)}</span></Html>
