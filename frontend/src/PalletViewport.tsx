@@ -38,7 +38,10 @@ function Camera({ preset, bounds }: { preset: CameraPreset; bounds: ViewportBoun
     else camera.up.set(0, 1, 0);
     camera.position.set(...positions[preset]);
     camera.lookAt(x, y, z);
-  }, [bounds, camera, preset]);
+  // Recalculation changes pallet bounds after every editor command. Do not
+  // treat that as a camera command: retain the user's current orbit until a
+  // preset is explicitly selected.
+  }, [camera, preset]);
   return null;
 }
 
