@@ -484,9 +484,9 @@ export function App() {
   const rounding = project?.pallet.length.round_pallet_size
     ? (String(project.pallet.length.rounding_step) as "5" | "50")
     : "none";
-  const manualHud: ReactNode = insertionMode ? (
+  const manualHud: ReactNode = insertionMode && manualSupports.length === 2 ? (
     <div className="manual-hud">
-      <strong>{manualSupports.length === 0 ? "Click the first support beam." : manualSupports.length === 1 ? "Click a second parallel support beam." : "Configure the new beam."}</strong>
+      <strong>Configure the new beam.</strong>
       {manualSupports.length === 2 ? <><label>Reference <select value={manualReferenceMode} onChange={(event) => { setManualReferenceMode(event.target.value as "base" | "face"); if (event.target.value === "base") setManualReference(null); }}><option value="base">Base point</option><option value="face">Selected beam face</option></select></label>{manualReferenceMode === "face" ? <span>{manualReference ? `Reference beam: ${manualReference.layerId} ${manualReference.layerIndex + 1}` : "Click a beam as reference."}</span> : null}<label>Distance<input type="number" value={manualDistance} onChange={(event) => setManualDistance(Number(event.target.value))} onKeyDown={(event) => { if (event.key === "Enter") void addManualBeam(); if (event.key === "Escape") stopInsertion(); }} /></label><button type="button" onClick={addManualBeam}>Add beam</button><button type="button" onClick={stopInsertion}>Cancel</button></> : null}
     </div>
   ) : null;
@@ -795,6 +795,7 @@ export function App() {
                 manualSupports={manualSupports}
                 onSelectManualSupport={selectManualSupport}
                 manualHud={manualHud}
+                beamSelectionEnabled={insertionMode || beamTool !== "none"}
               />
             </Suspense>
           </>

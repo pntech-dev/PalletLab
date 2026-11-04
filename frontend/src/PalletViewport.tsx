@@ -197,6 +197,7 @@ export default function PalletViewport({
   manualSupports = [],
   onSelectManualSupport = () => {},
   manualHud,
+  beamSelectionEnabled,
 }: {
   beams: ViewportBeam[];
   dimensions: ViewportDimension[];
@@ -215,6 +216,7 @@ export default function PalletViewport({
   manualSupports?: { beam: ViewportBeam; point: ViewportPoint }[];
   onSelectManualSupport?: (beam: ViewportBeam, point: ViewportPoint) => void;
   manualHud?: ReactNode;
+  beamSelectionEnabled: boolean;
 }) {
   const [cursor, setCursor] = useState<[number, number]>([16, 16]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
@@ -307,7 +309,7 @@ export default function PalletViewport({
               if (manualMode) onToggleBeam(beam, point);
               else onToggleBeam(beam, point);
             }}
-            onPointerOver={(event) => { event.stopPropagation(); setHoveredBeam(`${beam.layerId}:${beam.layerIndex}`); }}
+            onPointerOver={(event) => { if (beamSelectionEnabled) { event.stopPropagation(); setHoveredBeam(`${beam.layerId}:${beam.layerIndex}`); } }}
             onPointerOut={() => setHoveredBeam(null)}
           >
             <boxGeometry
