@@ -136,6 +136,9 @@ export function App() {
     { beam: ViewportBeam; point: ViewportPoint }[]
   >([]);
   const [manualDistance, setManualDistance] = useState(0);
+  const [manualReferenceMode, setManualReferenceMode] = useState<"base" | "face">("base");
+  const [manualReference, setManualReference] = useState<ViewportBeam | null>(null);
+  const [manualReferenceFace, setManualReferenceFace] = useState<"x_min" | "x_max" | "y_min" | "y_max">("x_min");
 
   function applyProject(nextProject: Project) {
     setProject(nextProject);
@@ -208,6 +211,10 @@ export function App() {
 
   function toggleBeam(beam: ViewportBeam, point?: ViewportPoint) {
     if (insertionMode) {
+      if (manualReferenceMode === "face" && manualSupports.length === 2) {
+        setManualReference(beam);
+        return;
+      }
       const support = {
         beam,
         point:
@@ -311,6 +318,7 @@ export function App() {
     setInsertionMode(false);
     setSelectedSlot(null);
     setManualSupports([]);
+    setManualReference(null);
   }
 
   async function insertSelectedBeam() {
@@ -344,7 +352,12 @@ export function App() {
         layerId: beam.layerId,
         layerIndex: beam.layerIndex,
       })),
-      { distance: manualDistance, section },
+      {
+        distance: manualDistance,
+        section,
+        reference: manualReference ? { layerId: manualReference.layerId, layerIndex: manualReference.layerIndex } : undefined,
+        referenceFace: manualReference ? manualReferenceFace : undefined,
+      },
     );
     applyCalculation(response);
     if (response.ok && response.snapshot) {
@@ -779,6 +792,12 @@ export function App() {
             <span>
               Two supports selected. Set the offset from the base point.
             </span>
+            <fieldset>
+              <legend>Reference</legend>
+              <label><input type="radio" checked={manualReferenceMode === "base"} onChange={() => { setManualReferenceMode("base"); setManualReference(null); }} />Base point</label>
+              <label><input type="radio" checked={manualReferenceMode === "face"} onChange={() => setManualReferenceMode("face")} />Selected beam face</label>
+            </fieldset>
+            {manualReferenceMode === "face" ? <><p>{manualReference ? `Reference: ${manualReference.layerId} · beam ${manualReference.layerIndex + 1}` : "Click a beam to choose the reference."}</p><label>Face<select value={manualReferenceFace} onChange={(event) => setManualReferenceFace(event.target.value as "x_min" | "x_max" | "y_min" | "y_max")}><option value="x_min">X minimum</option><option value="x_max">X maximum</option><option value="y_min">Y minimum</option><option value="y_max">Y maximum</option></select></label></> : null}
             <label>
               Distance
               <input
