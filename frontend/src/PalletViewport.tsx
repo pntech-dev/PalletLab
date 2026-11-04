@@ -16,6 +16,11 @@ export type ViewportDimension = {
   value: number; start: [number, number, number]; end: [number, number, number];
   startExtension: [number, number, number] | null; endExtension: [number, number, number] | null;
 };
+export type ViewportInsertionMarker = {
+  slot: { axis: "length" | "width"; layerId: string; afterBeamIndex: number; maximumClearGap: number; suggestedClearGap: number };
+  center: [number, number, number]; size: number;
+  preview: { center: [number, number, number]; size: [number, number, number] };
+};
 
 function point([x, y, z]: [number, number, number]): [number, number, number] { return [x / 1000, z / 1000, y / 1000]; }
 
@@ -101,7 +106,7 @@ function DimensionLabel({ value, position, dimension, canEdit, onSelect, onHover
   </sprite>;
 }
 
-export default function PalletViewport({ beams, dimensions, preset, selectedBeams, dimensionEditing, hoveredDimension, onToggleBeam, onSelectDimension, onHoverDimension }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; dimensionEditing: boolean; hoveredDimension: string | null; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void; onHoverDimension: (dimension: ViewportDimension | null) => void }) {
+export default function PalletViewport({ beams, dimensions, preset, selectedBeams, dimensionEditing, hoveredDimension, onToggleBeam, onSelectDimension, onHoverDimension, insertionMarkers, insertionMode, selectedSlot, onSelectInsertion }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; dimensionEditing: boolean; hoveredDimension: string | null; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void; onHoverDimension: (dimension: ViewportDimension | null) => void; insertionMarkers: ViewportInsertionMarker[]; insertionMode: boolean; selectedSlot: { layerId: string; afterBeamIndex: number } | null; onSelectInsertion: (marker: ViewportInsertionMarker) => void }) {
   const bounds = useMemo(() => {
     const min = [Infinity, Infinity, Infinity]; const max = [-Infinity, -Infinity, -Infinity];
     for (const beam of beams) {
@@ -132,6 +137,18 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
       <boxGeometry args={[beam.size[0] / 1000, beam.size[2] / 1000, beam.size[1] / 1000]} />
       <meshStandardMaterial color={selectedBeams.includes(`${beam.layerId}:${beam.layerIndex}`) ? "#d83a3a" : "#b88254"} roughness={0.72} />
     </mesh>)}
+    {insertionMode ? insertionMarkers.map((marker) => {
+      const selected = selectedSlot?.layerId === marker.slot.layerId && selectedSlot?.afterBeamIndex === marker.slot.afterBeamIndex;
+      return <group key={`${marker.slot.layerId}:${marker.slot.afterBeamIndex}`}>
+        <mesh position={[marker.center[0] / 1000, marker.center[2] / 1000, marker.center[1] / 1000]} onClick={(event) => { event.stopPropagation(); onSelectInsertion(marker); }}>
+          <sphereGeometry args={[marker.size / 1000, 16, 12]} />
+          <meshStandardMaterial color={selected ? "#e07822" : "#269e6b"} emissive={selected ? "#7a3307" : "#0e5638"} />
+        </mesh>
+        {selected ? <mesh position={[marker.preview.center[0] / 1000, marker.preview.center[2] / 1000, marker.preview.center[1] / 1000]}>
+          <boxGeometry args={[marker.preview.size[0] / 1000, marker.preview.size[2] / 1000, marker.preview.size[1] / 1000]} /><meshStandardMaterial color="#269e6b" transparent opacity={0.45} />
+        </mesh> : null}
+      </group>;
+    }) : null}
     {dimensions.map((dimension, index) => {
       const dimensionKey = `${dimension.layerId}:${dimension.index}`;
       const isHovered = dimensionEditing && hoveredDimension === dimensionKey;

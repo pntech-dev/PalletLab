@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import type { CameraPreset, ViewportBeam, ViewportDimension } from "./PalletViewport";
+import type { CameraPreset, ViewportBeam, ViewportDimension, ViewportInsertionMarker } from "./PalletViewport";
 
 const PalletViewport = lazy(() => import("./PalletViewport"));
 
@@ -14,7 +14,7 @@ type CalculationResponse = {
   error?: string;
   snapshot?: {
     project: Project;
-    pallet: { size: { length: number; width: number; height: number }; beams: ViewportBeam[]; dimensions: ViewportDimension[] } | null;
+    pallet: { size: { length: number; width: number; height: number }; beams: ViewportBeam[]; dimensions: ViewportDimension[]; insertionMarkers: ViewportInsertionMarker[] } | null;
   };
 };
 
@@ -28,6 +28,7 @@ type Project = { pallet: { length: Direction; width: Direction; layers: Layer[];
 type Material = { id: string; name: string };
 type BeamSection = { height: number; width: number };
 type DimensionTarget = { layerId: string; beamIndex: number };
+type InsertionSlot = { axis: "length" | "width"; layerId: string; afterBeamIndex: number; maximumClearGap: number; suggestedClearGap: number };
 
 declare global {
   interface Window {
@@ -40,6 +41,7 @@ declare global {
         delete_beams: (project: object, selection: Record<string, number[]>) => Promise<CalculationResponse>;
         change_beam_sections: (project: object, selection: Record<string, number[]>, section: BeamSection) => Promise<CalculationResponse>;
         change_beam_distance: (project: object, target: DimensionTarget, faceDistance: number) => Promise<CalculationResponse>;
+        insert_beam: (project: object, slot: InsertionSlot, clearGap: number) => Promise<CalculationResponse>;
         save_project: (project: object) => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
         open_project: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string; project?: Project }>;
       };
@@ -61,6 +63,9 @@ export function App() {
   const [distanceValue, setDistanceValue] = useState(0);
   const [dimensionEditing, setDimensionEditing] = useState(false);
   const [hoveredDimension, setHoveredDimension] = useState<string | null>(null);
+  const [insertionMode, setInsertionMode] = useState(false);
+  const [selectedSlot, setSelectedSlot] = useState<InsertionSlot | null>(null);
+  const [insertionGap, setInsertionGap] = useState(0);
 
   function applyProject(nextProject: Project) {
     setProject(nextProject);
@@ -191,11 +196,34 @@ export function App() {
     setHoveredDimension(null);
   }
 
+  function stopInsertion() {
+    setInsertionMode(false);
+    setSelectedSlot(null);
+  }
+
+  async function insertSelectedBeam() {
+    const api = window.pywebview?.api;
+    if (!api || !project || !selectedSlot) return;
+    const response = await api.insert_beam(project, selectedSlot, insertionGap);
+    applyCalculation(response);
+    if (response.ok && response.snapshot) {
+      applyProject(response.snapshot.project);
+      setSelectedSlot(null);
+    }
+  }
+
+  function selectInsertion(marker: ViewportInsertionMarker) {
+    setSelectedSlot(marker.slot);
+    setInsertionGap(marker.slot.suggestedClearGap);
+  }
+
+
   useEffect(() => {
     const cancelEditing = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         stopDimensionEditing();
+        stopInsertion();
       }
     };
     window.addEventListener("keydown", cancelEditing);
@@ -322,7 +350,7 @@ export function App() {
           <><p className="result">
             {calculation.snapshot.pallet.size.length} × {calculation.snapshot.pallet.size.width} × {calculation.snapshot.pallet.size.height} mm
             · {calculation.snapshot.pallet.beams.length} beams
-          </p><p className="selection-status">{selectedBeams.length ? `Selected beams: ${selectedBeams.length}` : "Select beams in the 3D view"}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}<label>Section height<input type="number" min="1" value={section.height} onChange={(event) => setSection({ ...section, height: Number(event.target.value) })} /></label><label>Section width<input type="number" min="1" value={section.width} onChange={(event) => setSection({ ...section, width: Number(event.target.value) })} /></label><button type="button" onClick={changeSelectedBeamSections} disabled={selectedBeams.length === 0}>Change section</button><button type="button" onClick={deleteSelectedBeams} disabled={selectedBeams.length === 0}>Delete selected ({selectedBeams.length})</button><button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : setDimensionEditing(true)}>{dimensionEditing ? "Finish dimension edit" : "Edit dimensions"}</button></div>{dimensionEditing && selectedDimension ? <div className="distance-editor"><span>Selected dimension: {selectedDimension.value.toFixed(0)} mm</span><label>New face distance<input type="number" value={distanceValue} onChange={(event) => setDistanceValue(Number(event.target.value))} onKeyDown={(event) => { if (event.key === "Enter") void changeSelectedDistance(); if (event.key === "Escape") stopDimensionEditing(); }} /></label><button type="button" onClick={changeSelectedDistance}>Apply distance</button><button type="button" onClick={stopDimensionEditing}>Cancel</button></div> : dimensionEditing ? <p className="dimension-hint">Hover a dimension line, then click it to edit. Esc closes this mode.</p> : null}<Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeams={selectedBeams.map((beam) => `${beam.layerId}:${beam.layerIndex}`)} dimensionEditing={dimensionEditing} hoveredDimension={hoveredDimension} onToggleBeam={toggleBeam} onSelectDimension={selectDimension} onHoverDimension={(dimension) => setHoveredDimension(dimension ? `${dimension.layerId}:${dimension.index}` : null)} /></Suspense></>
+          </p><p className="selection-status">{selectedBeams.length ? `Selected beams: ${selectedBeams.length}` : "Select beams in the 3D view"}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}<label>Section height<input type="number" min="1" value={section.height} onChange={(event) => setSection({ ...section, height: Number(event.target.value) })} /></label><label>Section width<input type="number" min="1" value={section.width} onChange={(event) => setSection({ ...section, width: Number(event.target.value) })} /></label><button type="button" onClick={changeSelectedBeamSections} disabled={selectedBeams.length === 0}>Change section</button><button type="button" onClick={deleteSelectedBeams} disabled={selectedBeams.length === 0}>Delete selected ({selectedBeams.length})</button><button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : setDimensionEditing(true)}>{dimensionEditing ? "Finish dimension edit" : "Edit dimensions"}</button><button type="button" className={insertionMode ? "active-tool" : ""} onClick={() => insertionMode ? stopInsertion() : setInsertionMode(true)}>{insertionMode ? "Finish insertion" : "Add beam"}</button></div>{dimensionEditing && selectedDimension ? <div className="distance-editor"><span>Selected dimension: {selectedDimension.value.toFixed(0)} mm</span><label>New face distance<input type="number" value={distanceValue} onChange={(event) => setDistanceValue(Number(event.target.value))} onKeyDown={(event) => { if (event.key === "Enter") void changeSelectedDistance(); if (event.key === "Escape") stopDimensionEditing(); }} /></label><button type="button" onClick={changeSelectedDistance}>Apply distance</button><button type="button" onClick={stopDimensionEditing}>Cancel</button></div> : dimensionEditing ? <p className="dimension-hint">Hover a dimension line, then click it to edit. Esc closes this mode.</p> : null}{insertionMode && selectedSlot ? <div className="distance-editor"><span>New beam gap</span><label>Clear gap<input type="number" min="0" value={insertionGap} onChange={(event) => setInsertionGap(Number(event.target.value))} onKeyDown={(event) => { if (event.key === "Enter") void insertSelectedBeam(); if (event.key === "Escape") stopInsertion(); }} /></label><button type="button" onClick={insertSelectedBeam}>Insert beam</button><button type="button" onClick={stopInsertion}>Cancel</button></div> : insertionMode ? <p className="dimension-hint">Click a green marker to insert a beam. Esc closes this mode.</p> : null}<Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeams={selectedBeams.map((beam) => `${beam.layerId}:${beam.layerIndex}`)} dimensionEditing={dimensionEditing} hoveredDimension={hoveredDimension} onToggleBeam={toggleBeam} onSelectDimension={selectDimension} onHoverDimension={(dimension) => setHoveredDimension(dimension ? `${dimension.layerId}:${dimension.index}` : null)} insertionMarkers={calculation.snapshot.pallet.insertionMarkers} insertionMode={insertionMode} selectedSlot={selectedSlot} onSelectInsertion={selectInsertion} /></Suspense></>
         ) : null}
         {calculationError ? <p className="error">{calculationError}</p> : null}
       </section>
