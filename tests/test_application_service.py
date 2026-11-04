@@ -145,6 +145,20 @@ def test_add_manual_beam_uses_two_viewport_supports() -> None:
     assert any(beam["layerId"].startswith("manual-") for beam in response["snapshot"]["pallet"]["beams"])
 
 
+def test_add_manual_beam_keeps_the_first_viewport_point() -> None:
+    service = ApplicationService()
+    calculated = service.calculate(service.default_project())
+
+    response = service.add_manual_beam(
+        calculated["snapshot"]["project"],
+        [{"layerId": "length", "layerIndex": 1}, {"layerId": "length", "layerIndex": 2}],
+        {"distance": 100, "section": {"height": 70, "width": 50}, "startPoint": [100, 200, 70]},
+    )
+
+    assert response["ok"] is True
+    assert response["snapshot"]["project"]["pallet"]["manual_beams"][0]["start_point"] == [100.0, 200.0, 70.0]
+
+
 def test_add_manual_beam_rejects_supports_from_different_layers() -> None:
     service = ApplicationService()
     calculated = service.calculate(service.default_project())

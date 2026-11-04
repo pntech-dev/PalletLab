@@ -271,12 +271,26 @@ export default function PalletViewport({
     if (manualSupports.length !== 2) return null;
     const [first, second] = manualSupports;
     const alongX = first.beam.size[0] >= first.beam.size[1];
-    const length = Math.abs((alongX ? second.point[2] - first.point[2] : second.point[0] - first.point[0]));
+    // A support pair defines the direction of the new beam, but its start is
+    // the exact location of the first click.  Averaging the two picked points
+    // made the preview slide away from that marker whenever the second click
+    // was not at the same longitudinal coordinate.
+    const secondCenter = alongX
+      ? second.beam.center[1] / 1000
+      : second.beam.center[0] / 1000;
+    const secondHalfSize = alongX
+      ? second.beam.size[1] / 2000
+      : second.beam.size[0] / 2000;
+    const start = alongX ? first.point[2] : first.point[0];
+    const secondNearFace = secondCenter + (start <= secondCenter ? -secondHalfSize : secondHalfSize);
+    const length = Math.abs(secondNearFace - start);
     if (length < 0.001) return null;
     const thickness = Math.min(first.beam.size[0], first.beam.size[1]) / 1000;
     const height = first.beam.size[2] / 1000;
     return {
-      position: [(first.point[0] + second.point[0]) / 2, first.point[1] + height / 2, (first.point[2] + second.point[2]) / 2] as ViewportPoint,
+      position: (alongX
+        ? [first.point[0], first.point[1] + height / 2, (start + secondNearFace) / 2]
+        : [(start + secondNearFace) / 2, first.point[1] + height / 2, first.point[2]]) as ViewportPoint,
       size: alongX ? [thickness, height, length] as [number, number, number] : [length, height, thickness] as [number, number, number],
     };
   }, [manualSupports]);

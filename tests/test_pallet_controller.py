@@ -210,6 +210,26 @@ def test_manual_beam_spans_the_outer_edges_of_two_selected_supports():
     assert errors == []
 
 
+def test_manual_beam_starts_at_the_saved_viewport_click_and_reaches_the_second_support():
+    controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
+    result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")
+    assert result is not None
+    first, second = [beam for beam in result.beams_3d if beam.layer_id == "width"][:2]
+    clicked_y = first.y + first.size_y / 4
+
+    updated = controller.add_manual_beam(
+        ("width", 0), ("width", 1), 1000, BeamSection(70, 50),
+        start_point=(1000, clicked_y, first.z + first.size_z / 2),
+    )
+
+    assert updated is not None
+    beam = next(item for item in updated.beams_3d if item.layer_id == "manual-1")
+    second_face = second.y - second.size_y / 2 if clicked_y <= second.y else second.y + second.size_y / 2
+    assert beam.y - beam.size_y / 2 == pytest.approx(min(clicked_y, second_face))
+    assert beam.y + beam.size_y / 2 == pytest.approx(max(clicked_y, second_face))
+    assert errors == []
+
+
 def test_manual_beam_can_be_built_below_two_selected_bottom_faces():
     controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
     result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")

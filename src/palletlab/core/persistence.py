@@ -136,7 +136,8 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
                  "distance": beam.distance, "height": beam.section.height, "width": beam.section.width,
                  "reference": list(beam.reference_support) if beam.reference_support else None,
                  "reference_face": beam.reference_face,
-                 "first_face": beam.first_face, "second_face": beam.second_face}
+                 "first_face": beam.first_face, "second_face": beam.second_face,
+                 "start_point": list(beam.start_point) if beam.start_point else None}
                 for beam in state.manual_beams
             ],
         },
@@ -230,12 +231,18 @@ def project_from_dict(raw: object) -> ProjectState:
             first_face = item.get("first_face", "top")
             second_face = item.get("second_face", "top")
             reference_face = item.get("reference_face")
+            raw_start_point = item.get("start_point")
+            start_point = (
+                tuple(float(value) for value in raw_start_point)
+                if raw_start_point is not None else None
+            )
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise ProjectPersistenceError("Пользовательский брус содержит некорректные параметры.") from exc
         if (not beam_id or first_key[0] not in layer_ids or second_key[0] not in layer_ids
                 or (reference_key is not None and reference_key[0] not in layer_ids)
                 or first_face not in ("top", "bottom") or second_face not in ("top", "bottom")
                 or reference_face not in (None, "top", "bottom", "x_min", "x_max", "y_min", "y_max")
+                or (start_point is not None and (len(start_point) != 3 or not all(math.isfinite(value) for value in start_point)))
                 or not math.isfinite(distance) or not all(value > 0 and math.isfinite(value) for value in (section.height, section.width))):
             raise ProjectPersistenceError("Пользовательский брус содержит недопустимые параметры.")
         if beam_id in manual_ids:
@@ -245,6 +252,7 @@ def project_from_dict(raw: object) -> ProjectState:
             beam_id, first_key, second_key, distance, section,
             reference_support=reference_key, reference_face=reference_face,
             first_face=first_face, second_face=second_face,
+            start_point=start_point,
         ))
     return ProjectState(
         length_input=length_input,

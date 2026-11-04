@@ -139,7 +139,7 @@ class ApplicationService:
         parsed_supports, error = _manual_supports(supports)
         if error:
             return {"ok": False, "error": error}
-        distance, section, reference, reference_face, error = _manual_options(options)
+        distance, section, reference, reference_face, start_point, error = _manual_options(options)
         if error:
             return {"ok": False, "error": error}
         controller, errors = self._controller_for(state)
@@ -148,6 +148,7 @@ class ApplicationService:
         result = controller.add_manual_beam(
             parsed_supports[0], parsed_supports[1], distance, section,
             reference_support=reference, reference_face=reference_face,
+            start_point=start_point,
         )
         if result is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось добавить брус."}
@@ -287,19 +288,27 @@ def _manual_supports(value: object):
 
 def _manual_options(value: object):
     if not isinstance(value, dict):
-        return 0.0, None, None, None, "Некорректные параметры нового бруса."
+        return 0.0, None, None, None, None, "Некорректные параметры нового бруса."
     distance, section = value.get("distance"), value.get("section")
     beam_section, error = _beam_section(section)
     if error or not isinstance(distance, (int, float)) or isinstance(distance, bool) or not isfinite(distance):
-        return 0.0, None, None, None, error or "Расстояние должно быть конечным числом."
+        return 0.0, None, None, None, None, error or "Расстояние должно быть конечным числом."
+    raw_start_point = value.get("startPoint")
+    if raw_start_point is None:
+        start_point = None
+    elif (not isinstance(raw_start_point, list) or len(raw_start_point) != 3
+          or any(not isinstance(item, (int, float)) or isinstance(item, bool) or not isfinite(item) for item in raw_start_point)):
+        return 0.0, None, None, None, None, "Некорректная точка начала нового бруса."
+    else:
+        start_point = tuple(float(item) for item in raw_start_point)
     reference = value.get("reference")
     reference_face = value.get("referenceFace")
     if reference is None:
-        return float(distance), beam_section, None, None, None
+        return float(distance), beam_section, None, None, start_point, None
     parsed, error = _manual_supports([reference, {"layerId": "_placeholder", "layerIndex": 0}])
     if error or reference_face not in {"x_min", "x_max", "y_min", "y_max"}:
-        return 0.0, None, None, None, "Некорректная грань точки отсчёта."
-    return float(distance), beam_section, parsed[0], reference_face, None
+        return 0.0, None, None, None, None, "Некорректная грань точки отсчёта."
+    return float(distance), beam_section, parsed[0], reference_face, start_point, None
 
 
 class _Signal:

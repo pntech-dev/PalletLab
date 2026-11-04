@@ -53,7 +53,12 @@ class LayerInput:
 
 @dataclass(frozen=True)
 class ManualBeamInput:
-    """A beam bridged between the outer edges of two selected pallet beams."""
+    """A beam bridged between two selected pallet beams.
+
+    ``start_point`` is optional for projects created by the desktop workflow.
+    The web viewport supplies it so a manually placed beam starts at the
+    actual first click instead of the outer edge of the support.
+    """
 
     beam_id: str
     first_support: LayerBeamKey
@@ -64,6 +69,7 @@ class ManualBeamInput:
     reference_face: str | None = None
     first_face: Literal["top", "bottom"] = "top"
     second_face: Literal["top", "bottom"] = "top"
+    start_point: tuple[float, float, float] | None = None
 
 
 @dataclass(frozen=True)

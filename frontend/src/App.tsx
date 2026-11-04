@@ -214,6 +214,11 @@ export function App() {
     if (insertionMode) {
       if (manualReferenceMode === "face" && manualSupports.length === 2) {
         setManualReference(beam);
+        // A positive reference distance starts from the face directed toward
+        // the pallet's zero coordinate. Pick that face by default for the
+        // selected beam orientation; the HUD still lets the user choose the
+        // opposite face deliberately.
+        setManualReferenceFace(beam.orientation === "length" ? "x_min" : "y_min");
         return;
       }
       if (manualSupports.length === 1 && manualSupports[0].beam.layerId !== beam.layerId) {
@@ -230,6 +235,14 @@ export function App() {
             beam.center[1] / 1000,
           ] as ViewportPoint),
       };
+      if (manualSupports.length === 0) {
+        const alongX = beam.size[0] >= beam.size[1];
+        const placement = (alongX ? support.point[0] : support.point[2]) * 1000;
+        // The base-point distance measures the near edge of the new beam.
+        // Set it from the first click so the centre line of the preview and
+        // the saved beam both pass through that click by default.
+        setManualDistance(placement - section.width / 2);
+      }
       setManualSupports((current) =>
         current.length === 2 ? [support] : [...current, support],
       );
@@ -367,6 +380,11 @@ export function App() {
         section,
         reference: manualReference ? { layerId: manualReference.layerId, layerIndex: manualReference.layerIndex } : undefined,
         referenceFace: manualReference ? manualReferenceFace : undefined,
+        startPoint: [
+          manualSupports[0].point[0] * 1000,
+          manualSupports[0].point[2] * 1000,
+          manualSupports[0].point[1] * 1000,
+        ],
       },
     );
     applyCalculation(response);
@@ -491,7 +509,62 @@ export function App() {
   const manualHud: ReactNode = insertionMode && manualSupports.length === 2 ? (
     <div className="manual-hud">
       <strong>Configure the new beam.</strong>
-      {manualSupports.length === 2 ? <><label>Reference <select value={manualReferenceMode} onChange={(event) => { setManualReferenceMode(event.target.value as "base" | "face"); if (event.target.value === "base") setManualReference(null); }}><option value="base">Base point</option><option value="face">Selected beam face</option></select></label>{manualReferenceMode === "face" ? <span>{manualReference ? `Reference beam: ${manualReference.layerId} ${manualReference.layerIndex + 1}` : "Click a beam as reference."}</span> : null}<label>Distance<input type="number" value={manualDistance} onChange={(event) => setManualDistance(Number(event.target.value))} onKeyDown={(event) => { if (event.key === "Enter") void addManualBeam(); if (event.key === "Escape") stopInsertion(); }} /></label><button type="button" onClick={addManualBeam}>Add beam</button><button type="button" onClick={stopInsertion}>Cancel</button></> : null}
+      <label>
+        Reference
+        <select
+          value={manualReferenceMode}
+          onChange={(event) => {
+            setManualReferenceMode(event.target.value as "base" | "face");
+            if (event.target.value === "base") setManualReference(null);
+          }}
+        >
+          <option value="base">Base point</option>
+          <option value="face">Selected beam face</option>
+        </select>
+      </label>
+      {manualReferenceMode === "face" ? (
+        manualReference ? (
+          <label>
+            Face
+            <select
+              value={manualReferenceFace}
+              onChange={(event) =>
+                setManualReferenceFace(
+                  event.target.value as "x_min" | "x_max" | "y_min" | "y_max",
+                )
+              }
+            >
+              {manualReference.orientation === "length" ? (
+                <>
+                  <option value="x_min">Toward zero</option>
+                  <option value="x_max">Away from zero</option>
+                </>
+              ) : (
+                <>
+                  <option value="y_min">Toward zero</option>
+                  <option value="y_max">Away from zero</option>
+                </>
+              )}
+            </select>
+          </label>
+        ) : (
+          <span>Click a beam as reference.</span>
+        )
+      ) : null}
+      <label>
+        Distance
+        <input
+          type="number"
+          value={manualDistance}
+          onChange={(event) => setManualDistance(Number(event.target.value))}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void addManualBeam();
+            if (event.key === "Escape") stopInsertion();
+          }}
+        />
+      </label>
+      <button type="button" onClick={addManualBeam}>Add beam</button>
+      <button type="button" onClick={stopInsertion}>Cancel</button>
     </div>
   ) : null;
 
