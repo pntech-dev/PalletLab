@@ -43,6 +43,9 @@ class WebApplicationApi:
     def insert_beam(self, project: object, slot: object, clear_gap: object) -> dict[str, Any]:
         return ApplicationService().insert_beam(project, slot, clear_gap)
 
+    def add_manual_beam(self, project: object, supports: object, options: object) -> dict[str, Any]:
+        return ApplicationService().add_manual_beam(project, supports, options)
+
     def default_project(self) -> dict[str, Any]:
         """Provide the temporary frontend with a valid starting project."""
         return ApplicationService().default_project()

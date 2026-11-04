@@ -130,6 +130,29 @@ class ApplicationService:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось пересчитать поддон."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
+    def add_manual_beam(self, project: object, supports: object, options: object) -> dict[str, Any]:
+        """Create a manually supported beam selected in the web viewport."""
+        try:
+            state = project_from_dict(project)
+        except ProjectPersistenceError as exc:
+            return {"ok": False, "error": str(exc)}
+        parsed_supports, error = _manual_supports(supports)
+        if error:
+            return {"ok": False, "error": error}
+        distance, section, reference, reference_face, error = _manual_options(options)
+        if error:
+            return {"ok": False, "error": error}
+        controller, errors = self._controller_for(state)
+        if controller.recalculate_from_state(show_error=False) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
+        result = controller.add_manual_beam(
+            parsed_supports[0], parsed_supports[1], distance, section,
+            reference_support=reference, reference_face=reference_face,
+        )
+        if result is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось добавить брус."}
+        return {"ok": True, "snapshot": project_snapshot(state)}
+
     def default_project(self) -> dict[str, Any]:
         """Return the same starting configuration as the current desktop reset."""
         length = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100)
@@ -247,6 +270,36 @@ def _insertion_slot(slot: object):
     if any(not isinstance(value, (int, float)) or isinstance(value, bool) or not isfinite(value) for value in (maximum, suggested)):
         return None, "Некорректная точка вставки."
     return InsertionSlot(axis, index, float(maximum), float(suggested), layer_id), None
+
+
+def _manual_supports(value: object):
+    if not isinstance(value, list) or len(value) != 2:
+        return None, "Выберите две разные параллельные опоры."
+    parsed = []
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("layerId"), str) or not isinstance(item.get("layerIndex"), int):
+            return None, "Некорректная опора для нового бруса."
+        parsed.append((item["layerId"], item["layerIndex"]))
+    if parsed[0] == parsed[1]:
+        return None, "Выберите две разные параллельные опоры."
+    return tuple(parsed), None
+
+
+def _manual_options(value: object):
+    if not isinstance(value, dict):
+        return 0.0, None, None, None, "Некорректные параметры нового бруса."
+    distance, section = value.get("distance"), value.get("section")
+    beam_section, error = _beam_section(section)
+    if error or not isinstance(distance, (int, float)) or isinstance(distance, bool) or not isfinite(distance):
+        return 0.0, None, None, None, error or "Расстояние должно быть конечным числом."
+    reference = value.get("reference")
+    reference_face = value.get("referenceFace")
+    if reference is None:
+        return float(distance), beam_section, None, None, None
+    parsed, error = _manual_supports([reference, {"layerId": "_placeholder", "layerIndex": 0}])
+    if error or reference_face not in {"x_min", "x_max", "y_min", "y_max"}:
+        return 0.0, None, None, None, "Некорректная грань точки отсчёта."
+    return float(distance), beam_section, parsed[0], reference_face, None
 
 
 class _Signal:

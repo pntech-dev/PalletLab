@@ -126,6 +126,23 @@ def test_insert_beam_uses_a_snapshot_insertion_slot() -> None:
 
     assert response["ok"] is True
     assert len(response["snapshot"]["pallet"]["beams"]) == len(calculated["snapshot"]["pallet"]["beams"]) + 1
+
+
+def test_add_manual_beam_uses_two_viewport_supports() -> None:
+    service = ApplicationService()
+    calculated = service.calculate(service.default_project())
+    supports = [
+        {"layerId": "length", "layerIndex": 1},
+        {"layerId": "length", "layerIndex": 2},
+    ]
+
+    response = service.add_manual_beam(
+        calculated["snapshot"]["project"], supports,
+        {"distance": 100, "section": {"height": 70, "width": 50}},
+    )
+
+    assert response["ok"] is True
+    assert any(beam["layerId"].startswith("manual-") for beam in response["snapshot"]["pallet"]["beams"])
     assert service.change_beam_distance(service.default_project(), {"layerId": "length", "beamIndex": 1}, float("inf")) == {
         "ok": False,
         "error": "Расстояние должно быть конечным числом.",
