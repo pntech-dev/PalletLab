@@ -352,7 +352,7 @@ def test_three_layer_pallet_accepts_a_manual_beam_at_the_base_point_and_section_
     assert errors == []
 
 
-def test_parallel_layers_each_expose_their_own_dimension_chain():
+def test_identical_parallel_layers_share_one_dimension_chain():
     controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
     result = controller.calculate_layers([
         LayerInput("bottom", "length", LENGTH_INPUT),
@@ -363,8 +363,8 @@ def test_parallel_layers_each_expose_their_own_dimension_chain():
 
     dimensions = editable_dimensions(result)
     length_dimensions = [item for item in dimensions if item.axis == "length"]
-    assert len(length_dimensions) == 2 * (len(result.length_result.beam_centers) - 1)
-    assert {item.layer_id for item in length_dimensions} == {"bottom", "top"}
+    assert len(length_dimensions) == len(result.length_result.beam_centers) - 1
+    assert {item.layer_id for item in length_dimensions} == {"top"}
     assert errors == []
 
 

@@ -133,6 +133,7 @@ def editable_dimensions(
                 start_point, end_point = (-offset * index, _display_y(result, base), result.pallet_height + 2), (-offset * index, _display_y(result, end), result.pallet_height + 2)
             value = end - base
             handles.append(EditableDimension(layer_id, axis, beams[index].layer_index, value, start_point, end_point))
+    handles = _deduplicate_structural_dimensions(handles)
     # The calculated pallet envelope remains meaningful after every beam of
     # one direction is hidden.  Do not make its overall length/width vanish
     # merely because there is no longer a same-direction chain to edit: the
@@ -144,6 +145,25 @@ def editable_dimensions(
             handles.append(_envelope_dimension(result, axis))
     handles.extend(_manual_beam_dimensions(result, manual_beams, handles))
     return _arrange_base_dimensions(result, tuple(handles))
+
+
+def _deduplicate_structural_dimensions(dimensions: list[EditableDimension]) -> list[EditableDimension]:
+    """Keep one guide for equal layer dimensions while retaining real differences.
+
+    Equivalent stacked layers would otherwise create coincident chains that
+    are hard to read and select.  Iterate from the topmost layer so the one
+    remaining guide still belongs to the visible upper construction.
+    """
+    retained: list[EditableDimension] = []
+    for candidate in reversed(dimensions):
+        if any(
+            item.axis == candidate.axis and abs(item.value - candidate.value) <= 1e-6
+            for item in retained
+        ):
+            continue
+        retained.append(candidate)
+    retained.reverse()
+    return retained
 
 
 def _envelope_dimension(result: PalletResult, axis: PalletAxis) -> EditableDimension:
