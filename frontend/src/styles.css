@@ -24,6 +24,7 @@ button:disabled { cursor: wait; opacity: 0.55; }
 .file-actions { display: flex; gap: 8px; margin-top: 12px; }
 .result { color: #245b42; font-weight: 600; }
 .selection-status { color: #56656c; font-size: 0.85rem; }
+.recovery-notice { color: #245b42; font-size: 0.9rem; }
 .error { color: #a12f2f; }
 .viewport { height: min(58vh, 680px); margin-top: 16px; overflow: hidden; border: 1px solid #d6dde1; border-radius: 8px; }
 .camera-actions { display: flex; flex-wrap: wrap; gap: 8px; }

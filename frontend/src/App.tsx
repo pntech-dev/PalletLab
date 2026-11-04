@@ -1,4 +1,11 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   CameraPreset,
   ViewportBeam,
@@ -49,6 +56,11 @@ type Project = {
     upper_layer: "length" | "width";
     material_id: string;
   };
+  view: {
+    camera: CameraPreset;
+    show_length_dimensions: boolean;
+    show_width_dimensions: boolean;
+  };
 };
 type Material = { id: string; name: string };
 type BeamSection = { height: number; width: number };
@@ -60,6 +72,34 @@ type InsertionSlot = {
   maximumClearGap: number;
   suggestedClearGap: number;
 };
+
+const AUTOSAVE_KEY = "palletlab.web.autosave.v1";
+const HISTORY_LIMIT = 50;
+
+function copyProject(project: Project): Project {
+  return JSON.parse(JSON.stringify(project)) as Project;
+}
+
+function projectsMatch(first: Project, second: Project): boolean {
+  return JSON.stringify(first) === JSON.stringify(second);
+}
+
+function recoveredProject(): Project | null {
+  try {
+    const raw = window.localStorage.getItem(AUTOSAVE_KEY);
+    return raw ? (JSON.parse(raw) as Project) : null;
+  } catch {
+    return null;
+  }
+}
+
+function discardRecoveredProject() {
+  try {
+    window.localStorage.removeItem(AUTOSAVE_KEY);
+  } catch {
+    // Recovery is optional when an embedded browser disables local storage.
+  }
+}
 
 declare global {
   interface Window {
@@ -140,13 +180,70 @@ export function App() {
   const [manualReferenceMode, setManualReferenceMode] = useState<"base" | "face">("base");
   const [manualReference, setManualReference] = useState<ViewportBeam | null>(null);
   const [manualReferenceFace, setManualReferenceFace] = useState<"x_min" | "x_max" | "y_min" | "y_max">("x_min");
+  const [, setHistoryVersion] = useState(0);
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const undoStack = useRef<Project[]>([]);
+  const redoStack = useRef<Project[]>([]);
+  const formEditStart = useRef<Project | null>(null);
 
   function applyProject(nextProject: Project) {
     setProject(nextProject);
+    setCamera(nextProject.view.camera);
     setDistanceText({
       length: nextProject.pallet.length.support_distances.join(" "),
       width: nextProject.pallet.width.support_distances.join(" "),
     });
+  }
+
+  function updateHistory(previous: Project, next: Project) {
+    if (projectsMatch(previous, next)) return;
+    undoStack.current.push(copyProject(previous));
+    if (undoStack.current.length > HISTORY_LIMIT) undoStack.current.shift();
+    redoStack.current = [];
+    setHistoryVersion((value) => value + 1);
+  }
+
+  function updateProject(nextProject: Project) {
+    if (!project) return;
+    updateHistory(project, nextProject);
+    applyProject(nextProject);
+  }
+
+  function beginFormEdit() {
+    if (project && !formEditStart.current) formEditStart.current = copyProject(project);
+  }
+
+  function finishFormEdit() {
+    const previous = formEditStart.current;
+    formEditStart.current = null;
+    if (previous && project) updateHistory(previous, project);
+  }
+
+  function clearInteractionState() {
+    setSelectedBeams([]);
+    setBeamTool("none");
+    stopDimensionEditing();
+    stopInsertion();
+  }
+
+  function undo() {
+    finishFormEdit();
+    const previous = undoStack.current.pop();
+    if (!project || !previous) return;
+    redoStack.current.push(copyProject(project));
+    applyProject(previous);
+    clearInteractionState();
+    setHistoryVersion((value) => value + 1);
+  }
+
+  function redo() {
+    finishFormEdit();
+    const next = redoStack.current.pop();
+    if (!project || !next) return;
+    undoStack.current.push(copyProject(project));
+    applyProject(next);
+    clearInteractionState();
+    setHistoryVersion((value) => value + 1);
   }
 
   function applyCalculation(response: CalculationResponse) {
@@ -161,18 +258,34 @@ export function App() {
   }
 
   useEffect(() => {
-    function connect() {
+    async function connect() {
       const api = window.pywebview?.api;
       if (!api) return;
-      api
-        .status()
-        .then(setStatus)
-        .catch(() => setStatus(null));
-      api.default_project().then((value) => {
-        const project = value as Project;
-        applyProject(project);
-      });
-      api.materials().then(setMaterials);
+      try {
+        const [nextStatus, defaultProject, nextMaterials] = await Promise.all([
+          api.status(),
+          api.default_project(),
+          api.materials(),
+        ]);
+        const recovered = recoveredProject();
+        if (recovered) {
+          const recovery = await api.calculate(recovered);
+          if (recovery.ok && recovery.snapshot) {
+            applyProject(recovery.snapshot.project);
+            applyCalculation(recovery);
+            setRecoveryNotice("Recovered the last autosaved project.");
+          } else {
+            discardRecoveredProject();
+            applyProject(defaultProject as Project);
+          }
+        } else {
+          applyProject(defaultProject as Project);
+        }
+        setStatus(nextStatus);
+        setMaterials(nextMaterials);
+      } catch {
+        setStatus(null);
+      }
     }
 
     window.addEventListener("pywebviewready", connect, { once: true });
@@ -194,10 +307,25 @@ export function App() {
     return () => window.clearTimeout(timeout);
   }, [project, status]);
 
+  useEffect(() => {
+    if (!project) return;
+    const timeout = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(project));
+      } catch {
+        // Recovery must not prevent editing when browser storage is unavailable.
+      }
+    }, 1000);
+    return () => window.clearTimeout(timeout);
+  }, [project]);
+
   async function saveProject() {
     if (!project) return;
     const response = await window.pywebview!.api!.save_project(project);
-    if (!response.ok && !response.cancelled)
+    if (response.ok) {
+      discardRecoveredProject();
+      setRecoveryNotice(null);
+    } else if (!response.cancelled)
       setCalculationError(response.error ?? "Не удалось сохранить проект.");
   }
   async function openProject() {
@@ -205,9 +333,29 @@ export function App() {
     if (response.project) {
       applyProject(response.project);
       setCalculationError(null);
+      undoStack.current = [];
+      redoStack.current = [];
+      discardRecoveredProject();
+      setRecoveryNotice(null);
+      setHistoryVersion((value) => value + 1);
     } else if (!response.cancelled) {
       setCalculationError(response.error ?? "Не удалось открыть проект.");
     }
+  }
+
+  async function resetProject() {
+    const api = window.pywebview?.api;
+    if (!api || !project) return;
+    const defaultProject = (await api.default_project()) as Project;
+    // The desktop reset restores the example geometry but intentionally keeps
+    // the material selection, so both frontends have the same semantics.
+    const nextProject = {
+      ...defaultProject,
+      pallet: { ...defaultProject.pallet, material_id: project.pallet.material_id },
+    };
+    updateProject(nextProject);
+    clearInteractionState();
+    setCalculationError(null);
   }
 
   function toggleBeam(beam: ViewportBeam, point?: ViewportPoint) {
@@ -277,6 +425,7 @@ export function App() {
     const response = await api.delete_beams(project, selection);
     applyCalculation(response);
     if (response.ok && response.snapshot) {
+      updateHistory(project, response.snapshot.project);
       applyProject(response.snapshot.project);
       setSelectedBeams([]);
       setBeamTool("none");
@@ -300,6 +449,7 @@ export function App() {
     );
     applyCalculation(response);
     if (response.ok && response.snapshot) {
+      updateHistory(project, response.snapshot.project);
       applyProject(response.snapshot.project);
       setSelectedBeams([]);
       setBeamTool("none");
@@ -325,6 +475,7 @@ export function App() {
     );
     applyCalculation(response);
     if (response.ok && response.snapshot) {
+      updateHistory(project, response.snapshot.project);
       applyProject(response.snapshot.project);
       setSelectedDimension(null);
     }
@@ -350,6 +501,7 @@ export function App() {
     const response = await api.insert_beam(project, selectedSlot, insertionGap);
     applyCalculation(response);
     if (response.ok && response.snapshot) {
+      updateHistory(project, response.snapshot.project);
       applyProject(response.snapshot.project);
       setSelectedSlot(null);
     }
@@ -389,6 +541,7 @@ export function App() {
     );
     applyCalculation(response);
     if (response.ok && response.snapshot) {
+      updateHistory(project, response.snapshot.project);
       applyProject(response.snapshot.project);
       setManualSupports([]);
       setSelectedBeams([]);
@@ -396,16 +549,27 @@ export function App() {
   }
 
   useEffect(() => {
-    const cancelEditing = (event: KeyboardEvent) => {
+    const handleKeyboardShortcut = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         stopDimensionEditing();
         stopInsertion();
+        return;
+      }
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) return;
+      if (event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
+      } else if (event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redo();
       }
     };
-    window.addEventListener("keydown", cancelEditing);
-    return () => window.removeEventListener("keydown", cancelEditing);
-  }, []);
+    window.addEventListener("keydown", handleKeyboardShortcut);
+    return () => window.removeEventListener("keydown", handleKeyboardShortcut);
+  }, [project]);
 
   function updateDirection(
     axis: "length" | "width",
@@ -451,7 +615,7 @@ export function App() {
     });
     const length = update(project.pallet.length);
     const width = update(project.pallet.width);
-    setProject({
+    updateProject({
       ...project,
       pallet: {
         ...project.pallet,
@@ -472,13 +636,13 @@ export function App() {
         ? { ...layer, axis, direction: project.pallet[axis] }
         : layer,
     );
-    setProject({ ...project, pallet: { ...project.pallet, layers } });
+    updateProject({ ...project, pallet: { ...project.pallet, layers } });
   }
 
   function addLayer() {
     if (!project) return;
     const layerId = `layer-${project.pallet.layers.length}`;
-    setProject({
+    updateProject({
       ...project,
       pallet: {
         ...project.pallet,
@@ -492,7 +656,7 @@ export function App() {
 
   function removeLayer(index: number) {
     if (!project || project.pallet.layers.length <= 2) return;
-    setProject({
+    updateProject({
       ...project,
       pallet: {
         ...project.pallet,
@@ -592,7 +756,17 @@ export function App() {
           <button type="button" onClick={saveProject} disabled={!project}>
             Save
           </button>
+          <button type="button" onClick={() => void resetProject()} disabled={!project}>
+            Reset example
+          </button>
+          <button type="button" onClick={undo} disabled={!project || undoStack.current.length === 0}>
+            Undo
+          </button>
+          <button type="button" onClick={redo} disabled={!project || redoStack.current.length === 0}>
+            Redo
+          </button>
         </div>
+        {recoveryNotice ? <p className="recovery-notice">{recoveryNotice}</p> : null}
         {project ? (
           <div className="directions">
             <fieldset className="rounding">
@@ -617,7 +791,7 @@ export function App() {
                 <select
                   value={project.pallet.upper_layer}
                   onChange={(event) =>
-                    setProject({
+                    updateProject({
                       ...project,
                       pallet: {
                         ...project.pallet,
@@ -635,7 +809,7 @@ export function App() {
                 <select
                   value={project.pallet.material_id}
                   onChange={(event) =>
-                    setProject({
+                    updateProject({
                       ...project,
                       pallet: {
                         ...project.pallet,
@@ -708,6 +882,8 @@ export function App() {
                           ? distanceText[axis]
                           : project.pallet[axis][field]
                       }
+                      onFocus={beginFormEdit}
+                      onBlur={finishFormEdit}
                       onChange={(event) =>
                         updateDirection(axis, field, event.target.value)
                       }
@@ -737,7 +913,13 @@ export function App() {
                   <button
                     type="button"
                     key={preset}
-                    onClick={() => setCamera(preset)}
+                    onClick={() => {
+                      if (!project) return;
+                      updateProject({
+                        ...project,
+                        view: { ...project.view, camera: preset },
+                      });
+                    }}
                   >
                     {preset}
                   </button>
