@@ -352,7 +352,7 @@ def test_three_layer_pallet_accepts_a_manual_beam_at_the_base_point_and_section_
     assert errors == []
 
 
-def test_identical_dimensions_of_parallel_layers_are_not_duplicated():
+def test_parallel_layers_each_expose_their_own_dimension_chain():
     controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
     result = controller.calculate_layers([
         LayerInput("bottom", "length", LENGTH_INPUT),
@@ -363,11 +363,12 @@ def test_identical_dimensions_of_parallel_layers_are_not_duplicated():
 
     dimensions = editable_dimensions(result)
     length_dimensions = [item for item in dimensions if item.axis == "length"]
-    assert len(length_dimensions) == len(result.length_result.beam_centers) - 1
+    assert len(length_dimensions) == 2 * (len(result.length_result.beam_centers) - 1)
+    assert {item.layer_id for item in length_dimensions} == {"bottom", "top"}
     assert errors == []
 
 
-def test_dimension_chain_uses_faces_of_the_uppermost_parallel_layer():
+def test_dimension_chains_include_parallel_layers_with_different_sections():
     controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
     assert controller.calculate_layers([
         LayerInput("bottom", "length", LENGTH_INPUT),
@@ -379,11 +380,11 @@ def test_dimension_chain_uses_faces_of_the_uppermost_parallel_layer():
     assert result is not None
 
     dimensions = editable_dimensions(result)
-    assert {item.layer_id for item in dimensions if item.axis == "length"} == {"top"}
+    assert {item.layer_id for item in dimensions if item.axis == "length"} == {"bottom", "top"}
     assert errors == []
 
 
-def test_dimension_chain_falls_back_to_a_parallel_layer_when_top_edge_beams_are_hidden():
+def test_dimension_chains_keep_the_lower_layer_when_top_edge_beams_are_hidden():
     controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
     result = controller.calculate_layers([
         LayerInput("bottom", "length", LENGTH_INPUT),
@@ -400,7 +401,7 @@ def test_dimension_chain_falls_back_to_a_parallel_layer_when_top_edge_beams_are_
 
     assert updated is not None
     dimensions = editable_dimensions(updated)
-    assert {item.layer_id for item in dimensions if item.axis == "length"} == {"bottom"}
+    assert {item.layer_id for item in dimensions if item.axis == "length"} == {"bottom", "top"}
     assert errors == []
 
 

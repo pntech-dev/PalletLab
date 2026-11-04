@@ -49,12 +49,13 @@ function DimensionHitArea({ dimension, start, end, middle, onSelect, onHover }: 
   </mesh>;
 }
 
-function DimensionLabel({ value, position, dimension, canEdit, onSelect }: {
+function DimensionLabel({ value, position, dimension, canEdit, onSelect, onHover }: {
   value: number;
   position: [number, number, number];
   dimension: ViewportDimension;
   canEdit: boolean;
   onSelect: (dimension: ViewportDimension) => void;
+  onHover: (dimension: ViewportDimension | null) => void;
 }) {
   const texture = useMemo(() => {
     const canvas = document.createElement("canvas");
@@ -76,18 +77,27 @@ function DimensionLabel({ value, position, dimension, canEdit, onSelect }: {
   }, [value]);
   useEffect(() => () => texture.dispose(), [texture]);
   return <sprite position={position} scale={[0.30, 0.12, 1]} renderOrder={10}
-    onClick={(event) => { event.stopPropagation(); if (canEdit && dimension.editable) onSelect(dimension); }}>
+    onClick={(event) => { event.stopPropagation(); if (canEdit && dimension.editable) onSelect(dimension); }}
+    onPointerOver={(event) => { if (canEdit && dimension.editable) { event.stopPropagation(); onHover(dimension); } }}
+    onPointerOut={() => onHover(null)}>
     <spriteMaterial map={texture} transparent depthTest={false} depthWrite={false} />
   </sprite>;
 }
 
 export default function PalletViewport({ beams, dimensions, preset, selectedBeams, dimensionEditing, hoveredDimension, onToggleBeam, onSelectDimension, onHoverDimension }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; dimensionEditing: boolean; hoveredDimension: string | null; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void; onHoverDimension: (dimension: ViewportDimension | null) => void }) {
+  const grid = useMemo(() => {
+    const length = Math.max(...beams.map((beam) => beam.center[0] + beam.size[0] / 2)) / 1000;
+    const width = Math.max(...beams.map((beam) => beam.center[1] + beam.size[1] / 2)) / 1000;
+    const section = 0.5;
+    const size = Math.max(10, Math.ceil((Math.max(length, width) + section * 4) / section) * section);
+    return { size, divisions: Math.round(size / section), position: [length / 2, 0, width / 2] as [number, number, number] };
+  }, [beams]);
   return <div className="viewport"><Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
     <Camera preset={preset} />
     <color attach="background" args={["#edf1f3"]} />
     <ambientLight intensity={1.5} />
     <directionalLight position={[5, 8, 4]} intensity={2} castShadow />
-    <gridHelper args={[10, 20, "#aab9c1", "#d9e1e5"]} />
+    <gridHelper args={[grid.size, grid.divisions, "#aab9c1", "#d9e1e5"]} position={grid.position} />
     {beams.map((beam) => <mesh key={`${beam.layerId}:${beam.index}`} position={[beam.center[0] / 1000, beam.center[2] / 1000, beam.center[1] / 1000]} onClick={(event) => { event.stopPropagation(); onToggleBeam(beam); }}>
       <boxGeometry args={[beam.size[0] / 1000, beam.size[2] / 1000, beam.size[1] / 1000]} />
       <meshStandardMaterial color={selectedBeams.includes(`${beam.layerId}:${beam.layerIndex}`) ? "#d83a3a" : "#b88254"} roughness={0.72} />
@@ -113,7 +123,7 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
         <Line points={arrow(start, 1)} color="#315b6c" lineWidth={1.5} />
         <Line points={arrow(end, -1)} color="#315b6c" lineWidth={1.5} />
         {dimensionEditing && dimension.editable ? <DimensionHitArea dimension={dimension} start={start} end={end} middle={middle} onSelect={onSelectDimension} onHover={onHoverDimension} /> : null}
-        <DimensionLabel value={dimension.value} position={middle} dimension={dimension} canEdit={dimensionEditing} onSelect={onSelectDimension} />
+        <DimensionLabel value={dimension.value} position={middle} dimension={dimension} canEdit={dimensionEditing} onSelect={onSelectDimension} onHover={onHoverDimension} />
       </group>;
     })}
     <OrbitControls makeDefault />

@@ -114,28 +114,12 @@ def editable_dimensions(
         layer_id for layer_id, beams in layer_beams.items()
         if not layer_id.startswith("manual-") and len(beams) > 1
     )
-    # Show one clear dimension chain per axis.  Prefer a parallel layer whose
-    # visible outer faces still cover the pallet envelope.  An upper layer can
-    # have both edge beams deliberately hidden; in that case its remaining
-    # beams must not make the dimensions disappear while a lower parallel
-    # layer still provides the real outer faces.
-    visible_layer_by_axis: dict[PalletAxis, str] = {}
     for layer_id in dimension_layers:
         beams = layer_beams[layer_id]
         axis: PalletAxis = "length" if beams[0].orientation == "width" else "width"
-        current = visible_layer_by_axis.get(axis)
-        if current is None or _dimension_layer_priority(result, beams, axis) > _dimension_layer_priority(
-            result, layer_beams[current], axis,
-        ):
-            visible_layer_by_axis[axis] = layer_id
-    for layer_id in dimension_layers:
-        beams = layer_beams[layer_id]
-        axis: PalletAxis = "length" if beams[0].orientation == "width" else "width"
-        # One clear dimension chain per axis is readable and corresponds to
-        # the editable visible grid.  Repeating it for every stacked layer
-        # causes extension lines to cross as soon as sections differ.
-        if visible_layer_by_axis[axis] != layer_id:
-            continue
+        # Every structural layer keeps its own editable chain.  The arranging
+        # pass below gives each line a separate guide offset, so lower layers
+        # remain measurable after a higher layer has beams removed.
         # Use the same pitch for both directions.
         offset = max(50.0, result.pallet_width * 0.045)
         faces = beam_faces(result, layer_id)
