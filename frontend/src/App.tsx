@@ -120,6 +120,7 @@ export function App() {
   >({ length: "", width: "" });
   const [camera, setCamera] = useState<CameraPreset>("isometric");
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
+  const [beamTool, setBeamTool] = useState<"none" | "delete" | "section">("none");
   const [section, setSection] = useState<BeamSection>({
     height: 70,
     width: 50,
@@ -228,6 +229,8 @@ export function App() {
       setManualSupports((current) =>
         current.length === 2 ? [support] : [...current, support],
       );
+    } else if (beamTool === "none") {
+      return;
     }
     setSelectedBeams((selected) => {
       const alreadySelected = selected.some(
@@ -259,6 +262,7 @@ export function App() {
     if (response.ok && response.snapshot) {
       applyProject(response.snapshot.project);
       setSelectedBeams([]);
+      setBeamTool("none");
     }
   }
 
@@ -281,6 +285,7 @@ export function App() {
     if (response.ok && response.snapshot) {
       applyProject(response.snapshot.project);
       setSelectedBeams([]);
+      setBeamTool("none");
     }
   }
 
@@ -691,17 +696,15 @@ export function App() {
               </label>
               <button
                 type="button"
-                onClick={changeSelectedBeamSections}
-                disabled={selectedBeams.length === 0}
+                onClick={() => beamTool === "section" ? void changeSelectedBeamSections() : (setBeamTool("section"), setSelectedBeams([]))}
               >
-                Change section
+                {beamTool === "section" ? `Apply section (${selectedBeams.length})` : "Change section"}
               </button>
               <button
                 type="button"
-                onClick={deleteSelectedBeams}
-                disabled={selectedBeams.length === 0}
+                onClick={() => beamTool === "delete" ? void deleteSelectedBeams() : (setBeamTool("delete"), setSelectedBeams([]))}
               >
-                Delete selected ({selectedBeams.length})
+                {beamTool === "delete" ? `Delete selected (${selectedBeams.length})` : "Delete beams"}
               </button>
               <button
                 type="button"
@@ -718,7 +721,7 @@ export function App() {
                 type="button"
                 className={insertionMode ? "active-tool" : ""}
                 onClick={() =>
-                  insertionMode ? stopInsertion() : setInsertionMode(true)
+                  insertionMode ? stopInsertion() : (setBeamTool("none"), setSelectedBeams([]), setInsertionMode(true))
                 }
               >
                 {insertionMode ? "Finish insertion" : "Add beam"}
