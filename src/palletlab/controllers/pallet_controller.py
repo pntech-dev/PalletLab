@@ -702,7 +702,7 @@ class PalletController:
             )
             z = bearing + item.section.height / 2 if item.first_face == "top" else bearing - item.section.height / 2
             if first.orientation == "length":
-                start, end = self._manual_span(first, second, item.start_point, "y")
+                start, end = self._manual_span(first, second, "y")
                 coordinate = self._offset_from_reference(
                     reference, item.reference_face, "x", item.distance, item.section.width,
                 )
@@ -712,7 +712,7 @@ class PalletController:
                     "width", item.beam_id, 0,
                 )
             else:
-                start, end = self._manual_span(first, second, item.start_point, "x")
+                start, end = self._manual_span(first, second, "x")
                 coordinate = self._offset_from_reference(
                     reference, item.reference_face, "y", item.distance, item.section.width,
                 )
@@ -733,33 +733,18 @@ class PalletController:
 
     @staticmethod
     def _manual_span(
-        first: Beam3D, second: Beam3D, start_point: tuple[float, float, float] | None, axis: str,
+        first: Beam3D, second: Beam3D, axis: str,
     ) -> tuple[float, float]:
-        """Return the span between the first click and the facing second support.
-
-        Older projects do not have a click coordinate and deliberately retain
-        their former outer-edge behaviour.
-        """
-        if start_point is None:
-            if axis == "x":
-                return (
-                    min(first.x - first.size_x / 2, second.x - second.size_x / 2),
-                    max(first.x + first.size_x / 2, second.x + second.size_x / 2),
-                )
+        """Return a manual beam span from one selected support's outer edge to the other's."""
+        if axis == "x":
             return (
-                min(first.y - first.size_y / 2, second.y - second.size_y / 2),
-                max(first.y + first.size_y / 2, second.y + second.size_y / 2),
+                min(first.x - first.size_x / 2, second.x - second.size_x / 2),
+                max(first.x + first.size_x / 2, second.x + second.size_x / 2),
             )
-        coordinate = start_point[0] if axis == "x" else start_point[1]
-        first_center = first.x if axis == "x" else first.y
-        first_half_size = first.size_x / 2 if axis == "x" else first.size_y / 2
-        second_center = second.x if axis == "x" else second.y
-        second_half_size = second.size_x / 2 if axis == "x" else second.size_y / 2
-        # The Three.js intersection is already on the first support. Clamp it
-        # defensively so a malformed bridge payload cannot make a diagonal bar.
-        start = min(max(coordinate, first_center - first_half_size), first_center + first_half_size)
-        end = second_center - second_half_size if start <= second_center else second_center + second_half_size
-        return (start, end) if start <= end else (end, start)
+        return (
+            min(first.y - first.size_y / 2, second.y - second.size_y / 2),
+            max(first.y + first.size_y / 2, second.y + second.size_y / 2),
+        )
 
     @staticmethod
     def _offset_from_reference(

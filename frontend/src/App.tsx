@@ -532,11 +532,6 @@ export function App() {
         section,
         reference: manualReference ? { layerId: manualReference.layerId, layerIndex: manualReference.layerIndex } : undefined,
         referenceFace: manualReference ? manualReferenceFace : undefined,
-        startPoint: [
-          manualSupports[0].point[0] * 1000,
-          manualSupports[0].point[2] * 1000,
-          manualSupports[0].point[1] * 1000,
-        ],
       },
     );
     applyCalculation(response);
@@ -1052,6 +1047,7 @@ export function App() {
                 onSelectInsertion={selectInsertion}
                 manualMode={insertionMode}
                 manualSupports={manualSupports}
+                manualSection={section}
                 onSelectManualSupport={selectManualSupport}
                 manualHud={manualHud}
                 beamSelectionEnabled={insertionMode || beamTool !== "none"}

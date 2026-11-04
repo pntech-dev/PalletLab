@@ -210,7 +210,7 @@ def test_manual_beam_spans_the_outer_edges_of_two_selected_supports():
     assert errors == []
 
 
-def test_manual_beam_starts_at_the_saved_viewport_click_and_reaches_the_second_support():
+def test_manual_beam_uses_outer_edges_even_when_the_viewport_click_is_saved():
     controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
     result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")
     assert result is not None
@@ -224,9 +224,10 @@ def test_manual_beam_starts_at_the_saved_viewport_click_and_reaches_the_second_s
 
     assert updated is not None
     beam = next(item for item in updated.beams_3d if item.layer_id == "manual-1")
-    second_face = second.y - second.size_y / 2 if clicked_y <= second.y else second.y + second.size_y / 2
-    assert beam.y - beam.size_y / 2 == pytest.approx(min(clicked_y, second_face))
-    assert beam.y + beam.size_y / 2 == pytest.approx(max(clicked_y, second_face))
+    expected_start = min(first.y - first.size_y / 2, second.y - second.size_y / 2)
+    expected_end = max(first.y + first.size_y / 2, second.y + second.size_y / 2)
+    assert beam.y - beam.size_y / 2 == pytest.approx(expected_start)
+    assert beam.y + beam.size_y / 2 == pytest.approx(expected_end)
     assert errors == []
 
 

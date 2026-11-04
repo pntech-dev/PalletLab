@@ -37,6 +37,7 @@ export type ViewportInsertionMarker = {
   size: number;
   preview: { center: [number, number, number]; size: [number, number, number] };
 };
+type ManualBeamSection = { height: number; width: number };
 
 function point([x, y, z]: [number, number, number]): [number, number, number] {
   return [x / 1000, z / 1000, y / 1000];
@@ -195,6 +196,7 @@ export default function PalletViewport({
   onSelectInsertion,
   manualMode = insertionMode,
   manualSupports = [],
+    manualSection,
   onSelectManualSupport = () => {},
   manualHud,
   beamSelectionEnabled,
@@ -214,6 +216,7 @@ export default function PalletViewport({
   onSelectInsertion: (marker: ViewportInsertionMarker) => void;
   manualMode?: boolean;
   manualSupports?: { beam: ViewportBeam; point: ViewportPoint }[];
+    manualSection?: ManualBeamSection;
   onSelectManualSupport?: (beam: ViewportBeam, point: ViewportPoint) => void;
   manualHud?: ReactNode;
   beamSelectionEnabled: boolean;
@@ -268,32 +271,40 @@ export default function PalletViewport({
     };
   }, [beams]);
   const manualPreview = useMemo(() => {
-    if (manualSupports.length !== 2) return null;
+    if (manualSupports.length !== 2 || !manualSection) return null;
     const [first, second] = manualSupports;
     const alongX = first.beam.size[0] >= first.beam.size[1];
-    // A support pair defines the direction of the new beam, but its start is
-    // the exact location of the first click.  Averaging the two picked points
-    // made the preview slide away from that marker whenever the second click
-    // was not at the same longitudinal coordinate.
+    const firstCenter = alongX
+      ? first.beam.center[1] / 1000
+      : first.beam.center[0] / 1000;
     const secondCenter = alongX
       ? second.beam.center[1] / 1000
       : second.beam.center[0] / 1000;
+    const firstHalfSize = alongX
+      ? first.beam.size[1] / 2000
+      : first.beam.size[0] / 2000;
     const secondHalfSize = alongX
       ? second.beam.size[1] / 2000
       : second.beam.size[0] / 2000;
-    const start = alongX ? first.point[2] : first.point[0];
-    const secondNearFace = secondCenter + (start <= secondCenter ? -secondHalfSize : secondHalfSize);
-    const length = Math.abs(secondNearFace - start);
+    // The persisted beam spans the outer faces of both supports. The preview
+    // deliberately uses exactly the same rule, regardless of click position.
+    const start = Math.min(firstCenter - firstHalfSize, secondCenter - secondHalfSize);
+    const end = Math.max(firstCenter + firstHalfSize, secondCenter + secondHalfSize);
+    const length = end - start;
     if (length < 0.001) return null;
-    const thickness = Math.min(first.beam.size[0], first.beam.size[1]) / 1000;
-    const height = first.beam.size[2] / 1000;
+    const thickness = manualSection.width / 1000;
+    const height = manualSection.height / 1000;
+    const bearing = Math.max(
+      first.beam.center[2] + first.beam.size[2] / 2,
+      second.beam.center[2] + second.beam.size[2] / 2,
+    ) / 1000;
     return {
       position: (alongX
-        ? [first.point[0], first.point[1] + height / 2, (start + secondNearFace) / 2]
-        : [(start + secondNearFace) / 2, first.point[1] + height / 2, first.point[2]]) as ViewportPoint,
+        ? [first.point[0], bearing + height / 2, (start + end) / 2]
+        : [(start + end) / 2, bearing + height / 2, first.point[2]]) as ViewportPoint,
       size: alongX ? [thickness, height, length] as [number, number, number] : [length, height, thickness] as [number, number, number],
     };
-  }, [manualSupports]);
+  }, [manualSection, manualSupports]);
   return (
     <div className="viewport" onPointerMove={(event) => { const box = event.currentTarget.getBoundingClientRect(); setCursor([event.clientX - box.left + 14, event.clientY - box.top + 14]); }}>
       <Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
