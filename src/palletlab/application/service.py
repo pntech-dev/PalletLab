@@ -108,6 +108,28 @@ class ApplicationService:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось пересчитать поддон."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
+    def insert_beam(self, project: object, slot: object, clear_gap: object) -> dict[str, Any]:
+        """Insert one beam through a snapshot insertion slot."""
+        try:
+            state = project_from_dict(project)
+        except ProjectPersistenceError as exc:
+            return {"ok": False, "error": str(exc)}
+        insertion_slot, error = _insertion_slot(slot)
+        if error:
+            return {"ok": False, "error": error}
+        if not isinstance(clear_gap, (int, float)) or isinstance(clear_gap, bool) or not isfinite(clear_gap):
+            return {"ok": False, "error": "Зазор должен быть конечным числом."}
+        controller, errors = self._controller_for(state)
+        if controller.recalculate_from_state(show_error=False) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
+        if not controller.begin_insertion(insertion_slot):
+            return {"ok": False, "error": "Точка вставки больше недоступна."}
+        if controller.confirm_insertion(float(clear_gap)) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось добавить брус."}
+        if controller.recalculate_from_state(show_error=False) is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось пересчитать поддон."}
+        return {"ok": True, "snapshot": project_snapshot(state)}
+
     def default_project(self) -> dict[str, Any]:
         """Return the same starting configuration as the current desktop reset."""
         length = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100)
@@ -210,6 +232,21 @@ def _distance_target(target: object) -> tuple[str, int, str | None]:
     ):
         return "", 0, "Некорректная размерная линия."
     return layer_id, beam_index, None
+
+
+def _insertion_slot(slot: object):
+    from palletlab.core.models import InsertionSlot
+    if not isinstance(slot, dict):
+        return None, "Некорректная точка вставки."
+    axis, layer_id, index, maximum, suggested = (
+        slot.get("axis"), slot.get("layerId"), slot.get("afterBeamIndex"),
+        slot.get("maximumClearGap"), slot.get("suggestedClearGap"),
+    )
+    if axis not in ("length", "width") or not isinstance(layer_id, str) or not isinstance(index, int) or index < 0:
+        return None, "Некорректная точка вставки."
+    if any(not isinstance(value, (int, float)) or isinstance(value, bool) or not isfinite(value) for value in (maximum, suggested)):
+        return None, "Некорректная точка вставки."
+    return InsertionSlot(axis, index, float(maximum), float(suggested), layer_id), None
 
 
 class _Signal:

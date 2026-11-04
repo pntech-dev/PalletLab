@@ -40,6 +40,9 @@ class WebApplicationApi:
         """Apply an editable viewport dimension through the domain controller."""
         return ApplicationService().change_beam_distance(project, target, face_distance)
 
+    def insert_beam(self, project: object, slot: object, clear_gap: object) -> dict[str, Any]:
+        return ApplicationService().insert_beam(project, slot, clear_gap)
+
     def default_project(self) -> dict[str, Any]:
         """Provide the temporary frontend with a valid starting project."""
         return ApplicationService().default_project()

@@ -115,6 +115,17 @@ def test_change_beam_distance_rejects_invalid_viewport_payloads() -> None:
         "ok": False,
         "error": "Некорректная размерная линия.",
     }
+
+
+def test_insert_beam_uses_a_snapshot_insertion_slot() -> None:
+    service = ApplicationService()
+    calculated = service.calculate(service.default_project())
+    slot = calculated["snapshot"]["pallet"]["insertionMarkers"][0]["slot"]
+
+    response = service.insert_beam(calculated["snapshot"]["project"], slot, slot["suggestedClearGap"])
+
+    assert response["ok"] is True
+    assert len(response["snapshot"]["pallet"]["beams"]) == len(calculated["snapshot"]["pallet"]["beams"]) + 1
     assert service.change_beam_distance(service.default_project(), {"layerId": "length", "beamIndex": 1}, float("inf")) == {
         "ok": False,
         "error": "Расстояние должно быть конечным числом.",
