@@ -28,12 +28,13 @@ function Camera({ preset }: { preset: CameraPreset }) {
   return null;
 }
 
-function DimensionHitArea({ dimension, start, end, middle, onSelect }: {
+function DimensionHitArea({ dimension, start, end, middle, onSelect, onHover }: {
   dimension: ViewportDimension;
   start: [number, number, number];
   end: [number, number, number];
   middle: [number, number, number];
   onSelect: (dimension: ViewportDimension) => void;
+  onHover: (dimension: ViewportDimension | null) => void;
 }) {
   const length = Math.hypot(end[0] - start[0], end[1] - start[1], end[2] - start[2]);
   // The rendered line is intentionally thin. This invisible cuboid covers its
@@ -41,44 +42,46 @@ function DimensionHitArea({ dimension, start, end, middle, onSelect }: {
   const size: [number, number, number] = dimension.axis === "length"
     ? [length, 0.16, 0.16]
     : [0.16, 0.16, length];
-  return <mesh position={middle} onClick={(event) => { event.stopPropagation(); onSelect(dimension); }}>
+  return <mesh position={middle} onClick={(event) => { event.stopPropagation(); onSelect(dimension); }}
+    onPointerOver={(event) => { event.stopPropagation(); onHover(dimension); }} onPointerOut={() => onHover(null)}>
     <boxGeometry args={size} />
     <meshBasicMaterial transparent opacity={0} depthWrite={false} />
   </mesh>;
 }
 
-function DimensionLabel({ value, position, dimension, onSelect }: {
+function DimensionLabel({ value, position, dimension, canEdit, onSelect }: {
   value: number;
   position: [number, number, number];
   dimension: ViewportDimension;
+  canEdit: boolean;
   onSelect: (dimension: ViewportDimension) => void;
 }) {
   const texture = useMemo(() => {
     const canvas = document.createElement("canvas");
-    canvas.width = 160;
-    canvas.height = 64;
+    canvas.width = 144;
+    canvas.height = 56;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas 2D is unavailable for dimension labels.");
-    context.fillStyle = "rgba(255, 255, 255, 0.94)";
-    context.roundRect(2, 2, 156, 60, 8);
+    context.fillStyle = "rgba(255, 255, 255, 0.76)";
+    context.roundRect(2, 2, 140, 52, 7);
     context.fill();
     context.fillStyle = "#183f52";
-    context.font = "600 31px system-ui, sans-serif";
+    context.font = "600 27px system-ui, sans-serif";
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillText(value.toFixed(0), 80, 33);
+    context.fillText(value.toFixed(0), 72, 29);
     const result = new CanvasTexture(canvas);
     result.minFilter = LinearFilter;
     return result;
   }, [value]);
   useEffect(() => () => texture.dispose(), [texture]);
-  return <sprite position={position} scale={[0.38, 0.15, 1]} renderOrder={10}
-    onClick={(event) => { event.stopPropagation(); if (dimension.editable) onSelect(dimension); }}>
+  return <sprite position={position} scale={[0.30, 0.12, 1]} renderOrder={10}
+    onClick={(event) => { event.stopPropagation(); if (canEdit && dimension.editable) onSelect(dimension); }}>
     <spriteMaterial map={texture} transparent depthTest={false} depthWrite={false} />
   </sprite>;
 }
 
-export default function PalletViewport({ beams, dimensions, preset, selectedBeams, onToggleBeam, onSelectDimension }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void }) {
+export default function PalletViewport({ beams, dimensions, preset, selectedBeams, dimensionEditing, hoveredDimension, onToggleBeam, onSelectDimension, onHoverDimension }: { beams: ViewportBeam[]; dimensions: ViewportDimension[]; preset: CameraPreset; selectedBeams: string[]; dimensionEditing: boolean; hoveredDimension: string | null; onToggleBeam: (beam: ViewportBeam) => void; onSelectDimension: (dimension: ViewportDimension) => void; onHoverDimension: (dimension: ViewportDimension | null) => void }) {
   return <div className="viewport"><Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
     <Camera preset={preset} />
     <color attach="background" args={["#edf1f3"]} />
@@ -90,6 +93,8 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
       <meshStandardMaterial color={selectedBeams.includes(`${beam.layerId}:${beam.layerIndex}`) ? "#d83a3a" : "#b88254"} roughness={0.72} />
     </mesh>)}
     {dimensions.map((dimension, index) => {
+      const dimensionKey = `${dimension.layerId}:${dimension.index}`;
+      const isHovered = dimensionEditing && hoveredDimension === dimensionKey;
       const start = point(dimension.start); const end = point(dimension.end);
       const middle: [number, number, number] = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2, (start[2] + end[2]) / 2];
       const length = Math.hypot(end[0] - start[0], end[1] - start[1], end[2] - start[2]);
@@ -104,11 +109,11 @@ export default function PalletViewport({ beams, dimensions, preset, selectedBeam
       return <group key={index}>
         {dimension.startExtension ? <Line points={[point(dimension.startExtension), start]} color="#315b6c" lineWidth={1} /> : null}
         {dimension.endExtension ? <Line points={[point(dimension.endExtension), end]} color="#315b6c" lineWidth={1} /> : null}
-        <Line points={[start, end]} color={dimension.editable ? "#315b6c" : "#718087"} lineWidth={dimension.editable ? 2 : 1.5} />
+        <Line points={[start, end]} color={isHovered ? "#e07822" : dimension.editable ? "#315b6c" : "#718087"} lineWidth={isHovered ? 3 : dimension.editable ? 2 : 1.5} />
         <Line points={arrow(start, 1)} color="#315b6c" lineWidth={1.5} />
         <Line points={arrow(end, -1)} color="#315b6c" lineWidth={1.5} />
-        {dimension.editable ? <DimensionHitArea dimension={dimension} start={start} end={end} middle={middle} onSelect={onSelectDimension} /> : null}
-        <DimensionLabel value={dimension.value} position={middle} dimension={dimension} onSelect={onSelectDimension} />
+        {dimensionEditing && dimension.editable ? <DimensionHitArea dimension={dimension} start={start} end={end} middle={middle} onSelect={onSelectDimension} onHover={onHoverDimension} /> : null}
+        <DimensionLabel value={dimension.value} position={middle} dimension={dimension} canEdit={dimensionEditing} onSelect={onSelectDimension} />
       </group>;
     })}
     <OrbitControls makeDefault />

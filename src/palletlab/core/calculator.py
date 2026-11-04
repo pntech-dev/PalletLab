@@ -250,7 +250,14 @@ def set_beam_face_distance_input(
         return replace(data, margin_end=margin_end)
     positions = list(direction.beam_centers[1:-1])
     positions[beam_index - 1] = face_distance + direction.beam_width / 2
-    return _input_with_support_positions(data, direction, positions)
+    updated = _input_with_support_positions(data, direction, positions)
+    if beam_index == last_index - 1 and updated.last_support_to_edge < 0:
+        # The last internal beam may legitimately be moved past the current
+        # outer edge.  Keep its existing clearance to that edge and grow the
+        # pallet instead of producing a transient negative trailing distance.
+        trailing_clearance = direction.raw_pallet_size - data.margin_end - direction.beam_centers[last_index - 1]
+        return replace(updated, last_support_to_edge=trailing_clearance)
+    return updated
 
 
 def _section_for(

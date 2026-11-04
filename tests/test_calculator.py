@@ -261,6 +261,20 @@ def test_editing_a_displayed_distance_moves_its_internal_beam_and_updates_input_
     assert updated_input.support_distances == pytest.approx((1302, 228, 1300, 499))
 
 
+def test_moving_the_last_internal_beam_past_the_edge_grows_the_pallet():
+    direction = calculate_direction(LENGTH_EXAMPLE)
+    last_internal = direction.beam_count - 2
+    previous_face = direction.beam_centers[last_internal] - direction.beam_width / 2
+
+    updated_input = set_beam_face_distance_input(
+        LENGTH_EXAMPLE, direction, last_internal, previous_face + 1500,
+    )
+    recalculated = calculate_direction(updated_input)
+
+    assert recalculated.pallet_size == pytest.approx(direction.pallet_size + 1500)
+    assert recalculated.beam_centers[last_internal] - direction.beam_width / 2 == pytest.approx(previous_face + 1500)
+
+
 def test_editing_the_first_edge_dimension_is_rejected():
     direction = calculate_direction(LENGTH_EXAMPLE)
     with pytest.raises(CalculationError, match="первого края"):

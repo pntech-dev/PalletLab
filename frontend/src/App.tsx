@@ -59,6 +59,8 @@ export function App() {
   const [section, setSection] = useState<BeamSection>({ height: 70, width: 50 });
   const [selectedDimension, setSelectedDimension] = useState<ViewportDimension | null>(null);
   const [distanceValue, setDistanceValue] = useState(0);
+  const [dimensionEditing, setDimensionEditing] = useState(false);
+  const [hoveredDimension, setHoveredDimension] = useState<string | null>(null);
 
   function applyProject(nextProject: Project) {
     setProject(nextProject);
@@ -183,6 +185,23 @@ export function App() {
     }
   }
 
+  function stopDimensionEditing() {
+    setDimensionEditing(false);
+    setSelectedDimension(null);
+    setHoveredDimension(null);
+  }
+
+  useEffect(() => {
+    const cancelEditing = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        stopDimensionEditing();
+      }
+    };
+    window.addEventListener("keydown", cancelEditing);
+    return () => window.removeEventListener("keydown", cancelEditing);
+  }, []);
+
   function updateDirection(axis: "length" | "width", field: keyof Direction, value: string) {
     if (!project) return;
     if (field === "support_distances") {
@@ -303,7 +322,7 @@ export function App() {
           <><p className="result">
             {calculation.snapshot.pallet.size.length} × {calculation.snapshot.pallet.size.width} × {calculation.snapshot.pallet.size.height} mm
             · {calculation.snapshot.pallet.beams.length} beams
-          </p><p className="selection-status">{selectedBeams.length ? `Selected beams: ${selectedBeams.length}` : "Select beams in the 3D view"}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}<label>Section height<input type="number" min="1" value={section.height} onChange={(event) => setSection({ ...section, height: Number(event.target.value) })} /></label><label>Section width<input type="number" min="1" value={section.width} onChange={(event) => setSection({ ...section, width: Number(event.target.value) })} /></label><button type="button" onClick={changeSelectedBeamSections} disabled={selectedBeams.length === 0}>Change section</button><button type="button" onClick={deleteSelectedBeams} disabled={selectedBeams.length === 0}>Delete selected ({selectedBeams.length})</button></div>{selectedDimension ? <div className="distance-editor"><span>Selected dimension: {selectedDimension.value.toFixed(0)} mm</span><label>New face distance<input type="number" value={distanceValue} onChange={(event) => setDistanceValue(Number(event.target.value))} /></label><button type="button" onClick={changeSelectedDistance}>Apply distance</button><button type="button" onClick={() => setSelectedDimension(null)}>Cancel</button></div> : <p className="dimension-hint">Click a dimension line in the 3D view to edit its distance.</p>}<Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeams={selectedBeams.map((beam) => `${beam.layerId}:${beam.layerIndex}`)} onToggleBeam={toggleBeam} onSelectDimension={selectDimension} /></Suspense></>
+          </p><p className="selection-status">{selectedBeams.length ? `Selected beams: ${selectedBeams.length}` : "Select beams in the 3D view"}</p><div className="camera-actions">{(["isometric", "top", "front", "side"] as CameraPreset[]).map((preset) => <button type="button" key={preset} onClick={() => setCamera(preset)}>{preset}</button>)}<label>Section height<input type="number" min="1" value={section.height} onChange={(event) => setSection({ ...section, height: Number(event.target.value) })} /></label><label>Section width<input type="number" min="1" value={section.width} onChange={(event) => setSection({ ...section, width: Number(event.target.value) })} /></label><button type="button" onClick={changeSelectedBeamSections} disabled={selectedBeams.length === 0}>Change section</button><button type="button" onClick={deleteSelectedBeams} disabled={selectedBeams.length === 0}>Delete selected ({selectedBeams.length})</button><button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : setDimensionEditing(true)}>{dimensionEditing ? "Finish dimension edit" : "Edit dimensions"}</button></div>{dimensionEditing && selectedDimension ? <div className="distance-editor"><span>Selected dimension: {selectedDimension.value.toFixed(0)} mm</span><label>New face distance<input type="number" value={distanceValue} onChange={(event) => setDistanceValue(Number(event.target.value))} onKeyDown={(event) => { if (event.key === "Enter") void changeSelectedDistance(); if (event.key === "Escape") stopDimensionEditing(); }} /></label><button type="button" onClick={changeSelectedDistance}>Apply distance</button><button type="button" onClick={stopDimensionEditing}>Cancel</button></div> : dimensionEditing ? <p className="dimension-hint">Hover a dimension line, then click it to edit. Esc closes this mode.</p> : null}<Suspense fallback={<p>Loading 3D view…</p>}><PalletViewport beams={calculation.snapshot.pallet.beams} dimensions={calculation.snapshot.pallet.dimensions} preset={camera} selectedBeams={selectedBeams.map((beam) => `${beam.layerId}:${beam.layerIndex}`)} dimensionEditing={dimensionEditing} hoveredDimension={hoveredDimension} onToggleBeam={toggleBeam} onSelectDimension={selectDimension} onHoverDimension={(dimension) => setHoveredDimension(dimension ? `${dimension.layerId}:${dimension.index}` : null)} /></Suspense></>
         ) : null}
         {calculationError ? <p className="error">{calculationError}</p> : null}
       </section>
