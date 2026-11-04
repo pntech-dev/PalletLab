@@ -29,10 +29,10 @@ function Camera({ preset, bounds }: { preset: CameraPreset; bounds: ViewportBoun
     const positions: Record<CameraPreset, [number, number, number]> = {
       isometric: [x + distance, y + distance * 0.75, z + distance],
       top: [x, y + distance * 1.35, z + 0.001],
-      // PalletLab's longitudinal beams lie on world X; a front view looks
-      // along that axis. The side view looks along the transverse world Z.
-      front: [x + distance, y + distance * 0.35, z],
-      side: [x, y + distance * 0.35, z + distance],
+      // Keep the eye level with the pallet centre for a true end elevation.
+      // The frontend's mapped axes put the longitudinal view on world Z.
+      front: [x, y, z + distance],
+      side: [x + distance, y, z],
     };
     if (preset === "top") camera.up.set(0, 0, -1);
     else camera.up.set(0, 1, 0);
