@@ -567,17 +567,22 @@ export function App() {
         return;
       }
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      if (event.key.toLowerCase() === "z") {
+      // `key` follows the active keyboard layout (for example, "я" under a
+      // Russian layout). `code` denotes the physical Z/Y key and therefore
+      // makes project history shortcuts layout-independent.
+      if (event.code === "KeyZ") {
         event.preventDefault();
         if (event.shiftKey) redo();
         else undo();
-      } else if (event.key.toLowerCase() === "y") {
+      } else if (event.code === "KeyY") {
         event.preventDefault();
         redo();
       }
     };
-    window.addEventListener("keydown", handleKeyboardShortcut);
-    return () => window.removeEventListener("keydown", handleKeyboardShortcut);
+    // Capture runs before the browser applies native undo/redo to an input.
+    window.addEventListener("keydown", handleKeyboardShortcut, true);
+    return () =>
+      window.removeEventListener("keydown", handleKeyboardShortcut, true);
   });
 
   function updateDirection(
