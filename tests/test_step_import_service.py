@@ -1,12 +1,13 @@
-import base64
+import json
+from pathlib import Path
 
 import numpy as np
 
 from palletlab.application.step_import_service import (
     StepImportService,
     _model_pallet_layers,
-    _snapshot_from_cached_model,
     _viewport_transform,
+    _write_model_asset,
 )
 from palletlab.core.models import DirectionInput
 
@@ -36,7 +37,8 @@ def test_step_import_status_and_cancel_reject_unknown_operation_ids():
     }
 
 
-def test_step_snapshot_keeps_triangle_to_cad_face_mapping():
+def test_step_asset_keeps_triangle_to_cad_face_mapping(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     class Mesh:
         faces = [3, 0, 1, 2]
         points = [(0, 0, 0), (100, 0, 0), (0, 200, 300)]
@@ -53,24 +55,30 @@ def test_step_snapshot_keeps_triangle_to_cad_face_mapping():
         points = [(0, 0, 0), (100, 0, 0), (0, 200, 300)]
 
     class Model:
-        mesh = Mesh()
-        edges = Edges()
-        faces = (Face(),)
+        mesh, edges, faces = Mesh(), Edges(), (Face(),)
 
-    snapshot = _snapshot_from_cached_model(Model())
+    asset = _write_model_asset(Model())
+    raw = Path(asset["path"]).read_bytes()
+    header_length = int.from_bytes(raw[8:12], "little")
+    header = json.loads(raw[12:12 + header_length])
+    data_start = 12 + header_length + ((4 - (header_length % 4)) % 4)
 
-    assert snapshot["encoding"] == "typed-buffer-v1"
-    assert np.frombuffer(base64.b64decode(snapshot["positions"]), dtype="<f4").tolist() == [
+    def values(name, dtype):
+        item = header["buffers"][name]
+        return np.frombuffer(raw, dtype=dtype, count=item["byteLength"] // 4, offset=data_start + item["offset"]).tolist()
+
+    assert raw[:8] == b"PLSTEP01"
+    assert values("positions", "<f4") == [
         0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 200.0, 300.0,
     ]
-    assert np.frombuffer(base64.b64decode(snapshot["indices"]), dtype="<u4").tolist() == [0, 1, 2]
-    assert np.frombuffer(base64.b64decode(snapshot["triangleFaceIds"]), dtype="<i4").tolist() == [7]
-    assert snapshot["selectableFaceIds"] == [7]
-    assert np.frombuffer(base64.b64decode(snapshot["edgePoints"]), dtype="<f4").tolist() == [
+    assert values("indices", "<u4") == [0, 1, 2]
+    assert values("triangleFaceIds", "<i4") == [7]
+    assert values("selectableFaceIds", "<i4") == [7]
+    assert values("edgePoints", "<f4") == [
         0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 200.0, 300.0,
     ]
-    assert np.frombuffer(base64.b64decode(snapshot["edgeCells"]), dtype="<u4").tolist() == [3, 0, 1, 2]
-    assert snapshot["bounds"] == [0.0, 100.0, 0.0, 200.0, 0.0, 300.0]
+    assert values("edgeCells", "<u4") == [3, 0, 1, 2]
+    assert header["bounds"] == [0.0, 100.0, 0.0, 200.0, 0.0, 300.0]
 
 
 def test_step_pallet_layers_match_the_desktop_three_layer_construction():

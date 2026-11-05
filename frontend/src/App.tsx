@@ -84,7 +84,7 @@ type StepImportOperation = {
   label?: string;
   error?: string;
 };
-type StepModelResponse = { ok: boolean; error?: string; model?: StepModelPayload };
+type StepModelResponse = { ok: boolean; error?: string; assetUrl?: string };
 type StepPalletResponse = CalculationResponse & {
   modelTransform?: number[];
   supportCount?: number;
@@ -409,20 +409,24 @@ export function App() {
     async function loadPreparedModel() {
       const api = window.pywebview?.api;
       if (!api || !stepImport?.operationId || stepImport.state !== "completed") return;
-      const response = await api.step_model_snapshot(stepImport.operationId);
-      if (response.ok && response.model) {
-        const started = performance.now();
-        const prepared = prepareStepModel(response.model);
-        setStepModel(prepared);
-        void api.record_step_viewport_metrics({
-          stage: "decoded-render-buffers",
-          elapsedMs: Math.round((performance.now() - started) * 10) / 10,
-          renderBufferBytes: stepModelBufferBytes(prepared),
-          jsHeapBytes: browserHeapBytes() ?? -1,
-        });
-        setFitRequest((value) => value + 1);
-      } else {
-        setCalculationError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
+      try {
+        const response = await api.step_model_snapshot(stepImport.operationId);
+        if (response.ok && response.assetUrl) {
+          const started = performance.now();
+          const prepared = await prepareStepModel({ assetUrl: response.assetUrl } satisfies StepModelPayload);
+          setStepModel(prepared);
+          void api.record_step_viewport_metrics({
+            stage: "decoded-render-buffers",
+            elapsedMs: Math.round((performance.now() - started) * 10) / 10,
+            renderBufferBytes: stepModelBufferBytes(prepared),
+            jsHeapBytes: browserHeapBytes() ?? -1,
+          });
+          setFitRequest((value) => value + 1);
+        } else {
+          setCalculationError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
+        }
+      } catch (error) {
+        setCalculationError(error instanceof Error ? error.message : "Не удалось подготовить STEP-модель для просмотра.");
       }
     }
     void loadPreparedModel();

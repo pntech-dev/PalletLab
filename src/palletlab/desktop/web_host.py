@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import mimetypes
 from pathlib import Path
+from threading import Lock, Thread
 from typing import Any
 
 from palletlab.application.service import ApplicationService
@@ -19,9 +22,14 @@ class WebApplicationApi:
     def __init__(self) -> None:
         self._window: Any | None = None
         self._step_imports = StepImportService()
+        self._assets = _StepAssetServer()
 
     def attach_window(self, window: Any) -> None:
         self._window = window
+
+    def frontend_url(self, root: Path) -> str:
+        """Serve the bundled frontend from the same origin as STEP buffers."""
+        return self._assets.set_frontend_root(root)
 
     def status(self) -> dict[str, Any]:
         """Return a dependency-free handshake for the frontend shell."""
@@ -76,7 +84,11 @@ class WebApplicationApi:
         return self._step_imports.cancel(operation_id)
 
     def step_model_snapshot(self, operation_id: object) -> dict[str, Any]:
-        return self._step_imports.model_snapshot(operation_id)
+        response = self._step_imports.model_snapshot(operation_id)
+        asset_path = response.pop("assetPath", None)
+        if response.get("ok") and isinstance(asset_path, str):
+            response["assetUrl"] = self._assets.register(Path(asset_path))
+        return response
 
     def build_step_pallet(self, operation_id: object, project: object, face_index: object) -> dict[str, Any]:
         return self._step_imports.build_pallet(operation_id, project, face_index)
@@ -109,6 +121,85 @@ class WebApplicationApi:
         return str(selected[0]) if selected else None
 
 
+class _StepAssetServer:
+    """Serve bundled web assets and opaque STEP buffers from one loopback origin."""
+
+    def __init__(self) -> None:
+        self._assets: dict[str, Path] = {}
+        self._lock = Lock()
+        self._frontend_root: Path | None = None
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
+                if self.path.startswith("/step/"):
+                    self._serve_step(self.path.removeprefix("/step/"))
+                    return
+                self._serve_frontend()
+
+            def _serve_step(self, token: str) -> None:
+                with owner._lock:
+                    path = owner._assets.get(token)
+                if path is None or not path.is_file():
+                    self.send_error(404)
+                    return
+                size = path.stat().st_size
+                write_step_performance("web-asset", {"points": [{"stage": "request-start", "assetBytes": size}]})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                with path.open("rb") as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        self.wfile.write(chunk)
+                write_step_performance("web-asset", {"points": [{"stage": "request-complete", "assetBytes": size}]})
+
+            def _serve_frontend(self) -> None:
+                with owner._lock:
+                    root = owner._frontend_root
+                if root is None:
+                    self.send_error(503)
+                    return
+                relative = "index.html" if self.path in ("/", "/index.html") else self.path.lstrip("/")
+                path = (root / relative).resolve()
+                if root not in path.parents or not path.is_file():
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+                self.send_header("Content-Length", str(path.stat().st_size))
+                self.end_headers()
+                with path.open("rb") as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        self.wfile.write(chunk)
+
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def register(self, path: Path) -> str:
+        token = path.stem.rsplit("-", 1)[-1]
+        with self._lock:
+            previous = tuple(self._assets.values())
+            self._assets.clear()
+            self._assets[token] = path
+        for old_path in previous:
+            if old_path != path:
+                try:
+                    old_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return f"http://127.0.0.1:{self._server.server_port}/step/{token}"
+
+    def set_frontend_root(self, root: Path) -> str:
+        with self._lock:
+            self._frontend_root = root.resolve()
+        return f"http://127.0.0.1:{self._server.server_port}/"
+
+
 def frontend_entrypoint() -> Path:
     """Locate the Vite entrypoint in source and frozen PyInstaller builds."""
     bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
@@ -123,9 +214,10 @@ def run_web_application() -> None:
     import webview
 
     api = WebApplicationApi()
+    frontend = frontend_entrypoint()
     window = webview.create_window(
         f"PalletLab {__version__}",
-        url=str(frontend_entrypoint()),
+        url=api.frontend_url(frontend.parent),
         js_api=api,
         width=1400,
         height=900,

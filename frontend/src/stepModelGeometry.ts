@@ -1,13 +1,4 @@
-export type StepModelPayload = {
-  encoding: "typed-buffer-v1";
-  positions: string;
-  indices: string;
-  triangleFaceIds: string;
-  selectableFaceIds: number[];
-  edgePoints: string;
-  edgeCells: string;
-  bounds: [number, number, number, number, number, number];
-};
+export type StepModelPayload = { assetUrl: string };
 
 export type StepModelGeometry = {
   displayPositions: Float32Array;
@@ -20,22 +11,11 @@ export type StepModelGeometry = {
   transform: number[];
 };
 
-function decodeBase64(source: string): Uint8Array {
-  const text = window.atob(source);
-  const result = new Uint8Array(text.length);
-  for (let index = 0; index < text.length; index += 1) result[index] = text.charCodeAt(index);
-  return result;
-}
-
-function decodeTypedArray<T extends Float32Array | Uint32Array | Int32Array>(
-  source: string,
-  bytesPerValue: number,
-  create: (buffer: ArrayBufferLike, byteOffset: number, length: number) => T,
-): T {
-  const bytes = decodeBase64(source);
-  if (bytes.byteLength % bytesPerValue !== 0) throw new Error("Некорректный бинарный буфер STEP-модели.");
-  return create(bytes.buffer, bytes.byteOffset, bytes.byteLength / bytesPerValue);
-}
+type AssetHeader = {
+  version: number;
+  bounds: [number, number, number, number, number, number];
+  buffers: Record<string, { offset: number; byteLength: number; dtype: string }>;
+};
 
 function mapStepPositions(source: Float32Array): Float32Array {
   const positions = new Float32Array(source.length);
@@ -71,19 +51,46 @@ function edgeSegmentIndices(cells: Uint32Array): Uint32Array {
   return indices;
 }
 
-export function prepareStepModel(model: StepModelPayload): StepModelGeometry {
-  if (model.encoding !== "typed-buffer-v1") throw new Error("Неподдерживаемый формат STEP-модели.");
-  const positions = decodeTypedArray(model.positions, 4, (buffer, offset, length) => new Float32Array(buffer, offset, length));
-  const edgePoints = decodeTypedArray(model.edgePoints, 4, (buffer, offset, length) => new Float32Array(buffer, offset, length));
-  const edgeCells = decodeTypedArray(model.edgeCells, 4, (buffer, offset, length) => new Uint32Array(buffer, offset, length));
+export async function prepareStepModel(model: StepModelPayload): Promise<StepModelGeometry> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetch(model.assetUrl, { cache: "no-store", signal: controller.signal });
+  } catch (error) {
+    throw new Error(error instanceof Error && error.name === "AbortError"
+      ? "Превышено время ожидания бинарной STEP-модели."
+      : "Не удалось загрузить бинарную STEP-модель.");
+  } finally {
+    window.clearTimeout(timeout);
+  }
+  if (!response.ok) throw new Error("Не удалось получить бинарную геометрию STEP-модели.");
+  const asset = await response.arrayBuffer();
+  const bytes = new Uint8Array(asset);
+  if (new TextDecoder().decode(bytes.slice(0, 8)) !== "PLSTEP01") throw new Error("Некорректный бинарный формат STEP-модели.");
+  const headerLength = new DataView(asset, 8, 4).getUint32(0, true);
+  const headerStart = 12;
+  const header = JSON.parse(new TextDecoder().decode(bytes.slice(headerStart, headerStart + headerLength))) as AssetHeader;
+  if (header.version !== 1) throw new Error("Неподдерживаемая версия STEP-геометрии.");
+  const dataStart = headerStart + headerLength + ((4 - (headerLength % 4)) % 4);
+  const buffer = <T extends Float32Array | Uint32Array | Int32Array>(
+    name: string, create: (data: ArrayBuffer, offset: number, length: number) => T,
+  ): T => {
+    const entry = header.buffers[name];
+    if (!entry || entry.byteLength % 4 !== 0) throw new Error("Некорректный буфер STEP-модели.");
+    return create(asset, dataStart + entry.offset, entry.byteLength / 4);
+  };
+  const positions = buffer("positions", (data, offset, length) => new Float32Array(data, offset, length));
+  const edgePoints = buffer("edgePoints", (data, offset, length) => new Float32Array(data, offset, length));
+  const edgeCells = buffer("edgeCells", (data, offset, length) => new Uint32Array(data, offset, length));
   return {
     displayPositions: mapStepPositions(positions),
-    indices: decodeTypedArray(model.indices, 4, (buffer, offset, length) => new Uint32Array(buffer, offset, length)),
-    triangleFaceIds: decodeTypedArray(model.triangleFaceIds, 4, (buffer, offset, length) => new Int32Array(buffer, offset, length)),
-    selectableFaceIds: model.selectableFaceIds,
+    indices: buffer("indices", (data, offset, length) => new Uint32Array(data, offset, length)),
+    triangleFaceIds: buffer("triangleFaceIds", (data, offset, length) => new Int32Array(data, offset, length)),
+    selectableFaceIds: Array.from(buffer("selectableFaceIds", (data, offset, length) => new Int32Array(data, offset, length))),
     displayEdgePositions: mapStepPositions(edgePoints),
     edgeIndices: edgeSegmentIndices(edgeCells),
-    bounds: model.bounds,
+    bounds: header.bounds,
     transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
   };
 }

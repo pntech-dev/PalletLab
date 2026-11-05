@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import base64
+import json
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -105,11 +105,11 @@ class StepImportService:
             if model is None:
                 raise RuntimeError("Кэш STEP-модели не найден.")
             trace.checkpoint("cache-load", **geometry_footprint(model.mesh, model.edges))
-            snapshot = _snapshot_from_cached_model(model)
-            trace.checkpoint("snapshot-serialised", **_snapshot_footprint(snapshot))
+            asset = _write_model_asset(model)
+            trace.checkpoint("snapshot-packed", **asset["metrics"])
             report = trace.report()
             write_step_performance("model-snapshot", report)
-            return {"ok": True, "model": snapshot, "performance": report}
+            return {"ok": True, "assetPath": asset["path"], "performance": report}
         except Exception as exc:
             trace.checkpoint("failed", error=str(exc))
             write_step_performance("model-snapshot", trace.report())
@@ -264,25 +264,9 @@ class StepImportService:
                 operation.update(state="failed", error=error, label="Не удалось загрузить STEP-модель.")
 
 
-def _snapshot_from_cached_model(model: Any) -> dict[str, Any]:
-    """Flatten triangle mesh data into a JSON bridge payload for Three.js.
-
-    The worker cache already stores the tessellated surface plus one original
-    STEP face ID per rendered triangle. Keeping that array intact is essential:
-    a browser click can later be mapped back to support detection without
-    re-reading or approximating the CAD topology in JavaScript.
-    """
-    return _snapshot_from_geometry(model.mesh, model.edges, model.faces)
-
-
-def _snapshot_from_geometry(mesh: Any, edges: Any, faces: Any) -> dict[str, Any]:
-    """Return compact binary geometry while preserving STEP face identity.
-
-    JSON lists turn every numeric value into a Python object and text.  For a
-    multi-million triangle assembly that alone takes tens of seconds and
-    several gigabytes across the Python/webview/JavaScript boundary.  The
-    browser receives the same values as base64-encoded typed buffers instead.
-    """
+def _write_model_asset(model: Any) -> dict[str, Any]:
+    """Write one directly-fetchable binary viewport asset without JSON/base64 copies."""
+    mesh, edges, faces = model.mesh, model.edges, model.faces
     raw_faces = np.asarray(mesh.faces, dtype=np.uint32)
     if raw_faces.size % 4 != 0 or not np.all(raw_faces[::4] == 3):
         raise RuntimeError("STEP-кэш содержит нетреугольную грань, которую нельзя показать в web viewport.")
@@ -301,31 +285,43 @@ def _snapshot_from_geometry(mesh: Any, edges: Any, faces: Any) -> dict[str, Any]
         if face.point is not None and face.normal is not None
     ]
     bounds = [float(value) for value in mesh.bounds]
-    return {
-        "encoding": "typed-buffer-v1",
-        "positions": _encode_buffer(positions),
-        "indices": _encode_buffer(triangles[:, 1:].reshape(-1)),
-        "triangleFaceIds": _encode_buffer(face_ids),
-        "selectableFaceIds": selectable_faces,
-        "edgePoints": _encode_buffer(edge_points),
-        "edgeCells": _encode_buffer(edge_cells),
-        "bounds": bounds,
+    arrays = {
+        "positions": positions,
+        "indices": triangles[:, 1:].reshape(-1),
+        "triangleFaceIds": face_ids,
+        "selectableFaceIds": np.asarray(selectable_faces, dtype=np.int32),
+        "edgePoints": edge_points,
+        "edgeCells": edge_cells,
     }
-
-
-def _encode_buffer(values: np.ndarray) -> str:
-    """Base64 encode a contiguous little-endian typed buffer without boxing values."""
-    contiguous = np.ascontiguousarray(values.astype(values.dtype.newbyteorder("<"), copy=False))
-    return base64.b64encode(contiguous.data).decode("ascii")
-
-
-def _snapshot_footprint(snapshot: dict[str, Any]) -> dict[str, int]:
-    """Report JSON bridge cardinality without creating another representation."""
+    encoded = {
+        name: np.ascontiguousarray(values.astype(values.dtype.newbyteorder("<"), copy=False))
+        for name, values in arrays.items()
+    }
+    offset = 0
+    buffers: dict[str, dict[str, Any]] = {}
+    for name, values in encoded.items():
+        buffers[name] = {"offset": offset, "byteLength": values.nbytes, "dtype": values.dtype.str}
+        offset += values.nbytes
+    header = json.dumps({"version": 1, "bounds": bounds, "buffers": buffers}, separators=(",", ":")).encode("utf-8")
+    padding = (-len(header)) % 4
+    cache_root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "PalletLab" / "step_cache"
+    directory = cache_root / "web_assets"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"step-view-{uuid4().hex}.bin"
+    with path.open("wb") as stream:
+        stream.write(b"PLSTEP01")
+        stream.write(len(header).to_bytes(4, "little"))
+        stream.write(header)
+        stream.write(b"\0" * padding)
+        for values in encoded.values():
+            stream.write(memoryview(values))
     return {
-        "positionsBase64Bytes": len(snapshot["positions"]),
-        "indicesBase64Bytes": len(snapshot["indices"]),
-        "edgePointsBase64Bytes": len(snapshot["edgePoints"]),
-        "edgeCellsBase64Bytes": len(snapshot["edgeCells"]),
+        "path": str(path),
+        "metrics": {
+            "assetBytes": path.stat().st_size,
+            "geometryBytes": offset,
+            "triangleCount": len(triangles),
+        },
     }
 
 
