@@ -12,6 +12,7 @@ import type {
   ViewportDimension,
   ViewportInsertionMarker,
   ViewportPoint,
+  StepModelSnapshot,
 } from "./PalletViewport";
 
 const PalletViewport = lazy(() => import("./PalletViewport"));
@@ -72,6 +73,16 @@ type InsertionSlot = {
   maximumClearGap: number;
   suggestedClearGap: number;
 };
+type StepImportOperation = {
+  ok: boolean;
+  cancelled?: boolean;
+  operationId?: string;
+  state?: "running" | "cancelling" | "completed" | "cancelled" | "failed";
+  progress?: number;
+  label?: string;
+  error?: string;
+};
+type StepModelResponse = { ok: boolean; error?: string; model?: StepModelSnapshot };
 
 const AUTOSAVE_KEY = "palletlab.web.autosave.v1";
 const HISTORY_LIMIT = 50;
@@ -142,6 +153,10 @@ declare global {
           error?: string;
           project?: Project;
         }>;
+        import_step_model: () => Promise<StepImportOperation>;
+        step_import_status: (operationId: string) => Promise<StepImportOperation>;
+        cancel_step_import: (operationId: string) => Promise<StepImportOperation>;
+        step_model_snapshot: (operationId: string) => Promise<StepModelResponse>;
       };
     };
   }
@@ -160,6 +175,9 @@ export function App() {
   >({ length: "", width: "" });
   const [camera, setCamera] = useState<CameraPreset>("isometric");
   const [fitRequest, setFitRequest] = useState(0);
+  const [stepImport, setStepImport] = useState<StepImportOperation | null>(null);
+  const [stepModel, setStepModel] = useState<StepModelSnapshot | null>(null);
+  const [selectedStepFace, setSelectedStepFace] = useState<number | null>(null);
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
   const [beamTool, setBeamTool] = useState<"none" | "delete" | "section">("none");
   const [section, setSection] = useState<BeamSection>({
@@ -343,6 +361,46 @@ export function App() {
       setCalculationError(response.error ?? "Не удалось открыть проект.");
     }
   }
+
+  async function importStepModel() {
+    const api = window.pywebview?.api;
+    if (!api) return;
+    const response = await api.import_step_model();
+    if (response.cancelled) return;
+    setStepModel(null);
+    setSelectedStepFace(null);
+    setStepImport(response);
+  }
+
+  async function cancelStepImport() {
+    const api = window.pywebview?.api;
+    if (!api || !stepImport?.operationId) return;
+    setStepImport(await api.cancel_step_import(stepImport.operationId));
+  }
+
+  useEffect(() => {
+    if (!stepImport?.operationId || !["running", "cancelling"].includes(stepImport.state ?? "")) return;
+    const timeout = window.setTimeout(async () => {
+      const api = window.pywebview?.api;
+      if (api) setStepImport(await api.step_import_status(stepImport.operationId!));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [stepImport]);
+
+  useEffect(() => {
+    async function loadPreparedModel() {
+      const api = window.pywebview?.api;
+      if (!api || !stepImport?.operationId || stepImport.state !== "completed") return;
+      const response = await api.step_model_snapshot(stepImport.operationId);
+      if (response.ok && response.model) {
+        setStepModel(response.model);
+        setFitRequest((value) => value + 1);
+      } else {
+        setCalculationError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
+      }
+    }
+    void loadPreparedModel();
+  }, [stepImport?.operationId, stepImport?.state]);
 
   async function resetProject() {
     const api = window.pywebview?.api;
@@ -801,8 +859,30 @@ export function App() {
           <button type="button" onClick={redo} disabled={!project || redoStack.current.length === 0}>
             Redo
           </button>
+          <button
+            type="button"
+            onClick={() => void importStepModel()}
+            disabled={!status || stepImport?.state === "running" || stepImport?.state === "cancelling"}
+          >
+            Import STEP model
+          </button>
         </div>
         {recoveryNotice ? <p className="recovery-notice">{recoveryNotice}</p> : null}
+        {stepImport ? (
+          <div className={stepImport.state === "failed" ? "step-import error" : "step-import"}>
+            <strong>STEP import</strong>
+            <span>{stepImport.label ?? stepImport.error ?? "Preparing STEP model…"}</span>
+            {stepImport.state === "running" || stepImport.state === "cancelling" ? (
+              <progress max="100" value={stepImport.progress ?? 0} />
+            ) : null}
+            {stepImport.state === "running" ? (
+              <button type="button" onClick={() => void cancelStepImport()}>Cancel import</button>
+            ) : null}
+            {stepImport.state === "completed" ? (
+              <span>{stepModel ? "Choose a planar support face in the 3D view." : "Preparing the model for 3D view…"}</span>
+            ) : null}
+          </div>
+        ) : null}
         {project ? (
           <div className="directions">
             <fieldset className="rounding">
@@ -1080,6 +1160,10 @@ export function App() {
                 dimensions={calculation.snapshot.pallet.dimensions}
                 preset={camera}
                 fitRequest={fitRequest}
+                stepModel={stepModel}
+                selectedStepFace={selectedStepFace}
+                onSelectStepFace={setSelectedStepFace}
+                showPallet={stepModel === null}
                 selectedBeams={selectedBeams.map(
                   (beam) => `${beam.layerId}:${beam.layerIndex}`,
                 )}

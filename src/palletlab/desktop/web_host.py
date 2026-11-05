@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from palletlab.application.service import ApplicationService
+from palletlab.application.step_import_service import StepImportService
 from palletlab.application.snapshots import SNAPSHOT_VERSION
 from palletlab.version import __version__
 
@@ -16,6 +17,7 @@ class WebApplicationApi:
 
     def __init__(self) -> None:
         self._window: Any | None = None
+        self._step_imports = StepImportService()
 
     def attach_window(self, window: Any) -> None:
         self._window = window
@@ -61,6 +63,20 @@ class WebApplicationApi:
         path = self._choose_file("open")
         return {"ok": False, "cancelled": True} if path is None else ApplicationService().load(path)
 
+    def import_step_model(self) -> dict[str, Any]:
+        """Choose a source model and start its isolated cached import."""
+        path = self._choose_file("step")
+        return {"ok": False, "cancelled": True} if path is None else self._step_imports.start(path)
+
+    def step_import_status(self, operation_id: object) -> dict[str, Any]:
+        return self._step_imports.status(operation_id)
+
+    def cancel_step_import(self, operation_id: object) -> dict[str, Any]:
+        return self._step_imports.cancel(operation_id)
+
+    def step_model_snapshot(self, operation_id: object) -> dict[str, Any]:
+        return self._step_imports.model_snapshot(operation_id)
+
     def _choose_file(self, mode: str) -> str | None:
         if self._window is None:
             raise RuntimeError("Web window is not ready.")
@@ -68,8 +84,12 @@ class WebApplicationApi:
 
         selected = self._window.create_file_dialog(
             webview.FileDialog.SAVE if mode == "save" else webview.FileDialog.OPEN,
-            save_filename="project.palletlab.json",
-            file_types=("PalletLab project (*.palletlab.json)",),
+            save_filename="project.palletlab.json" if mode == "save" else "",
+            file_types=(
+                ("STEP model (*.step;*.stp)",)
+                if mode == "step"
+                else ("PalletLab project (*.palletlab.json)",)
+            ),
         )
         return str(selected[0]) if selected else None
 

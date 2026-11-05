@@ -1,6 +1,14 @@
 import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
-import { CanvasTexture, LinearFilter, MathUtils, PerspectiveCamera, Vector3 } from "three";
+import {
+  BufferGeometry,
+  CanvasTexture,
+  Float32BufferAttribute,
+  LinearFilter,
+  MathUtils,
+  PerspectiveCamera,
+  Vector3,
+} from "three";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 export type ViewportBeam = {
@@ -36,6 +44,14 @@ export type ViewportInsertionMarker = {
   center: [number, number, number];
   size: number;
   preview: { center: [number, number, number]; size: [number, number, number] };
+};
+export type StepModelSnapshot = {
+  positions: number[];
+  indices: number[];
+  triangleFaceIds: number[];
+  selectableFaceIds: number[];
+  edgePositions: number[];
+  bounds: [number, number, number, number, number, number];
 };
 type ManualBeamSection = { height: number; width: number };
 
@@ -231,11 +247,120 @@ function DimensionLabel({
   );
 }
 
+function StepModel({
+  model,
+  hoveredFace,
+  selectedFace,
+  onHoverFace,
+  onSelectFace,
+}: {
+  model: StepModelSnapshot;
+  hoveredFace: number | null;
+  selectedFace: number | null;
+  onHoverFace: (faceId: number | null) => void;
+  onSelectFace: (faceId: number) => void;
+}) {
+  const geometry = useMemo(() => {
+    const result = new BufferGeometry();
+    const positions = new Float32Array(model.positions.length);
+    for (let source = 0; source < model.positions.length; source += 3) {
+      // Python coordinates (X, Y, Z) become the web viewport's (X, Z, Y).
+      positions[source] = model.positions[source] / 1000;
+      positions[source + 1] = model.positions[source + 2] / 1000;
+      positions[source + 2] = model.positions[source + 1] / 1000;
+    }
+    result.setAttribute("position", new Float32BufferAttribute(positions, 3));
+    result.setIndex(model.indices);
+    result.computeVertexNormals();
+    return result;
+  }, [model]);
+
+  const edgeGeometry = useMemo(() => {
+    const result = new BufferGeometry();
+    const positions = new Float32Array(model.edgePositions.length);
+    for (let source = 0; source < model.edgePositions.length; source += 3) {
+      positions[source] = model.edgePositions[source] / 1000;
+      positions[source + 1] = model.edgePositions[source + 2] / 1000;
+      positions[source + 2] = model.edgePositions[source + 1] / 1000;
+    }
+    result.setAttribute("position", new Float32BufferAttribute(positions, 3));
+    return result;
+  }, [model]);
+
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  useEffect(() => () => edgeGeometry.dispose(), [edgeGeometry]);
+  const selectable = useMemo(() => new Set(model.selectableFaceIds), [model]);
+  const highlightedFace = selectedFace ?? hoveredFace;
+  return (
+    <group>
+      <mesh
+        geometry={geometry}
+        onPointerMove={(event) => {
+          const faceId = typeof event.faceIndex === "number"
+            ? model.triangleFaceIds[event.faceIndex]
+            : undefined;
+          onHoverFace(faceId !== undefined && selectable.has(faceId) ? faceId : null);
+        }}
+        onPointerOut={() => onHoverFace(null)}
+        onClick={(event) => {
+          const faceId = typeof event.faceIndex === "number"
+            ? model.triangleFaceIds[event.faceIndex]
+            : undefined;
+          if (faceId !== undefined && selectable.has(faceId)) {
+            event.stopPropagation();
+            onSelectFace(faceId);
+          }
+        }}
+      >
+        <meshStandardMaterial color="#b8c2cc" transparent opacity={0.2} depthWrite roughness={0.62} metalness={0.1} />
+      </mesh>
+      <lineSegments geometry={edgeGeometry} renderOrder={2}>
+        <lineBasicMaterial color="#31414d" transparent opacity={1} depthTest={true} depthWrite={false} />
+      </lineSegments>
+      {highlightedFace !== null ? (
+        <StepFaceOverlay
+          model={model}
+          faceId={highlightedFace}
+          selected={highlightedFace === selectedFace}
+        />
+      ) : null}
+    </group>
+  );
+}
+
+function StepFaceOverlay({ model, faceId, selected }: { model: StepModelSnapshot; faceId: number; selected: boolean }) {
+  const geometry = useMemo(() => {
+    const selectedIndices = model.triangleFaceIds.flatMap((candidate, triangle) =>
+      candidate === faceId ? model.indices.slice(triangle * 3, triangle * 3 + 3) : [],
+    );
+    const result = new BufferGeometry();
+    const positions = new Float32Array(model.positions.length);
+    for (let source = 0; source < model.positions.length; source += 3) {
+      positions[source] = model.positions[source] / 1000;
+      positions[source + 1] = model.positions[source + 2] / 1000;
+      positions[source + 2] = model.positions[source + 1] / 1000;
+    }
+    result.setAttribute("position", new Float32BufferAttribute(positions, 3));
+    result.setIndex(selectedIndices);
+    return result;
+  }, [faceId, model]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return (
+    <mesh geometry={geometry} renderOrder={3}>
+      <meshBasicMaterial color={selected ? "#e64231" : "#f2ad2e"} transparent opacity={0.78} depthWrite={false} polygonOffset polygonOffsetFactor={-2} />
+    </mesh>
+  );
+}
+
 export default function PalletViewport({
   beams,
   dimensions,
   preset,
   fitRequest,
+  stepModel,
+  selectedStepFace,
+  onSelectStepFace,
+  showPallet = true,
   selectedBeams,
   dimensionEditing,
   hoveredDimension,
@@ -257,6 +382,10 @@ export default function PalletViewport({
   dimensions: ViewportDimension[];
   preset: CameraPreset;
     fitRequest: number;
+    stepModel?: StepModelSnapshot | null;
+    selectedStepFace?: number | null;
+    onSelectStepFace?: (faceId: number) => void;
+    showPallet?: boolean;
   selectedBeams: string[];
   dimensionEditing: boolean;
   hoveredDimension: string | null;
@@ -276,6 +405,7 @@ export default function PalletViewport({
 }) {
   const [cursor, setCursor] = useState<[number, number]>([16, 16]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
+    const [hoveredStepFace, setHoveredStepFace] = useState<number | null>(null);
   const bounds = useMemo(() => {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -294,6 +424,15 @@ export default function PalletViewport({
         min[axis] = Math.min(min[axis], center[axis] - size[axis] / 2);
         max[axis] = Math.max(max[axis], center[axis] + size[axis] / 2);
       }
+      if (stepModel) {
+        const [xMin, xMax, yMin, yMax, zMin, zMax] = stepModel.bounds;
+        const modelMin: [number, number, number] = [xMin / 1000, zMin / 1000, yMin / 1000];
+        const modelMax: [number, number, number] = [xMax / 1000, zMax / 1000, yMax / 1000];
+        for (let axis = 0; axis < 3; axis += 1) {
+          min[axis] = Math.min(min[axis], modelMin[axis]);
+          max[axis] = Math.max(max[axis], modelMax[axis]);
+        }
+      }
     }
     const center = min.map((value, axis) => (value + max[axis]) / 2) as [
       number,
@@ -306,25 +445,19 @@ export default function PalletViewport({
         min: min as [number, number, number],
         max: max as [number, number, number],
     };
-  }, [beams]);
-  const grid = useMemo(() => {
-    const length =
-      Math.max(...beams.map((beam) => beam.center[0] + beam.size[0] / 2)) /
-      1000;
-    const width =
-      Math.max(...beams.map((beam) => beam.center[1] + beam.size[1] / 2)) /
-      1000;
+    }, [beams, stepModel]);
+    const grid = useMemo(() => {
     const section = 0.5;
     const size = Math.max(
       10,
-      Math.ceil((Math.max(length, width) + section * 4) / section) * section,
+        Math.ceil((bounds.span + section * 4) / section) * section,
     );
     return {
       size,
       divisions: Math.round(size / section),
-      position: [length / 2, 0, width / 2] as [number, number, number],
+        position: [bounds.center[0], bounds.min[1] - 0.01, bounds.center[2]] as [number, number, number],
     };
-  }, [beams]);
+    }, [bounds]);
   const manualPreview = useMemo(() => {
     if (manualSupports.length !== 2 || !manualSection) return null;
     const [first, second] = manualSupports;
@@ -372,7 +505,7 @@ export default function PalletViewport({
           args={[grid.size, grid.divisions, "#aab9c1", "#d9e1e5"]}
           position={grid.position}
         />
-        {beams.map((beam) => (
+          {showPallet ? beams.map((beam) => (
           <mesh
             key={`${beam.layerId}:${beam.index}`}
             position={[
@@ -411,8 +544,8 @@ export default function PalletViewport({
               roughness={0.72}
             />
           </mesh>
-        ))}
-        {manualSupports.slice(0, 1).map(({ beam, point }) => (
+          )) : null}
+          {showPallet ? manualSupports.slice(0, 1).map(({ beam, point }) => (
           <mesh
             key={`manual-point:${beam.layerId}:${beam.layerIndex}`}
             position={[point[0], point[1] + 0.08, point[2]]}
@@ -421,8 +554,8 @@ export default function PalletViewport({
             <sphereGeometry args={[0.07, 16, 12]} />
             <meshStandardMaterial color="#e07822" emissive="#7a3307" depthTest={false} />
           </mesh>
-        ))}
-        {manualPreview ? <mesh position={manualPreview.position}>
+          )) : null}
+          {showPallet && manualPreview ? <mesh position={manualPreview.position}>
           <boxGeometry args={manualPreview.size} />
           <meshStandardMaterial color="#36b778" transparent opacity={0.42} depthWrite={false} />
         </mesh> : null}
@@ -478,7 +611,7 @@ export default function PalletViewport({
               );
             })
           : null}
-          {dimensions.map((dimension, index) => {
+          {showPallet ? dimensions.map((dimension, index) => {
           const dimensionKey = `${dimension.layerId}:${dimension.index}`;
           const isHovered =
             dimensionEditing && hoveredDimension === dimensionKey;
@@ -567,7 +700,7 @@ export default function PalletViewport({
               />
             </group>
           );
-        })}
+          }) : null}
         {manualHud && manualSupports[0] ? <Html position={[manualSupports[0].point[0], manualSupports[0].point[1] + 0.24, manualSupports[0].point[2]]} center>{manualHud}</Html> : null}
           <OrbitControls
             key={preset}
@@ -576,6 +709,15 @@ export default function PalletViewport({
             minPolarAngle={0.03}
             maxPolarAngle={Math.PI - 0.03}
           />
+          {stepModel ? (
+            <StepModel
+              model={stepModel}
+              hoveredFace={hoveredStepFace}
+              selectedFace={selectedStepFace ?? null}
+              onHoverFace={setHoveredStepFace}
+              onSelectFace={(faceId) => onSelectStepFace?.(faceId)}
+            />
+          ) : null}
       </Canvas>
       {manualMode ? <div className="viewport-hint" style={{ left: cursor[0], top: cursor[1] }}>{manualSupports.length === 0 ? "Select the first support" : manualSupports.length === 1 ? "Select the second support" : "Configure the new beam"}</div> : null}
     </div>

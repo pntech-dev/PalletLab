@@ -1,0 +1,57 @@
+from palletlab.application.step_import_service import StepImportService, _snapshot_from_cached_model
+
+
+def test_step_import_rejects_non_step_files_without_starting_a_worker(tmp_path):
+    source = tmp_path / "model.txt"
+    source.write_text("not a STEP file", encoding="utf-8")
+
+    response = StepImportService().start(source)
+
+    assert response == {
+        "ok": False,
+        "error": "Выберите STEP-модель с расширением .step или .stp.",
+    }
+
+
+def test_step_import_status_and_cancel_reject_unknown_operation_ids():
+    service = StepImportService()
+
+    assert service.status("missing") == {
+        "ok": False,
+        "error": "Импорт STEP-модели не найден.",
+    }
+    assert service.cancel("missing") == {
+        "ok": False,
+        "error": "Импорт STEP-модели не найден.",
+    }
+
+
+def test_step_snapshot_keeps_triangle_to_cad_face_mapping():
+    class Mesh:
+        faces = [3, 0, 1, 2]
+        points = [(0, 0, 0), (100, 0, 0), (0, 200, 300)]
+        cell_data = {"step_face_index": [7]}
+        bounds = (0, 100, 0, 200, 0, 300)
+
+    class Face:
+        index = 7
+        point = object()
+        normal = object()
+
+    class Edges:
+        lines = [3, 0, 1, 2]
+        points = [(0, 0, 0), (100, 0, 0), (0, 200, 300)]
+
+    class Model:
+        mesh = Mesh()
+        edges = Edges()
+        faces = (Face(),)
+
+    assert _snapshot_from_cached_model(Model()) == {
+        "positions": [0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 200.0, 300.0],
+        "indices": [0, 1, 2],
+        "triangleFaceIds": [7],
+        "selectableFaceIds": [7],
+        "edgePositions": [0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 200.0, 300.0],
+        "bounds": [0.0, 100.0, 0.0, 200.0, 0.0, 300.0],
+    }
