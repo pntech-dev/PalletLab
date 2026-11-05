@@ -265,7 +265,7 @@ def _tessellation_parameters(diagonal: float, source_size: int) -> tuple[float, 
     return max(diagonal * relative_deflection, 1e-9), math.radians(angular_deflection)
 
 
-def load_step_model(filename: str | Path, progress=None) -> ImportedStepModel:
+def load_step_model(filename: str | Path, progress=None, diagnostics=None) -> ImportedStepModel:
     """Read a STEP file once and retain a mapping between triangles and B-Rep faces."""
     source_path = Path(filename).expanduser().resolve()
     if source_path.suffix.lower() not in {".step", ".stp"}:
@@ -276,11 +276,15 @@ def load_step_model(filename: str | Path, progress=None) -> ImportedStepModel:
         progress(2, "Проверяем кэш модели…")
     cached = _load_cached_model(source_path)
     if cached is not None:
+        if diagnostics:
+            diagnostics("vtk-cache-load")
         if progress:
             progress(100, "Модель загружена из кэша.")
         return cached
     if progress:
         progress(5, "Читаем STEP-файл…")
+    if diagnostics:
+        diagnostics("step-read-start")
     reader = STEPControl_Reader()
     if reader.ReadFile(str(source_path)) != IFSelect_RetDone:
         raise ValueError(f"OpenCascade не смог прочитать STEP-файл: {source_path}")
@@ -290,12 +294,16 @@ def load_step_model(filename: str | Path, progress=None) -> ImportedStepModel:
         raise ValueError("STEP-файл прочитан, но не содержит геометрии.")
     if progress:
         progress(10, "Подготавливаем геометрию…")
+    if diagnostics:
+        diagnostics("step-read-complete")
     # This is the same scale-sensitive tessellation recipe proven in
     # test_scripts/step_support_detector.py.
     deflection, angular_deflection = _tessellation_parameters(
         _shape_diagonal(shape), source_path.stat().st_size,
     )
     BRepMesh_IncrementalMesh(shape, deflection, False, angular_deflection, True).Perform()
+    if diagnostics:
+        diagnostics("occt-tessellation-complete")
     counter = TopExp_Explorer(shape, TopAbs_FACE)
     face_count = 0
     while counter.More():
@@ -332,22 +340,30 @@ def load_step_model(filename: str | Path, progress=None) -> ImportedStepModel:
         processed += 1
         if progress and (processed % max(1, face_count // 100) == 0 or processed == face_count):
             progress(10 + round(85 * processed / max(1, face_count)), f"Преобразуем грани: {processed:,}/{face_count:,}")
+    if diagnostics:
+        diagnostics("face-triangles-collected", faceCount=len(faces), triangleCount=len(cell_face_indices))
     if not faces:
         raise ValueError("В STEP-модели не найдено отображаемых граней.")
     mesh = pv.PolyData(np.vstack(point_blocks), np.asarray(cells))
     mesh.cell_data["step_face_index"] = np.asarray(cell_face_indices, dtype=np.int32)
     mesh.compute_normals(cell_normals=False, point_normals=True, inplace=True)
+    if diagnostics:
+        diagnostics("vtk-mesh-built", triangleCount=mesh.n_cells, vertexCount=mesh.n_points)
     if progress:
         progress(93, "Выделяем рёбра деталей…")
     edges = mesh.extract_feature_edges(
         feature_angle=30, boundary_edges=True, non_manifold_edges=True,
         feature_edges=True, manifold_edges=False,
     )
+    if diagnostics:
+        diagnostics("feature-edges-extracted", edgeCellCount=edges.n_cells)
     diagonal = float(np.linalg.norm((mesh.bounds[1] - mesh.bounds[0], mesh.bounds[3] - mesh.bounds[2], mesh.bounds[5] - mesh.bounds[4])))
     model = ImportedStepModel(mesh, edges, tuple(faces), max(diagonal * 1e-6, 1e-9), source_path)
     if progress:
         progress(96, "Сохраняем кэш модели…")
     _save_cached_model(model)
+    if diagnostics:
+        diagnostics("vtk-cache-written")
     if progress:
         progress(100, "Модель готова.")
     return model

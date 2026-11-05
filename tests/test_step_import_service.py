@@ -25,6 +25,20 @@ def test_step_import_rejects_non_step_files_without_starting_a_worker(tmp_path):
     }
 
 
+def test_step_import_uses_existing_web_asset_without_starting_a_worker(tmp_path, monkeypatch):
+    source = tmp_path / "model.step"
+    source.write_text("STEP", encoding="utf-8")
+    asset = tmp_path / "model.bin"
+    asset.write_bytes(b"PLSTEP01")
+    monkeypatch.setattr("palletlab.application.step_import_service._cached_web_asset", lambda _path: asset)
+
+    response = StepImportService().start(source)
+
+    assert response["state"] == "completed"
+    assert response["progress"] == 100
+    assert response["label"] == "STEP-модель загружена из web-кэша."
+
+
 def test_step_import_status_and_cancel_reject_unknown_operation_ids():
     service = StepImportService()
 

@@ -25,7 +25,10 @@ def main(path: str) -> int:
         def progress(value: int, label: str) -> None:
             _emit("progress", value=value, label=label)
 
-        model = load_step_model(path, progress)
+        def diagnostics(stage: str, **details: object) -> None:
+            trace.checkpoint(stage, **details)
+
+        model = load_step_model(path, progress, diagnostics=diagnostics)
         trace.checkpoint("tessellation-and-cache", **geometry_footprint(model.mesh, model.edges))
         _emit("stage", name="cache-ready")
         cached = load_cached_step_model(path)

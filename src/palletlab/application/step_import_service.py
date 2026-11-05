@@ -50,15 +50,18 @@ class StepImportService:
             return {"ok": False, "error": f"Файл не найден: {path}"}
 
         operation_id = uuid4().hex
+        cached_asset = _cached_web_asset(path)
         with self._lock:
             self._operations[operation_id] = {
                 "ok": True,
                 "operationId": operation_id,
-                "state": "running",
-                "progress": 0,
-                "label": "Запускаем импорт STEP-модели…",
+                "state": "completed" if cached_asset is not None else "running",
+                "progress": 100 if cached_asset is not None else 0,
+                "label": "STEP-модель загружена из web-кэша." if cached_asset is not None else "Запускаем импорт STEP-модели…",
                 "path": str(path),
             }
+        if cached_asset is not None:
+            return self.status(operation_id)
         Thread(target=self._run, args=(operation_id, path), daemon=True).start()
         return self.status(operation_id)
 
