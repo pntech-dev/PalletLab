@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 import subprocess
@@ -101,6 +102,12 @@ class StepImportService:
         try:
             from palletlab.importers.step_model import load_cached_step_model
 
+            cached_asset = _cached_web_asset(Path(str(status["path"])))
+            if cached_asset is not None:
+                trace.checkpoint("asset-cache-hit", assetBytes=cached_asset.stat().st_size)
+                report = trace.report()
+                write_step_performance("model-snapshot", report)
+                return {"ok": True, "assetPath": str(cached_asset), "performance": report}
             model = load_cached_step_model(str(status["path"]))
             if model is None:
                 raise RuntimeError("Кэш STEP-модели не найден.")
@@ -304,10 +311,9 @@ def _write_model_asset(model: Any) -> dict[str, Any]:
         offset += values.nbytes
     header = json.dumps({"version": 1, "bounds": bounds, "buffers": buffers}, separators=(",", ":")).encode("utf-8")
     padding = (-len(header)) % 4
-    cache_root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "PalletLab" / "step_cache"
-    directory = cache_root / "web_assets"
+    path = _web_asset_path(model.source_path)
+    directory = path.parent
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"step-view-{uuid4().hex}.bin"
     with path.open("wb") as stream:
         stream.write(b"PLSTEP01")
         stream.write(len(header).to_bytes(4, "little"))
@@ -315,6 +321,7 @@ def _write_model_asset(model: Any) -> dict[str, Any]:
         stream.write(b"\0" * padding)
         for values in encoded.values():
             stream.write(memoryview(values))
+    _prune_web_assets(directory)
     return {
         "path": str(path),
         "metrics": {
@@ -323,6 +330,41 @@ def _write_model_asset(model: Any) -> dict[str, Any]:
             "triangleCount": len(triangles),
         },
     }
+
+
+def _web_asset_path(source_path: Path) -> Path:
+    source = source_path.expanduser().resolve()
+    stat = source.stat()
+    identity = f"{source}\0{stat.st_size}\0{stat.st_mtime_ns}\0web-v1".encode("utf-8")
+    key = hashlib.sha256(identity).hexdigest()
+    root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "PalletLab" / "step_cache" / "web_assets"
+    return root / f"step-web-v1-{key}.bin"
+
+
+def _cached_web_asset(source_path: Path) -> Path | None:
+    try:
+        path = _web_asset_path(source_path)
+        if not path.is_file():
+            return None
+        with path.open("rb") as stream:
+            magic = stream.read(8)
+            header_length = int.from_bytes(stream.read(4), "little")
+            header = json.loads(stream.read(header_length))
+        if magic != b"PLSTEP01" or header.get("version") != 1:
+            path.unlink(missing_ok=True)
+            return None
+        return path
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _prune_web_assets(directory: Path) -> None:
+    try:
+        assets = sorted(directory.glob("step-web-v1-*.bin"), key=lambda item: item.stat().st_mtime_ns, reverse=True)
+        for asset in assets[32:]:
+            asset.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _viewport_transform(placement_matrix: Any) -> list[float]:

@@ -183,15 +183,8 @@ class _StepAssetServer:
     def register(self, path: Path) -> str:
         token = path.stem.rsplit("-", 1)[-1]
         with self._lock:
-            previous = tuple(self._assets.values())
             self._assets.clear()
             self._assets[token] = path
-        for old_path in previous:
-            if old_path != path:
-                try:
-                    old_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
         return f"http://127.0.0.1:{self._server.server_port}/step/{token}"
 
     def set_frontend_root(self, root: Path) -> str:

@@ -5,6 +5,7 @@ import numpy as np
 
 from palletlab.application.step_import_service import (
     StepImportService,
+    _cached_web_asset,
     _model_pallet_layers,
     _viewport_transform,
     _write_model_asset,
@@ -56,7 +57,9 @@ def test_step_asset_keeps_triangle_to_cad_face_mapping(tmp_path, monkeypatch):
 
     class Model:
         mesh, edges, faces = Mesh(), Edges(), (Face(),)
+        source_path = tmp_path / "model.step"
 
+    Model.source_path.write_text("STEP", encoding="utf-8")
     asset = _write_model_asset(Model())
     raw = Path(asset["path"]).read_bytes()
     header_length = int.from_bytes(raw[8:12], "little")
@@ -79,6 +82,7 @@ def test_step_asset_keeps_triangle_to_cad_face_mapping(tmp_path, monkeypatch):
     ]
     assert values("edgeCells", "<u4") == [3, 0, 1, 2]
     assert header["bounds"] == [0.0, 100.0, 0.0, 200.0, 0.0, 300.0]
+    assert _cached_web_asset(Model.source_path) == Path(asset["path"])
 
 
 def test_step_pallet_layers_match_the_desktop_three_layer_construction():
