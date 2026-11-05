@@ -14,6 +14,7 @@ import type {
   ViewportPoint,
   StepModelSnapshot,
 } from "./PalletViewport";
+import { prepareStepModel, type StepModelPayload } from "./stepModelGeometry";
 
 const PalletViewport = lazy(() => import("./PalletViewport"));
 
@@ -82,9 +83,9 @@ type StepImportOperation = {
   label?: string;
   error?: string;
 };
-type StepModelResponse = { ok: boolean; error?: string; model?: StepModelSnapshot };
+type StepModelResponse = { ok: boolean; error?: string; model?: StepModelPayload };
 type StepPalletResponse = CalculationResponse & {
-  model?: StepModelSnapshot;
+  modelTransform?: number[];
   supportCount?: number;
   referenceFace?: number;
 };
@@ -403,7 +404,7 @@ export function App() {
       if (!api || !stepImport?.operationId || stepImport.state !== "completed") return;
       const response = await api.step_model_snapshot(stepImport.operationId);
       if (response.ok && response.model) {
-        setStepModel(response.model);
+        setStepModel(prepareStepModel(response.model));
         setFitRequest((value) => value + 1);
       } else {
         setCalculationError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
@@ -419,10 +420,10 @@ export function App() {
     try {
       const response = await api.build_step_pallet(stepImport.operationId, project, faceIndex);
       applyCalculation(response);
-      if (response.ok && response.snapshot && response.model) {
+      if (response.ok && response.snapshot && response.modelTransform) {
         updateHistory(project, response.snapshot.project);
         applyProject(response.snapshot.project);
-        setStepModel(response.model);
+        setStepModel((model) => model ? { ...model, transform: response.modelTransform! } : model);
         setStepPalletBuilt(true);
         setFitRequest((value) => value + 1);
         setCalculationError(null);

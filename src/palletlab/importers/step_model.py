@@ -470,7 +470,8 @@ def pallet_inputs_from_supports(
     rounding_step: int,
     reference_support_index: int | None = None,
     pallet_height: float | None = None,
-) -> tuple[DirectionInput, DirectionInput, pv.PolyData, pv.PolyData]:
+    return_placement_matrix: bool = False,
+) -> tuple[DirectionInput, DirectionInput, pv.PolyData, pv.PolyData] | tuple[DirectionInput, DirectionInput, np.ndarray]:
     """Create editable pallet inputs and place the machine on its support plane.
 
     Each unique support X/Y coordinate receives a cross/longitudinal beam; edge
@@ -483,8 +484,13 @@ def pallet_inputs_from_supports(
     if reference.point is None:
         raise ValueError("У выбранной опоры нет координаты точки.")
     frame = _support_frame(model, reference.index)
-    local_mesh = _support_frame_mesh(model.mesh, frame)
-    local_edges = _support_frame_mesh(model.edges, frame)
+    origin, x_axis, y_axis, z_axis = frame
+    relative_mesh_points = np.asarray(model.mesh.points) - origin
+    local_mesh_points = np.column_stack((
+        relative_mesh_points @ x_axis,
+        relative_mesh_points @ y_axis,
+        relative_mesh_points @ z_axis,
+    ))
     local_points = {
         face.index: np.array((
             support_axis_coordinate(model, reference.index, face.point, 0),
@@ -493,7 +499,8 @@ def pallet_inputs_from_supports(
         ))
         for face in supports if face.point is not None
     }
-    xmin, xmax, ymin, ymax, _zmin, _zmax = local_mesh.bounds
+    xmin, ymin, _zmin = local_mesh_points.min(axis=0)
+    xmax, ymax, _zmax = local_mesh_points.max(axis=0)
     machine_length, machine_width = xmax - xmin, ymax - ymin
     if machine_length <= 0 or machine_width <= 0:
         raise ValueError("STEP-модель не имеет конечных габаритов в плоскости поддона.")
@@ -564,19 +571,23 @@ def pallet_inputs_from_supports(
     if bearing_height <= 0:
         raise ValueError("Высота поддона должна быть больше нуля.")
 
+    placement_matrix = np.array((
+        (x_axis[0], x_axis[1], x_axis[2], -float(np.dot(origin, x_axis)) - xmin + margin_x_start),
+        (-y_axis[0], -y_axis[1], -y_axis[2], float(np.dot(origin, y_axis)) + pallet_width + ymin - margin_y_start),
+        (z_axis[0], z_axis[1], z_axis[2], -float(np.dot(origin, z_axis)) + bearing_height),
+        (0.0, 0.0, 0.0, 1.0),
+    ), dtype=float)
+    if return_placement_matrix:
+        return length_input, width_input, placement_matrix
+
     def place(source: pv.PolyData) -> pv.PolyData:
         transformed = source.copy(deep=True)
-        points = transformed.points.copy()
-        points[:, 0] = points[:, 0] - xmin + margin_x_start
-        # PalletView mirrors the pallet's Y coordinate for its technical-drawing
-        # orientation, so mirror the imported machine in the same display space.
-        points[:, 1] = pallet_width - (points[:, 1] - ymin + margin_y_start)
-        points[:, 2] = points[:, 2] + bearing_height
-        transformed.points = points
+        points = np.asarray(source.points)
+        transformed.points = points @ placement_matrix[:3, :3].T + placement_matrix[:3, 3]
         return transformed
     return (
         length_input,
         width_input,
-        place(local_mesh),
-        place(local_edges),
+        place(model.mesh),
+        place(model.edges),
     )

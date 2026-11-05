@@ -6,6 +6,7 @@ from palletlab.application.step_import_service import (
     StepImportService,
     _model_pallet_layers,
     _snapshot_from_cached_model,
+    _viewport_transform,
 )
 from palletlab.core.models import DirectionInput
 
@@ -82,3 +83,12 @@ def test_step_pallet_layers_match_the_desktop_three_layer_construction():
     assert [layer.axis for layer in layers] == ["length", "width", "length"]
     assert sections[("layer-1", 0)].height == 25
     assert sections[("layer-1", 0)].width == 100
+
+
+def test_viewport_transform_preserves_the_existing_xzy_axis_mapping():
+    placement = np.eye(4)
+    placement[:3, 3] = (10, 20, 30)
+
+    transform = _viewport_transform(placement)
+
+    assert transform[12:] == [0.01, 0.03, 0.02, 1.0]

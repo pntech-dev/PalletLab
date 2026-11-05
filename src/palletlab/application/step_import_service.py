@@ -143,7 +143,7 @@ class StepImportService:
             trace.checkpoint("support-detection", supportCount=len(supports))
             if state.length_input is None or state.width_input is None:
                 raise RuntimeError("В проекте отсутствуют параметры поддона.")
-            length, width, placed_mesh, placed_edges = pallet_inputs_from_supports(
+            length, width, placement_matrix = pallet_inputs_from_supports(
                 model,
                 supports,
                 length_beam_height=_MODEL_STANDARD_SECTION.height,
@@ -158,8 +158,9 @@ class StepImportService:
                 rounding_step=state.rounding_step or 5,
                 reference_support_index=face_index,
                 pallet_height=_MODEL_STANDARD_SECTION.height * 3,
+                return_placement_matrix=True,
             )
-            trace.checkpoint("model-placement", **geometry_footprint(placed_mesh, placed_edges))
+            trace.checkpoint("model-placement-matrix")
             layers, top_edge_sections = _model_pallet_layers(length, width)
             state.manual_beams.clear()
             state.beam_sections.clear()
@@ -168,14 +169,12 @@ class StepImportService:
             if controller.calculate_layers(layers, show_error=False) is None:
                 raise CalculationError(errors[-1] if errors else "Не удалось построить поддон по модели.")
             trace.checkpoint("pallet-calculation")
-            model_snapshot = _snapshot_from_geometry(placed_mesh, placed_edges, model.faces)
-            trace.checkpoint("snapshot-serialised", **_snapshot_footprint(model_snapshot))
             report = trace.report()
             write_step_performance("build-pallet", report)
             return {
                 "ok": True,
                 "snapshot": project_snapshot(state),
-                "model": model_snapshot,
+                "modelTransform": _viewport_transform(placement_matrix),
                 "supportCount": len(supports),
                 "referenceFace": face_index,
                 "performance": report,
@@ -328,6 +327,21 @@ def _snapshot_footprint(snapshot: dict[str, Any]) -> dict[str, int]:
         "edgePointsBase64Bytes": len(snapshot["edgePoints"]),
         "edgeCellsBase64Bytes": len(snapshot["edgeCells"]),
     }
+
+
+def _viewport_transform(placement_matrix: Any) -> list[float]:
+    """Convert Python XYZ affine transform to the viewport's XZY coordinate system."""
+    matrix = np.asarray(placement_matrix, dtype=float)
+    if matrix.shape != (4, 4):
+        raise RuntimeError("Некорректное преобразование STEP-модели.")
+    swap_yz = np.array(((1, 0, 0, 0), (0, 0, 1, 0), (0, 1, 0, 0), (0, 0, 0, 1)), dtype=float)
+    viewport_matrix = swap_yz @ matrix @ swap_yz
+    # Geometry coordinates are divided from millimetres to metres before the
+    # matrix is applied in Three.js. Rotation/mirroring are unitless, but the
+    # translation must use the same metre coordinate system.
+    viewport_matrix[:3, 3] /= 1000
+    # Three.js Matrix4.fromArray expects column-major storage.
+    return [float(value) for value in viewport_matrix.T.reshape(-1)]
 
 
 def _model_pallet_layers(length_input: Any, width_input: Any) -> tuple[list[LayerInput], dict[tuple[str, int], BeamSection]]:
