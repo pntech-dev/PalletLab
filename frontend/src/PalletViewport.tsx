@@ -51,40 +51,6 @@ export type ViewportInsertionMarker = {
 };
 type ManualBeamSection = { height: number; width: number };
 
-function mapStepPositions(source: Float32Array): Float32Array {
-  const positions = new Float32Array(source.length);
-  for (let index = 0; index < source.length; index += 3) {
-    positions[index] = source[index] / 1000;
-    positions[index + 1] = source[index + 2] / 1000;
-    positions[index + 2] = source[index + 1] / 1000;
-  }
-  return positions;
-}
-
-function edgeSegmentIndices(cells: Uint32Array): Uint32Array {
-  let cursor = 0;
-  let count = 0;
-  while (cursor < cells.length) {
-    const pointCount = cells[cursor];
-    if (pointCount === undefined || cursor + pointCount >= cells.length) throw new Error("Некорректные рёбра STEP-модели.");
-    count += Math.max(0, pointCount - 1);
-    cursor += pointCount + 1;
-  }
-  const indices = new Uint32Array(count * 2);
-  cursor = 0;
-  let target = 0;
-  while (cursor < cells.length) {
-    const pointCount = cells[cursor];
-    for (let offset = 1; offset < pointCount; offset += 1) {
-      indices[target] = cells[cursor + offset];
-      indices[target + 1] = cells[cursor + offset + 1];
-      target += 2;
-    }
-    cursor += pointCount + 1;
-  }
-  return indices;
-}
-
 function transformedStepBounds(model: StepModelSnapshot): [ViewportPoint, ViewportPoint] {
   const [xMin, xMax, yMin, yMax, zMin, zMax] = model.bounds;
   const matrix = new Matrix4().fromArray(model.transform);
@@ -307,22 +273,21 @@ function StepModel({
   onHoverFace: (faceId: number | null) => void;
   onSelectFace: (faceId: number) => void;
 }) {
-  const displayPositions = useMemo(() => mapStepPositions(model.positions), [model.positions]);
   const transform = useMemo(() => new Matrix4().fromArray(model.transform), [model.transform]);
   const geometry = useMemo(() => {
     const result = new BufferGeometry();
-    result.setAttribute("position", new Float32BufferAttribute(displayPositions, 3));
+    result.setAttribute("position", new Float32BufferAttribute(model.displayPositions, 3));
     result.setIndex(new Uint32BufferAttribute(model.indices, 1));
     result.computeVertexNormals();
     return result;
-  }, [displayPositions, model.indices]);
+  }, [model.displayPositions, model.indices]);
 
   const edgeGeometry = useMemo(() => {
     const result = new BufferGeometry();
-    result.setAttribute("position", new Float32BufferAttribute(mapStepPositions(model.edgePoints), 3));
-    result.setIndex(new Uint32BufferAttribute(edgeSegmentIndices(model.edgeCells), 1));
+    result.setAttribute("position", new Float32BufferAttribute(model.displayEdgePositions, 3));
+    result.setIndex(new Uint32BufferAttribute(model.edgeIndices, 1));
     return result;
-  }, [model.edgeCells, model.edgePoints]);
+  }, [model.displayEdgePositions, model.edgeIndices]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
   useEffect(() => () => edgeGeometry.dispose(), [edgeGeometry]);
@@ -356,7 +321,7 @@ function StepModel({
       </lineSegments>
       {highlightedFace !== null ? (
         <StepFaceOverlay
-          positions={displayPositions}
+          positions={model.displayPositions}
           indices={model.indices}
           triangleFaceIds={model.triangleFaceIds}
           faceId={highlightedFace}
