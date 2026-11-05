@@ -7,11 +7,14 @@ import {
   LinearFilter,
   Matrix4,
   MathUtils,
+  Mesh,
   PerspectiveCamera,
+  Raycaster,
   Uint32BufferAttribute,
   Vector3,
+  Vector2,
 } from "three";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 export type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 
@@ -262,25 +265,28 @@ function DimensionLabel({
 
 function StepModel({
   model,
-  hoveredFace,
   selectedFace,
-  onHoverFace,
   onSelectFace,
+  selectionEnabled,
+  pickerRef,
   onMetrics,
 }: {
   model: StepModelSnapshot;
-  hoveredFace: number | null;
   selectedFace: number | null;
-  onHoverFace: (faceId: number | null) => void;
   onSelectFace: (faceId: number) => void;
+  selectionEnabled: boolean;
+  pickerRef: MutableRefObject<((clientX: number, clientY: number, bounds: DOMRect) => void) | null>;
   onMetrics?: (metrics: Record<string, string | number | boolean>) => void;
 }) {
+  const meshRef = useRef<Mesh>(null);
+  const { camera } = useThree();
   const transform = useMemo(() => new Matrix4().fromArray(model.transform), [model.transform]);
   const geometry = useMemo(() => {
     const result = new BufferGeometry();
     result.setAttribute("position", new Float32BufferAttribute(model.displayPositions, 3));
     result.setIndex(new Uint32BufferAttribute(model.indices, 1));
     result.computeVertexNormals();
+    result.computeBoundingSphere();
     return result;
   }, [model.displayPositions, model.indices]);
 
@@ -288,11 +294,36 @@ function StepModel({
     const result = new BufferGeometry();
     result.setAttribute("position", new Float32BufferAttribute(model.displayEdgePositions, 3));
     result.setIndex(new Uint32BufferAttribute(model.edgeIndices, 1));
+    result.computeBoundingSphere();
     return result;
   }, [model.displayEdgePositions, model.edgeIndices]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
   useEffect(() => () => edgeGeometry.dispose(), [edgeGeometry]);
+  useEffect(() => {
+    if (!selectionEnabled) {
+      pickerRef.current = null;
+      return undefined;
+    }
+    const selectable = new Set(model.selectableFaceIds);
+    const raycaster = new Raycaster();
+    const pointer = new Vector2();
+    pickerRef.current = (clientX, clientY, bounds) => {
+      const mesh = meshRef.current;
+      if (!mesh || bounds.width <= 0 || bounds.height <= 0) return;
+      pointer.set(
+        ((clientX - bounds.left) / bounds.width) * 2 - 1,
+        -((clientY - bounds.top) / bounds.height) * 2 + 1,
+      );
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObject(mesh, false)[0];
+      const faceId = typeof hit?.faceIndex === "number" ? model.triangleFaceIds[hit.faceIndex] : undefined;
+      if (faceId !== undefined && selectable.has(faceId)) onSelectFace(faceId);
+    };
+    return () => {
+      pickerRef.current = null;
+    };
+  }, [camera, model.selectableFaceIds, model.triangleFaceIds, onSelectFace, pickerRef, selectionEnabled]);
   useEffect(() => {
     const surfaceBytes = model.displayPositions.byteLength + model.indices.byteLength;
     const normal = geometry.getAttribute("normal");
@@ -306,41 +337,21 @@ function StepModel({
       gpuBufferEstimateBytes: surfaceBytes + normalBytes + edgeBytes,
     });
   }, [edgeGeometry, geometry, model, onMetrics]);
-  const selectable = useMemo(() => new Set(model.selectableFaceIds), [model]);
-  const highlightedFace = selectedFace ?? hoveredFace;
   return (
     <group matrix={transform} matrixAutoUpdate={false}>
-      <mesh
-        geometry={geometry}
-        onPointerMove={(event) => {
-          const faceId = typeof event.faceIndex === "number"
-            ? model.triangleFaceIds[event.faceIndex]
-            : undefined;
-          onHoverFace(faceId !== undefined && selectable.has(faceId) ? faceId : null);
-        }}
-        onPointerOut={() => onHoverFace(null)}
-        onClick={(event) => {
-          const faceId = typeof event.faceIndex === "number"
-            ? model.triangleFaceIds[event.faceIndex]
-            : undefined;
-          if (faceId !== undefined && selectable.has(faceId)) {
-            event.stopPropagation();
-            onSelectFace(faceId);
-          }
-        }}
-      >
+      <mesh ref={meshRef} geometry={geometry}>
         <meshStandardMaterial color="#b8c2cc" transparent opacity={0.2} depthWrite roughness={0.62} metalness={0.1} />
       </mesh>
       <lineSegments geometry={edgeGeometry} renderOrder={2}>
         <lineBasicMaterial color="#31414d" transparent opacity={1} depthTest={true} depthWrite={false} />
       </lineSegments>
-      {highlightedFace !== null ? (
+      {selectedFace !== null ? (
         <StepFaceOverlay
           positions={model.displayPositions}
           indices={model.indices}
           triangleFaceIds={model.triangleFaceIds}
-          faceId={highlightedFace}
-          selected={highlightedFace === selectedFace}
+          faceId={selectedFace}
+          selected
         />
       ) : null}
     </group>
@@ -393,6 +404,7 @@ export default function PalletViewport({
   stepModel,
   selectedStepFace,
   onSelectStepFace,
+  stepFaceSelectionEnabled = false,
   showPallet = true,
   selectedBeams,
   dimensionEditing,
@@ -419,6 +431,7 @@ export default function PalletViewport({
     stepModel?: StepModelSnapshot | null;
     selectedStepFace?: number | null;
     onSelectStepFace?: (faceId: number) => void;
+    stepFaceSelectionEnabled?: boolean;
     showPallet?: boolean;
   selectedBeams: string[];
   dimensionEditing: boolean;
@@ -440,10 +453,8 @@ export default function PalletViewport({
 }) {
   const [cursor, setCursor] = useState<[number, number]>([16, 16]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
-    const [hoveredStepFace, setHoveredStepFace] = useState<number | null>(null);
-  useEffect(() => {
-    if (selectedStepFace === null) setHoveredStepFace(null);
-  }, [selectedStepFace]);
+  const stepPicker = useRef<((clientX: number, clientY: number, bounds: DOMRect) => void) | null>(null);
+  const pointerDown = useRef<[number, number] | null>(null);
   const bounds = useMemo(() => {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -530,8 +541,23 @@ export default function PalletViewport({
     };
   }, [manualSection, manualSupports]);
   return (
-    <div className="viewport" onPointerMove={(event) => { const box = event.currentTarget.getBoundingClientRect(); setCursor([event.clientX - box.left + 14, event.clientY - box.top + 14]); }}>
-      <Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
+    <div
+      className="viewport"
+      onPointerDown={stepFaceSelectionEnabled ? (event) => {
+        pointerDown.current = [event.clientX, event.clientY];
+      } : undefined}
+      onPointerMove={manualMode ? (event) => { const box = event.currentTarget.getBoundingClientRect(); setCursor([event.clientX - box.left + 14, event.clientY - box.top + 14]); } : undefined}
+      onClick={stepFaceSelectionEnabled ? (event) => {
+        const down = pointerDown.current;
+        pointerDown.current = null;
+        if (!down || Math.hypot(event.clientX - down[0], event.clientY - down[1]) > 4) return;
+        stepPicker.current?.(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect());
+      } : undefined}
+    >
+      <Canvas
+        frameloop="demand"
+        camera={{ position: [5, 4, 5], fov: 42 }}
+      >
           <Camera preset={preset} bounds={bounds} />
           <FitCamera fitRequest={fitRequest} bounds={bounds} />
         <color attach="background" args={["#edf1f3"]} />
@@ -748,10 +774,10 @@ export default function PalletViewport({
           {stepModel ? (
             <StepModel
               model={stepModel}
-              hoveredFace={hoveredStepFace}
               selectedFace={selectedStepFace ?? null}
-              onHoverFace={setHoveredStepFace}
               onSelectFace={(faceId) => onSelectStepFace?.(faceId)}
+              selectionEnabled={stepFaceSelectionEnabled}
+              pickerRef={stepPicker}
               onMetrics={onStepViewportMetrics}
             />
           ) : null}

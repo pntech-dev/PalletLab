@@ -6,6 +6,7 @@ import numpy as np
 from palletlab.application.step_import_service import (
     StepImportService,
     _cached_web_asset,
+    _model_bearing_height,
     _model_pallet_layers,
     _viewport_transform,
     _write_model_asset,
@@ -99,7 +100,7 @@ def test_step_asset_keeps_triangle_to_cad_face_mapping(tmp_path, monkeypatch):
     assert _cached_web_asset(Model.source_path) == Path(asset["path"])
 
 
-def test_step_pallet_layers_match_the_desktop_three_layer_construction():
+def test_step_pallet_layers_keep_every_machine_support_on_one_bearing_plane():
     length = DirectionInput(70, 50, (1000,), 200, 200, 100, 100)
     width = DirectionInput(70, 50, (500,), 200, 200, 100, 100)
 
@@ -107,8 +108,33 @@ def test_step_pallet_layers_match_the_desktop_three_layer_construction():
 
     assert [layer.layer_id for layer in layers] == ["length", "width", "layer-1"]
     assert [layer.axis for layer in layers] == ["length", "width", "length"]
-    assert sections[("layer-1", 0)].height == 25
-    assert sections[("layer-1", 0)].width == 100
+    assert sections == {}
+
+
+def test_model_bearing_height_rejects_an_uneven_support_layer():
+    class Beam:
+        def __init__(self, z, height):
+            self.layer_id = "layer-1"
+            self.z = z
+            self.size_z = height
+
+    class Result:
+        beams_3d = (Beam(175, 70), Beam(152.5, 25))
+
+    with np.testing.assert_raises_regex(Exception, "разной высоте"):
+        _model_bearing_height(Result())
+
+
+def test_model_bearing_height_uses_the_calculated_top_of_support_beams():
+    class Beam:
+        layer_id = "layer-1"
+        z = 175
+        size_z = 70
+
+    class Result:
+        beams_3d = (Beam(), Beam())
+
+    assert _model_bearing_height(Result()) == 210
 
 
 def test_viewport_transform_preserves_the_existing_xzy_axis_mapping():

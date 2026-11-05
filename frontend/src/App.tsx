@@ -1234,6 +1234,7 @@ export function App() {
                 stepModel={stepModel}
                 selectedStepFace={selectedStepFace}
                 onSelectStepFace={selectStepSupport}
+                stepFaceSelectionEnabled={!stepPalletBuilt && !buildingStepPallet}
                 showPallet={stepModel === null || stepPalletBuilt}
                 selectedBeams={selectedBeams.map(
                   (beam) => `${beam.layerId}:${beam.layerIndex}`,

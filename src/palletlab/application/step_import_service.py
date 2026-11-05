@@ -24,7 +24,10 @@ from palletlab.step_performance import StepPerformanceTrace, geometry_footprint,
 
 
 _MODEL_STANDARD_SECTION = BeamSection(70, 50)
-_MODEL_TOP_EDGE_SECTION = BeamSection(25, 100)
+# Keep a sub-visible clearance above the physical bearing plane.  STEP display
+# triangles are tessellated approximations and coplanar transparent surfaces
+# blend as if the machine were embedded in the wood.
+_MODEL_CONTACT_CLEARANCE = 2.0
 
 
 class StepImportService:
@@ -153,6 +156,7 @@ class StepImportService:
             trace.checkpoint("support-detection", supportCount=len(supports))
             if state.length_input is None or state.width_input is None:
                 raise RuntimeError("В проекте отсутствуют параметры поддона.")
+            provisional_bearing_height = _MODEL_STANDARD_SECTION.height * 3
             length, width, placement_matrix = pallet_inputs_from_supports(
                 model,
                 supports,
@@ -167,7 +171,7 @@ class StepImportService:
                 round_pallet_size=state.rounding_step != 0,
                 rounding_step=state.rounding_step or 5,
                 reference_support_index=face_index,
-                pallet_height=_MODEL_STANDARD_SECTION.height * 3,
+                pallet_height=provisional_bearing_height,
                 return_placement_matrix=True,
             )
             trace.checkpoint("model-placement-matrix")
@@ -176,9 +180,23 @@ class StepImportService:
             state.beam_sections.clear()
             state.layer_sections = top_edge_sections
             controller, errors = ApplicationService._controller_for(state)
-            if controller.calculate_layers(layers, show_error=False) is None:
+            result = controller.calculate_layers(layers, show_error=False)
+            if result is None:
                 raise CalculationError(errors[-1] if errors else "Не удалось построить поддон по модели.")
-            trace.checkpoint("pallet-calculation")
+            bearing_height = _model_bearing_height(result)
+            # Inputs need a height before the pallet exists.  Correct the
+            # local Z translation from the calculated top support plane, not
+            # from an assumed stack height.  The small clearance prevents a
+            # visibly sunk contact when transparent, tessellated surfaces are
+            # exactly coplanar in the viewport.
+            placement_matrix[2, 3] += (
+                bearing_height - provisional_bearing_height + _MODEL_CONTACT_CLEARANCE
+            )
+            trace.checkpoint(
+                "pallet-calculation",
+                bearingHeight=bearing_height,
+                contactClearance=_MODEL_CONTACT_CLEARANCE,
+            )
             report = trace.report()
             write_step_performance("build-pallet", report)
             return {
@@ -404,11 +422,11 @@ def _model_pallet_layers(length_input: Any, width_input: Any) -> tuple[list[Laye
         else "width"
     )
     middle_axis = "width" if bottom_axis == "length" else "length"
-    top_centres = calculate_direction(directions[bottom_axis]).beam_centers
-    top_sections = {
-        ("layer-1", index): _MODEL_TOP_EDGE_SECTION
-        for index in (0, len(top_centres) - 1)
-    }
+    # Every centre in the upper layer is inferred from an actual machine
+    # support.  Unlike a generic pallet, shortening outer upper beams would
+    # put supports at the edge 45 mm below the remaining bearing plane.
+    # Keep the whole support layer at one height.
+    top_sections: dict[tuple[str, int], BeamSection] = {}
     return (
         [
             LayerInput(bottom_axis, bottom_axis, directions[bottom_axis]),
@@ -417,3 +435,15 @@ def _model_pallet_layers(length_input: Any, width_input: Any) -> tuple[list[Laye
         ],
         top_sections,
     )
+
+
+def _model_bearing_height(result: Any) -> float:
+    """Return the single top plane of the STEP model's support layer."""
+    support_beams = [beam for beam in result.beams_3d if beam.layer_id == "layer-1"]
+    if not support_beams:
+        raise CalculationError("Не найдены несущие брусья верхнего слоя поддона.")
+    tops = [beam.z + beam.size_z / 2 for beam in support_beams]
+    bearing_height = tops[0]
+    if any(not np.isclose(top, bearing_height, atol=1e-6) for top in tops[1:]):
+        raise CalculationError("Несущие брусья верхнего слоя находятся на разной высоте.")
+    return float(bearing_height)
