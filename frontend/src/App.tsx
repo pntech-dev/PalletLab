@@ -551,8 +551,22 @@ export function App() {
         stopInsertion();
         return;
       }
+      if (
+        event.key === "Enter" &&
+        !dimensionEditing &&
+        !insertionMode &&
+        !(event.target instanceof HTMLButtonElement)
+      ) {
+        if (beamTool === "delete" && selectedBeams.length > 0) {
+          event.preventDefault();
+          void deleteSelectedBeams();
+        } else if (beamTool === "section" && selectedBeams.length > 0) {
+          event.preventDefault();
+          void changeSelectedBeamSections();
+        }
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) return;
       if (event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
@@ -564,7 +578,7 @@ export function App() {
     };
     window.addEventListener("keydown", handleKeyboardShortcut);
     return () => window.removeEventListener("keydown", handleKeyboardShortcut);
-  }, [project]);
+  });
 
   function updateDirection(
     axis: "length" | "width",
