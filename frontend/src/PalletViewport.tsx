@@ -266,12 +266,14 @@ function StepModel({
   selectedFace,
   onHoverFace,
   onSelectFace,
+  onMetrics,
 }: {
   model: StepModelSnapshot;
   hoveredFace: number | null;
   selectedFace: number | null;
   onHoverFace: (faceId: number | null) => void;
   onSelectFace: (faceId: number) => void;
+  onMetrics?: (metrics: Record<string, string | number | boolean>) => void;
 }) {
   const transform = useMemo(() => new Matrix4().fromArray(model.transform), [model.transform]);
   const geometry = useMemo(() => {
@@ -291,6 +293,19 @@ function StepModel({
 
   useEffect(() => () => geometry.dispose(), [geometry]);
   useEffect(() => () => edgeGeometry.dispose(), [edgeGeometry]);
+  useEffect(() => {
+    const surfaceBytes = model.displayPositions.byteLength + model.indices.byteLength;
+    const normal = geometry.getAttribute("normal");
+    const normalBytes = normal ? normal.array.byteLength : 0;
+    const edgeBytes = model.displayEdgePositions.byteLength + model.edgeIndices.byteLength;
+    onMetrics?.({
+      stage: "three-geometry-ready",
+      surfaceBufferBytes: surfaceBytes,
+      normalBufferBytes: normalBytes,
+      edgeBufferBytes: edgeBytes,
+      gpuBufferEstimateBytes: surfaceBytes + normalBytes + edgeBytes,
+    });
+  }, [edgeGeometry, geometry, model, onMetrics]);
   const selectable = useMemo(() => new Set(model.selectableFaceIds), [model]);
   const highlightedFace = selectedFace ?? hoveredFace;
   return (
@@ -395,6 +410,7 @@ export default function PalletViewport({
   onSelectManualSupport = () => {},
   manualHud,
   beamSelectionEnabled,
+  onStepViewportMetrics,
 }: {
   beams: ViewportBeam[];
   dimensions: ViewportDimension[];
@@ -420,6 +436,7 @@ export default function PalletViewport({
   onSelectManualSupport?: (beam: ViewportBeam, point: ViewportPoint) => void;
   manualHud?: ReactNode;
   beamSelectionEnabled: boolean;
+  onStepViewportMetrics?: (metrics: Record<string, string | number | boolean>) => void;
 }) {
   const [cursor, setCursor] = useState<[number, number]>([16, 16]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
@@ -732,6 +749,7 @@ export default function PalletViewport({
               selectedFace={selectedStepFace ?? null}
               onHoverFace={setHoveredStepFace}
               onSelectFace={(faceId) => onSelectStepFace?.(faceId)}
+              onMetrics={onStepViewportMetrics}
             />
           ) : null}
       </Canvas>

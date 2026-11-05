@@ -87,3 +87,14 @@ export function prepareStepModel(model: StepModelPayload): StepModelGeometry {
     transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
   };
 }
+
+export function stepModelBufferBytes(model: StepModelGeometry): number {
+  return model.displayPositions.byteLength + model.indices.byteLength
+    + model.triangleFaceIds.byteLength + model.displayEdgePositions.byteLength
+    + model.edgeIndices.byteLength;
+}
+
+export function browserHeapBytes(): number | undefined {
+  const memory = (performance as Performance & { memory?: { usedJSHeapSize?: number } }).memory;
+  return typeof memory?.usedJSHeapSize === "number" ? memory.usedJSHeapSize : undefined;
+}

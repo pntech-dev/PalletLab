@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -14,7 +15,7 @@ import type {
   ViewportPoint,
   StepModelSnapshot,
 } from "./PalletViewport";
-import { prepareStepModel, type StepModelPayload } from "./stepModelGeometry";
+import { browserHeapBytes, prepareStepModel, stepModelBufferBytes, type StepModelPayload } from "./stepModelGeometry";
 
 const PalletViewport = lazy(() => import("./PalletViewport"));
 
@@ -164,6 +165,7 @@ declare global {
         cancel_step_import: (operationId: string) => Promise<StepImportOperation>;
         step_model_snapshot: (operationId: string) => Promise<StepModelResponse>;
         build_step_pallet: (operationId: string, project: Project, faceIndex: number) => Promise<StepPalletResponse>;
+        record_step_viewport_metrics: (metrics: Record<string, string | number | boolean>) => Promise<{ ok: boolean }>;
       };
     };
   }
@@ -213,6 +215,11 @@ export function App() {
   const undoStack = useRef<Project[]>([]);
   const redoStack = useRef<Project[]>([]);
   const formEditStart = useRef<Project | null>(null);
+
+  const recordStepViewportMetrics = useCallback((metrics: Record<string, string | number | boolean>) => {
+    const api = window.pywebview?.api;
+    if (api) void api.record_step_viewport_metrics(metrics);
+  }, []);
 
   function applyProject(nextProject: Project) {
     setProject(nextProject);
@@ -404,7 +411,15 @@ export function App() {
       if (!api || !stepImport?.operationId || stepImport.state !== "completed") return;
       const response = await api.step_model_snapshot(stepImport.operationId);
       if (response.ok && response.model) {
-        setStepModel(prepareStepModel(response.model));
+        const started = performance.now();
+        const prepared = prepareStepModel(response.model);
+        setStepModel(prepared);
+        void api.record_step_viewport_metrics({
+          stage: "decoded-render-buffers",
+          elapsedMs: Math.round((performance.now() - started) * 10) / 10,
+          renderBufferBytes: stepModelBufferBytes(prepared),
+          jsHeapBytes: browserHeapBytes() ?? -1,
+        });
         setFitRequest((value) => value + 1);
       } else {
         setCalculationError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
@@ -1239,6 +1254,7 @@ export function App() {
                 onSelectManualSupport={selectManualSupport}
                 manualHud={manualHud}
                 beamSelectionEnabled={insertionMode || beamTool !== "none"}
+                onStepViewportMetrics={recordStepViewportMetrics}
               />
             </Suspense>
           </>

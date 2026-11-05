@@ -9,6 +9,7 @@ from typing import Any
 from palletlab.application.service import ApplicationService
 from palletlab.application.step_import_service import StepImportService
 from palletlab.application.snapshots import SNAPSHOT_VERSION
+from palletlab.step_performance import write_step_performance
 from palletlab.version import __version__
 
 
@@ -79,6 +80,17 @@ class WebApplicationApi:
 
     def build_step_pallet(self, operation_id: object, project: object, face_index: object) -> dict[str, Any]:
         return self._step_imports.build_pallet(operation_id, project, face_index)
+
+    def record_step_viewport_metrics(self, metrics: object) -> dict[str, bool]:
+        """Persist best-effort WebView/GPU estimates beside STEP backend metrics."""
+        if not isinstance(metrics, dict):
+            return {"ok": False}
+        safe = {
+            key: value for key, value in metrics.items()
+            if isinstance(key, str) and isinstance(value, (str, int, float, bool))
+        }
+        write_step_performance("web-viewport", {"points": [safe]})
+        return {"ok": True}
 
     def _choose_file(self, mode: str) -> str | None:
         if self._window is None:
