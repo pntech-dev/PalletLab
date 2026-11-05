@@ -13,7 +13,6 @@ import numpy as np
 import pyvista as pv
 
 from palletlab.core.models import DirectionInput
-from palletlab.core.calculator import round_to_fifty, round_up_to_five
 
 try:
     from OCP.BRep import BRep_Tool
@@ -573,21 +572,21 @@ def pallet_inputs_from_supports(
     width_input = direction(
         y_relative, y_first, y_last, width_beam_height, width_beam_width, margin_y_start, margin_y_end
     )
-    raw_width = width_input.first_edge_to_support + sum(width_input.support_distances) + width_input.last_support_to_edge + margin_y_start + margin_y_end
-    pallet_width = (
-        (round_to_fifty(raw_width) if rounding_step == 50 else round_up_to_five(raw_width))
-        if round_pallet_size else raw_width
-    )
-
     # A regular two-layer pallet uses the sum of both beam heights.  Callers
     # building a custom layer stack may supply its actual bearing height.
     bearing_height = pallet_height if pallet_height is not None else length_beam_height + width_beam_height
     if bearing_height <= 0:
         raise ValueError("Высота поддона должна быть больше нуля.")
 
+    # The pallet calculator uses its outer corner as (0, 0).  Anchor the
+    # selected support grid to those calculated beam centres directly.  This
+    # keeps the CAD model and pallet in one coordinate system even when the
+    # source model contains fractional coordinates.
+    x_translation = margin_x_start + x_first - support_x[0]
+    y_translation = margin_y_start + y_first - support_y[0]
     placement_matrix = np.array((
-        (x_axis[0], x_axis[1], x_axis[2], -float(np.dot(origin, x_axis)) - xmin + margin_x_start),
-        (-y_axis[0], -y_axis[1], -y_axis[2], float(np.dot(origin, y_axis)) + pallet_width + ymin - margin_y_start),
+        (x_axis[0], x_axis[1], x_axis[2], -float(np.dot(origin, x_axis)) + x_translation),
+        (y_axis[0], y_axis[1], y_axis[2], -float(np.dot(origin, y_axis)) + y_translation),
         (z_axis[0], z_axis[1], z_axis[2], -float(np.dot(origin, z_axis)) + bearing_height),
         (0.0, 0.0, 0.0, 1.0),
     ), dtype=float)

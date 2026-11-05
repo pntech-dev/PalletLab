@@ -441,6 +441,9 @@ export default function PalletViewport({
   const [cursor, setCursor] = useState<[number, number]>([16, 16]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
     const [hoveredStepFace, setHoveredStepFace] = useState<number | null>(null);
+  useEffect(() => {
+    if (selectedStepFace === null) setHoveredStepFace(null);
+  }, [selectedStepFace]);
   const bounds = useMemo(() => {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];

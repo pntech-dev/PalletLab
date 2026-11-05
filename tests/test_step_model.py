@@ -15,6 +15,7 @@ from palletlab.importers.step_model import (
     load_cached_step_model,
     pallet_inputs_from_supports,
 )
+from palletlab.core.calculator import calculate_direction
 
 
 def _model(*faces: StepFace) -> ImportedStepModel:
@@ -117,6 +118,29 @@ def test_automatic_model_offsets_position_supports_from_mesh_bounds():
     assert length.first_edge_to_support == 120
     assert length.last_support_to_edge == 100
     assert length.support_positions == (220, 1000)
+
+
+def test_model_placement_anchors_supports_to_pallet_beam_centres():
+    supports = (
+        StepFace(0, np.array((120.4, 80.2, 0), dtype=float), np.array((0, 0, -1), dtype=float)),
+        StepFace(1, np.array((900.4, 80.2, 0), dtype=float), np.array((0, 0, -1), dtype=float)),
+    )
+    model = _model(*supports)
+
+    length, width, matrix = pallet_inputs_from_supports(
+        model, supports,
+        length_beam_height=70, length_beam_width=50,
+        width_beam_height=70, width_beam_width=50,
+        length_margin_start=100, length_margin_end=100,
+        width_margin_start=100, width_margin_end=100,
+        round_pallet_size=False, rounding_step=5,
+        reference_support_index=0, pallet_height=210,
+        return_placement_matrix=True,
+    )
+    transformed = np.array((120.4, 80.2, 0, 1)) @ matrix.T
+
+    assert np.allclose(transformed, (calculate_direction(length).support_positions[0],
+                                    calculate_direction(width).support_positions[0], 210, 1))
 
 
 def test_close_support_candidates_keep_the_beam_with_more_supported_feet():

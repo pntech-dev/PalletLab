@@ -443,6 +443,7 @@ export function App() {
         updateHistory(project, response.snapshot.project);
         applyProject(response.snapshot.project);
         setStepModel((model) => model ? { ...model, transform: response.modelTransform! } : model);
+        setSelectedStepFace(null);
         setStepPalletBuilt(true);
         setFitRequest((value) => value + 1);
         setCalculationError(null);
