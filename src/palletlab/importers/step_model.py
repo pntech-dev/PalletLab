@@ -188,45 +188,44 @@ def _planar_face_geometry(face) -> tuple[np.ndarray | None, np.ndarray | None]:
     return np.array((location.X(), location.Y(), location.Z()), dtype=float), normal
 
 
-def _surface_centroid(points: np.ndarray, cells: list[int]) -> np.ndarray:
+def _surface_centroid(points: np.ndarray, cells: np.ndarray | list[int]) -> np.ndarray:
     """Return the area-weighted centroid of tessellated face triangles.
 
     A plane's origin is arbitrary in STEP.  In particular, it is not the
     centre of a circular foot, so support coordinates must be derived from the
     actual face surface instead.
     """
-    weighted = np.zeros(3)
-    total_area = 0.0
-    for offset in range(0, len(cells), 4):
-        first, second, third = cells[offset + 1:offset + 4]
-        triangle = points[[first, second, third]]
-        area = float(np.linalg.norm(np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0]))) / 2.0
-        if area > 0:
-            weighted += area * triangle.mean(axis=0)
-            total_area += area
+    indices = np.asarray(cells, dtype=np.int64).reshape(-1, 4)[:, 1:]
+    triangles = points[indices]
+    areas = np.linalg.norm(
+        np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]), axis=1,
+    ) / 2.0
+    valid = areas > 0
+    total_area = float(areas[valid].sum())
     if total_area <= 0:
         return points.mean(axis=0)
-    return weighted / total_area
+    return np.average(triangles[valid].mean(axis=1), axis=0, weights=areas[valid])
 
 
-def _face_triangles(face) -> tuple[np.ndarray, list[int]] | None:
+def _face_triangles(face) -> tuple[np.ndarray, np.ndarray] | None:
     location = TopLoc_Location()
     triangulation = BRep_Tool.Triangulation_s(face, location)
     if triangulation is None or triangulation.NbTriangles() == 0:
         return None
     transformation = location.Transformation()
-    points = []
+    points = np.empty((triangulation.NbNodes(), 3), dtype=float)
     for node_index in range(1, triangulation.NbNodes() + 1):
         point = triangulation.Node(node_index).Transformed(transformation)
-        points.append((point.X(), point.Y(), point.Z()))
-    cells: list[int] = []
+        points[node_index - 1] = (point.X(), point.Y(), point.Z())
+    cells = np.empty((triangulation.NbTriangles(), 4), dtype=np.int64)
+    cells[:, 0] = 3
     reversed_face = face.Orientation() == TopAbs_REVERSED
     for triangle_index in range(1, triangulation.NbTriangles() + 1):
         first, second, third = triangulation.Triangle(triangle_index).Get()
         if reversed_face:
             second, third = third, second
-        cells.extend((3, first - 1, second - 1, third - 1))
-    return np.asarray(points), cells
+        cells[triangle_index - 1, 1:] = (first - 1, second - 1, third - 1)
+    return points, cells
 
 
 def _shape_diagonal(shape) -> float:
@@ -311,8 +310,8 @@ def load_step_model(filename: str | Path, progress=None, diagnostics=None) -> Im
         counter.Next()
     faces: list[StepFace] = []
     point_blocks: list[np.ndarray] = []
-    cells: list[int] = []
-    cell_face_indices: list[int] = []
+    cell_blocks: list[np.ndarray] = []
+    face_index_blocks: list[np.ndarray] = []
     point_offset = 0
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
     index = 0
@@ -329,11 +328,10 @@ def load_step_model(filename: str | Path, progress=None, diagnostics=None) -> Im
                 point = _surface_centroid(face_points, face_cells)
             faces.append(StepFace(index, point, normal))
             point_blocks.append(face_points)
-            for offset in range(0, len(face_cells), 4):
-                cells.extend((3, face_cells[offset + 1] + point_offset,
-                              face_cells[offset + 2] + point_offset,
-                              face_cells[offset + 3] + point_offset))
-                cell_face_indices.append(index)
+            translated_cells = face_cells.copy()
+            translated_cells[:, 1:] += point_offset
+            cell_blocks.append(translated_cells)
+            face_index_blocks.append(np.full(len(face_cells), index, dtype=np.int32))
             point_offset += len(face_points)
             index += 1
         explorer.Next()
@@ -341,11 +339,11 @@ def load_step_model(filename: str | Path, progress=None, diagnostics=None) -> Im
         if progress and (processed % max(1, face_count // 100) == 0 or processed == face_count):
             progress(10 + round(85 * processed / max(1, face_count)), f"Преобразуем грани: {processed:,}/{face_count:,}")
     if diagnostics:
-        diagnostics("face-triangles-collected", faceCount=len(faces), triangleCount=len(cell_face_indices))
+        diagnostics("face-triangles-collected", faceCount=len(faces), triangleCount=sum(len(block) for block in face_index_blocks))
     if not faces:
         raise ValueError("В STEP-модели не найдено отображаемых граней.")
-    mesh = pv.PolyData(np.vstack(point_blocks), np.asarray(cells))
-    mesh.cell_data["step_face_index"] = np.asarray(cell_face_indices, dtype=np.int32)
+    mesh = pv.PolyData(np.vstack(point_blocks), np.concatenate(cell_blocks).reshape(-1))
+    mesh.cell_data["step_face_index"] = np.concatenate(face_index_blocks)
     mesh.compute_normals(cell_normals=False, point_normals=True, inplace=True)
     if diagnostics:
         diagnostics("vtk-mesh-built", triangleCount=mesh.n_cells, vertexCount=mesh.n_points)
