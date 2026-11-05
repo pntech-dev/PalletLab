@@ -63,7 +63,10 @@ function Camera({
     const distance = Math.max(3, bounds.span * 1.45);
     const positions: Record<CameraPreset, [number, number, number]> = {
       isometric: [x + distance, y + distance * 0.75, z + distance],
-      top: [x, y + distance * 1.35, z + 0.001],
+      // Do not place the camera exactly at the orbit pole. At the pole an
+      // orbit has no horizontal direction, so a left-drag can appear locked to
+      // one axis. This remains visually a top view while preserving full orbit.
+      top: [x, y + distance * 1.35, z + distance * 0.08],
       // Keep the eye level with the pallet centre for a true end elevation.
       // The frontend's mapped axes put the longitudinal view on world Z.
       front: [x, y, z + distance],
@@ -566,7 +569,13 @@ export default function PalletViewport({
           );
         })}
         {manualHud && manualSupports[0] ? <Html position={[manualSupports[0].point[0], manualSupports[0].point[1] + 0.24, manualSupports[0].point[2]]} center>{manualHud}</Html> : null}
-          <OrbitControls makeDefault target={bounds.center} />
+          <OrbitControls
+            key={preset}
+            makeDefault
+            target={bounds.center}
+            minPolarAngle={0.03}
+            maxPolarAngle={Math.PI - 0.03}
+          />
       </Canvas>
       {manualMode ? <div className="viewport-hint" style={{ left: cursor[0], top: cursor[1] }}>{manualSupports.length === 0 ? "Select the first support" : manualSupports.length === 1 ? "Select the second support" : "Configure the new beam"}</div> : null}
     </div>

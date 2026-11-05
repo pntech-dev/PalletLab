@@ -496,6 +496,27 @@ export function App() {
     setSelectedBeams([]);
   }
 
+  function activateBeamTool(tool: "delete" | "section") {
+    stopDimensionEditing();
+    stopInsertion();
+    setBeamTool(tool);
+    setSelectedBeams([]);
+  }
+
+  function activateDimensionEditing() {
+    stopInsertion();
+    setBeamTool("none");
+    setSelectedBeams([]);
+    setDimensionEditing(true);
+  }
+
+  function activateInsertion() {
+    stopDimensionEditing();
+    setBeamTool("none");
+    setSelectedBeams([]);
+    setInsertionMode(true);
+  }
+
   async function insertSelectedBeam() {
     const api = window.pywebview?.api;
     if (!api || !project || !selectedSlot) return;
@@ -973,13 +994,21 @@ export function App() {
               </label>
               <button
                 type="button"
-                onClick={() => beamTool === "section" ? void changeSelectedBeamSections() : (setBeamTool("section"), setSelectedBeams([]))}
+                onClick={() =>
+                  beamTool === "section"
+                    ? void changeSelectedBeamSections()
+                    : activateBeamTool("section")
+                }
               >
                 {beamTool === "section" ? `Apply section (${selectedBeams.length})` : "Change section"}
               </button>
               <button
                 type="button"
-                onClick={() => beamTool === "delete" ? void deleteSelectedBeams() : (setBeamTool("delete"), setSelectedBeams([]))}
+                onClick={() =>
+                  beamTool === "delete"
+                    ? void deleteSelectedBeams()
+                    : activateBeamTool("delete")
+                }
               >
                 {beamTool === "delete" ? `Delete selected (${selectedBeams.length})` : "Delete beams"}
               </button>
@@ -989,7 +1018,7 @@ export function App() {
                 onClick={() =>
                   dimensionEditing
                     ? stopDimensionEditing()
-                    : setDimensionEditing(true)
+                    : activateDimensionEditing()
                 }
               >
                 {dimensionEditing ? "Finish dimension edit" : "Edit dimensions"}
@@ -998,7 +1027,7 @@ export function App() {
                 type="button"
                 className={insertionMode ? "active-tool" : ""}
                 onClick={() =>
-                  insertionMode ? stopInsertion() : (setBeamTool("none"), setSelectedBeams([]), setInsertionMode(true))
+                  insertionMode ? stopInsertion() : activateInsertion()
                 }
               >
                 {insertionMode ? "Finish insertion" : "Add beam"}
