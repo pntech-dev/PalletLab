@@ -1,7 +1,7 @@
 import { Html, Line, OrbitControls } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
-import { CanvasTexture, LinearFilter } from "three";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { CanvasTexture, LinearFilter, MathUtils, PerspectiveCamera, Vector3 } from "three";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 export type ViewportBeam = {
   index: number;
@@ -43,7 +43,12 @@ function point([x, y, z]: [number, number, number]): [number, number, number] {
   return [x / 1000, z / 1000, y / 1000];
 }
 
-type ViewportBounds = { center: [number, number, number]; span: number };
+type ViewportBounds = {
+  center: [number, number, number];
+  span: number;
+  min: [number, number, number];
+  max: [number, number, number];
+};
 
 function Camera({
   preset,
@@ -72,6 +77,49 @@ function Camera({
     // treat that as a camera command: retain the user's current orbit until a
     // preset is explicitly selected.
   }, [camera, preset]);
+  return null;
+}
+
+function FitCamera({ fitRequest, bounds }: { fitRequest: number; bounds: ViewportBounds }) {
+  const { camera, size } = useThree();
+  const previousRequest = useRef(fitRequest);
+
+  useEffect(() => {
+    if (fitRequest === previousRequest.current) return;
+    previousRequest.current = fitRequest;
+
+    const perspective = camera as PerspectiveCamera;
+    const verticalFov = MathUtils.degToRad(perspective.fov);
+    const horizontalFov = 2 * Math.atan(
+      Math.tan(verticalFov / 2) * (size.width / Math.max(1, size.height)),
+    );
+    const direction = new Vector3();
+    camera.getWorldDirection(direction);
+    const right = new Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    const up = new Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+    const target = new Vector3(...bounds.center);
+    const horizontalTangent = Math.tan(horizontalFov / 2);
+    const verticalTangent = Math.tan(verticalFov / 2);
+    let distance = 0;
+    for (const x of [bounds.min[0], bounds.max[0]]) {
+      for (const y of [bounds.min[1], bounds.max[1]]) {
+        for (const z of [bounds.min[2], bounds.max[2]]) {
+          const offset = new Vector3(x, y, z).sub(target);
+          const depthOffset = offset.dot(direction);
+          distance = Math.max(
+            distance,
+            Math.abs(offset.dot(right)) / horizontalTangent - depthOffset,
+            Math.abs(offset.dot(up)) / verticalTangent - depthOffset,
+          );
+        }
+      }
+    }
+    // Keep only a small edge margin; the fit should fill the available view.
+    distance = Math.max(0.3, distance * 1.04);
+    camera.position.copy(target.addScaledVector(direction, -distance));
+    camera.lookAt(...bounds.center);
+  }, [bounds, camera, fitRequest, size.height, size.width]);
+
   return null;
 }
 
@@ -184,6 +232,7 @@ export default function PalletViewport({
   beams,
   dimensions,
   preset,
+  fitRequest,
   selectedBeams,
   dimensionEditing,
   hoveredDimension,
@@ -204,6 +253,7 @@ export default function PalletViewport({
   beams: ViewportBeam[];
   dimensions: ViewportDimension[];
   preset: CameraPreset;
+    fitRequest: number;
   selectedBeams: string[];
   dimensionEditing: boolean;
   hoveredDimension: string | null;
@@ -250,6 +300,8 @@ export default function PalletViewport({
     return {
       center,
       span: Math.max(...max.map((value, axis) => value - min[axis])),
+        min: min as [number, number, number],
+        max: max as [number, number, number],
     };
   }, [beams]);
   const grid = useMemo(() => {
@@ -308,7 +360,8 @@ export default function PalletViewport({
   return (
     <div className="viewport" onPointerMove={(event) => { const box = event.currentTarget.getBoundingClientRect(); setCursor([event.clientX - box.left + 14, event.clientY - box.top + 14]); }}>
       <Canvas camera={{ position: [5, 4, 5], fov: 42 }}>
-        <Camera preset={preset} bounds={bounds} />
+          <Camera preset={preset} bounds={bounds} />
+          <FitCamera fitRequest={fitRequest} bounds={bounds} />
         <color attach="background" args={["#edf1f3"]} />
         <ambientLight intensity={1.5} />
         <directionalLight position={[5, 8, 4]} intensity={2} castShadow />
@@ -422,7 +475,7 @@ export default function PalletViewport({
               );
             })
           : null}
-        {dimensions.map((dimension, index) => {
+          {dimensions.map((dimension, index) => {
           const dimensionKey = `${dimension.layerId}:${dimension.index}`;
           const isHovered =
             dimensionEditing && hoveredDimension === dimensionKey;
@@ -513,7 +566,7 @@ export default function PalletViewport({
           );
         })}
         {manualHud && manualSupports[0] ? <Html position={[manualSupports[0].point[0], manualSupports[0].point[1] + 0.24, manualSupports[0].point[2]]} center>{manualHud}</Html> : null}
-        <OrbitControls makeDefault target={bounds.center} />
+          <OrbitControls makeDefault target={bounds.center} />
       </Canvas>
       {manualMode ? <div className="viewport-hint" style={{ left: cursor[0], top: cursor[1] }}>{manualSupports.length === 0 ? "Select the first support" : manualSupports.length === 1 ? "Select the second support" : "Configure the new beam"}</div> : null}
     </div>

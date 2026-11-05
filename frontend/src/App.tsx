@@ -159,6 +159,7 @@ export function App() {
     Record<"length" | "width", string>
   >({ length: "", width: "" });
   const [camera, setCamera] = useState<CameraPreset>("isometric");
+  const [fitRequest, setFitRequest] = useState(0);
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
   const [beamTool, setBeamTool] = useState<"none" | "delete" | "section">("none");
   const [section, setSection] = useState<BeamSection>({
@@ -939,6 +940,9 @@ export function App() {
                   </button>
                 ),
               )}
+              <button type="button" onClick={() => setFitRequest((value) => value + 1)}>
+                Fit view
+              </button>
               <label>
                 Section height
                 <input
@@ -1046,6 +1050,7 @@ export function App() {
                 beams={calculation.snapshot.pallet.beams}
                 dimensions={calculation.snapshot.pallet.dimensions}
                 preset={camera}
+                fitRequest={fitRequest}
                 selectedBeams={selectedBeams.map(
                   (beam) => `${beam.layerId}:${beam.layerIndex}`,
                 )}
