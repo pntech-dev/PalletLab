@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +11,8 @@ import sys
 from threading import Lock, Thread
 from typing import Any
 from uuid import uuid4
+
+import numpy as np
 
 from palletlab.importers.step_import_protocol import consume_messages
 from palletlab.core.calculator import calculate_direction
@@ -274,24 +277,25 @@ def _snapshot_from_cached_model(model: Any) -> dict[str, Any]:
 
 
 def _snapshot_from_geometry(mesh: Any, edges: Any, faces: Any) -> dict[str, Any]:
-    """Flatten cached or placed STEP geometry while preserving face identity."""
-    raw_faces = mesh.faces
-    face_ids = mesh.cell_data["step_face_index"]
-    indices: list[int] = []
-    triangle_face_ids: list[int] = []
-    cursor = 0
-    triangle_index = 0
-    while cursor < len(raw_faces):
-        point_count = int(raw_faces[cursor])
-        if point_count != 3:
-            raise RuntimeError("STEP-кэш содержит нетреугольную грань, которую нельзя показать в web viewport.")
-        indices.extend(int(value) for value in raw_faces[cursor + 1:cursor + 4])
-        triangle_face_ids.append(int(face_ids[triangle_index]))
-        cursor += point_count + 1
-        triangle_index += 1
-    if triangle_index != len(face_ids):
-        raise RuntimeError("STEP-кэш содержит несогласованные идентификаторы граней.")
+    """Return compact binary geometry while preserving STEP face identity.
 
+    JSON lists turn every numeric value into a Python object and text.  For a
+    multi-million triangle assembly that alone takes tens of seconds and
+    several gigabytes across the Python/webview/JavaScript boundary.  The
+    browser receives the same values as base64-encoded typed buffers instead.
+    """
+    raw_faces = np.asarray(mesh.faces, dtype=np.uint32)
+    if raw_faces.size % 4 != 0 or not np.all(raw_faces[::4] == 3):
+        raise RuntimeError("STEP-кэш содержит нетреугольную грань, которую нельзя показать в web viewport.")
+    triangles = raw_faces.reshape(-1, 4)
+    face_ids = np.asarray(mesh.cell_data["step_face_index"], dtype=np.int32).reshape(-1)
+    if len(triangles) != len(face_ids):
+        raise RuntimeError("STEP-кэш содержит несогласованные идентификаторы граней.")
+    positions = np.asarray(mesh.points, dtype=np.float32).reshape(-1)
+    edge_points = np.asarray(edges.points, dtype=np.float32).reshape(-1)
+    edge_cells = np.asarray(edges.lines, dtype=np.uint32).reshape(-1)
+    if positions.size % 3 != 0 or edge_points.size % 3 != 0:
+        raise RuntimeError("STEP-кэш содержит некорректные координаты геометрии.")
     selectable_faces = [
         face.index
         for face in faces
@@ -299,38 +303,30 @@ def _snapshot_from_geometry(mesh: Any, edges: Any, faces: Any) -> dict[str, Any]
     ]
     bounds = [float(value) for value in mesh.bounds]
     return {
-        "positions": [float(value) for point in mesh.points for value in point],
-        "indices": indices,
-        "triangleFaceIds": triangle_face_ids,
+        "encoding": "typed-buffer-v1",
+        "positions": _encode_buffer(positions),
+        "indices": _encode_buffer(triangles[:, 1:].reshape(-1)),
+        "triangleFaceIds": _encode_buffer(face_ids),
         "selectableFaceIds": selectable_faces,
-        "edgePositions": _edge_segments(edges),
+        "edgePoints": _encode_buffer(edge_points),
+        "edgeCells": _encode_buffer(edge_cells),
         "bounds": bounds,
     }
 
 
-def _edge_segments(edges: Any) -> list[float]:
-    """Flatten cached feature-edge polylines into independent Three.js segments."""
-    lines = edges.lines
-    points = edges.points
-    segments: list[float] = []
-    cursor = 0
-    while cursor < len(lines):
-        point_count = int(lines[cursor])
-        point_ids = [int(value) for value in lines[cursor + 1:cursor + point_count + 1]]
-        for start, end in zip(point_ids, point_ids[1:]):
-            segments.extend(float(value) for value in points[start])
-            segments.extend(float(value) for value in points[end])
-        cursor += point_count + 1
-    return segments
+def _encode_buffer(values: np.ndarray) -> str:
+    """Base64 encode a contiguous little-endian typed buffer without boxing values."""
+    contiguous = np.ascontiguousarray(values.astype(values.dtype.newbyteorder("<"), copy=False))
+    return base64.b64encode(contiguous.data).decode("ascii")
 
 
 def _snapshot_footprint(snapshot: dict[str, Any]) -> dict[str, int]:
     """Report JSON bridge cardinality without creating another representation."""
     return {
-        "positionValues": len(snapshot["positions"]),
-        "indexValues": len(snapshot["indices"]),
-        "edgePositionValues": len(snapshot["edgePositions"]),
-        "triangleCount": len(snapshot["triangleFaceIds"]),
+        "positionsBase64Bytes": len(snapshot["positions"]),
+        "indicesBase64Bytes": len(snapshot["indices"]),
+        "edgePointsBase64Bytes": len(snapshot["edgePoints"]),
+        "edgeCellsBase64Bytes": len(snapshot["edgeCells"]),
     }
 
 

@@ -1,3 +1,7 @@
+import base64
+
+import numpy as np
+
 from palletlab.application.step_import_service import (
     StepImportService,
     _model_pallet_layers,
@@ -52,14 +56,20 @@ def test_step_snapshot_keeps_triangle_to_cad_face_mapping():
         edges = Edges()
         faces = (Face(),)
 
-    assert _snapshot_from_cached_model(Model()) == {
-        "positions": [0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 200.0, 300.0],
-        "indices": [0, 1, 2],
-        "triangleFaceIds": [7],
-        "selectableFaceIds": [7],
-        "edgePositions": [0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 200.0, 300.0],
-        "bounds": [0.0, 100.0, 0.0, 200.0, 0.0, 300.0],
-    }
+    snapshot = _snapshot_from_cached_model(Model())
+
+    assert snapshot["encoding"] == "typed-buffer-v1"
+    assert np.frombuffer(base64.b64decode(snapshot["positions"]), dtype="<f4").tolist() == [
+        0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 200.0, 300.0,
+    ]
+    assert np.frombuffer(base64.b64decode(snapshot["indices"]), dtype="<u4").tolist() == [0, 1, 2]
+    assert np.frombuffer(base64.b64decode(snapshot["triangleFaceIds"]), dtype="<i4").tolist() == [7]
+    assert snapshot["selectableFaceIds"] == [7]
+    assert np.frombuffer(base64.b64decode(snapshot["edgePoints"]), dtype="<f4").tolist() == [
+        0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 200.0, 300.0,
+    ]
+    assert np.frombuffer(base64.b64decode(snapshot["edgeCells"]), dtype="<u4").tolist() == [3, 0, 1, 2]
+    assert snapshot["bounds"] == [0.0, 100.0, 0.0, 200.0, 0.0, 300.0]
 
 
 def test_step_pallet_layers_match_the_desktop_three_layer_construction():

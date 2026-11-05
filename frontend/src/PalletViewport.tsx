@@ -7,6 +7,7 @@ import {
   LinearFilter,
   MathUtils,
   PerspectiveCamera,
+  Uint32BufferAttribute,
   Vector3,
 } from "three";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -46,14 +47,86 @@ export type ViewportInsertionMarker = {
   preview: { center: [number, number, number]; size: [number, number, number] };
 };
 export type StepModelSnapshot = {
-  positions: number[];
-  indices: number[];
-  triangleFaceIds: number[];
+  encoding: "typed-buffer-v1";
+  positions: string;
+  indices: string;
+  triangleFaceIds: string;
   selectableFaceIds: number[];
-  edgePositions: number[];
+  edgePoints: string;
+  edgeCells: string;
   bounds: [number, number, number, number, number, number];
 };
 type ManualBeamSection = { height: number; width: number };
+
+type DecodedStepModel = {
+  positions: Float32Array;
+  indices: Uint32Array;
+  triangleFaceIds: Int32Array;
+  edgePoints: Float32Array;
+  edgeCells: Uint32Array;
+};
+
+function decodeBase64(source: string): Uint8Array {
+  const text = window.atob(source);
+  const result = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index += 1) result[index] = text.charCodeAt(index);
+  return result;
+}
+
+function decodeTypedArray<T extends Float32Array | Uint32Array | Int32Array>(
+  source: string,
+  bytesPerValue: number,
+  create: (buffer: ArrayBufferLike, byteOffset: number, length: number) => T,
+): T {
+  const bytes = decodeBase64(source);
+  if (bytes.byteLength % bytesPerValue !== 0) throw new Error("Некорректный бинарный буфер STEP-модели.");
+  return create(bytes.buffer, bytes.byteOffset, bytes.byteLength / bytesPerValue);
+}
+
+function decodeStepModel(model: StepModelSnapshot): DecodedStepModel {
+  if (model.encoding !== "typed-buffer-v1") throw new Error("Неподдерживаемый формат STEP-модели.");
+  return {
+    positions: decodeTypedArray(model.positions, 4, (buffer, offset, length) => new Float32Array(buffer, offset, length)),
+    indices: decodeTypedArray(model.indices, 4, (buffer, offset, length) => new Uint32Array(buffer, offset, length)),
+    triangleFaceIds: decodeTypedArray(model.triangleFaceIds, 4, (buffer, offset, length) => new Int32Array(buffer, offset, length)),
+    edgePoints: decodeTypedArray(model.edgePoints, 4, (buffer, offset, length) => new Float32Array(buffer, offset, length)),
+    edgeCells: decodeTypedArray(model.edgeCells, 4, (buffer, offset, length) => new Uint32Array(buffer, offset, length)),
+  };
+}
+
+function mapStepPositions(source: Float32Array): Float32Array {
+  const positions = new Float32Array(source.length);
+  for (let index = 0; index < source.length; index += 3) {
+    positions[index] = source[index] / 1000;
+    positions[index + 1] = source[index + 2] / 1000;
+    positions[index + 2] = source[index + 1] / 1000;
+  }
+  return positions;
+}
+
+function edgeSegmentIndices(cells: Uint32Array): Uint32Array {
+  let cursor = 0;
+  let count = 0;
+  while (cursor < cells.length) {
+    const pointCount = cells[cursor];
+    if (pointCount === undefined || cursor + pointCount >= cells.length) throw new Error("Некорректные рёбра STEP-модели.");
+    count += Math.max(0, pointCount - 1);
+    cursor += pointCount + 1;
+  }
+  const indices = new Uint32Array(count * 2);
+  cursor = 0;
+  let target = 0;
+  while (cursor < cells.length) {
+    const pointCount = cells[cursor];
+    for (let offset = 1; offset < pointCount; offset += 1) {
+      indices[target] = cells[cursor + offset];
+      indices[target + 1] = cells[cursor + offset + 1];
+      target += 2;
+    }
+    cursor += pointCount + 1;
+  }
+  return indices;
+}
 
 function point([x, y, z]: [number, number, number]): [number, number, number] {
   return [x / 1000, z / 1000, y / 1000];
@@ -260,32 +333,22 @@ function StepModel({
   onHoverFace: (faceId: number | null) => void;
   onSelectFace: (faceId: number) => void;
 }) {
+  const decoded = useMemo(() => decodeStepModel(model), [model]);
+  const displayPositions = useMemo(() => mapStepPositions(decoded.positions), [decoded.positions]);
   const geometry = useMemo(() => {
     const result = new BufferGeometry();
-    const positions = new Float32Array(model.positions.length);
-    for (let source = 0; source < model.positions.length; source += 3) {
-      // Python coordinates (X, Y, Z) become the web viewport's (X, Z, Y).
-      positions[source] = model.positions[source] / 1000;
-      positions[source + 1] = model.positions[source + 2] / 1000;
-      positions[source + 2] = model.positions[source + 1] / 1000;
-    }
-    result.setAttribute("position", new Float32BufferAttribute(positions, 3));
-    result.setIndex(model.indices);
+    result.setAttribute("position", new Float32BufferAttribute(displayPositions, 3));
+    result.setIndex(new Uint32BufferAttribute(decoded.indices, 1));
     result.computeVertexNormals();
     return result;
-  }, [model]);
+  }, [decoded.indices, displayPositions]);
 
   const edgeGeometry = useMemo(() => {
     const result = new BufferGeometry();
-    const positions = new Float32Array(model.edgePositions.length);
-    for (let source = 0; source < model.edgePositions.length; source += 3) {
-      positions[source] = model.edgePositions[source] / 1000;
-      positions[source + 1] = model.edgePositions[source + 2] / 1000;
-      positions[source + 2] = model.edgePositions[source + 1] / 1000;
-    }
-    result.setAttribute("position", new Float32BufferAttribute(positions, 3));
+    result.setAttribute("position", new Float32BufferAttribute(mapStepPositions(decoded.edgePoints), 3));
+    result.setIndex(new Uint32BufferAttribute(edgeSegmentIndices(decoded.edgeCells), 1));
     return result;
-  }, [model]);
+  }, [decoded.edgeCells, decoded.edgePoints]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
   useEffect(() => () => edgeGeometry.dispose(), [edgeGeometry]);
@@ -297,14 +360,14 @@ function StepModel({
         geometry={geometry}
         onPointerMove={(event) => {
           const faceId = typeof event.faceIndex === "number"
-            ? model.triangleFaceIds[event.faceIndex]
+            ? decoded.triangleFaceIds[event.faceIndex]
             : undefined;
           onHoverFace(faceId !== undefined && selectable.has(faceId) ? faceId : null);
         }}
         onPointerOut={() => onHoverFace(null)}
         onClick={(event) => {
           const faceId = typeof event.faceIndex === "number"
-            ? model.triangleFaceIds[event.faceIndex]
+            ? decoded.triangleFaceIds[event.faceIndex]
             : undefined;
           if (faceId !== undefined && selectable.has(faceId)) {
             event.stopPropagation();
@@ -319,7 +382,9 @@ function StepModel({
       </lineSegments>
       {highlightedFace !== null ? (
         <StepFaceOverlay
-          model={model}
+          positions={displayPositions}
+          indices={decoded.indices}
+          triangleFaceIds={decoded.triangleFaceIds}
           faceId={highlightedFace}
           selected={highlightedFace === selectedFace}
         />
@@ -328,22 +393,36 @@ function StepModel({
   );
 }
 
-function StepFaceOverlay({ model, faceId, selected }: { model: StepModelSnapshot; faceId: number; selected: boolean }) {
+function StepFaceOverlay({
+  positions,
+  indices,
+  triangleFaceIds,
+  faceId,
+  selected,
+}: {
+  positions: Float32Array;
+  indices: Uint32Array;
+  triangleFaceIds: Int32Array;
+  faceId: number;
+  selected: boolean;
+}) {
   const geometry = useMemo(() => {
-    const selectedIndices = model.triangleFaceIds.flatMap((candidate, triangle) =>
-      candidate === faceId ? model.indices.slice(triangle * 3, triangle * 3 + 3) : [],
-    );
-    const result = new BufferGeometry();
-    const positions = new Float32Array(model.positions.length);
-    for (let source = 0; source < model.positions.length; source += 3) {
-      positions[source] = model.positions[source] / 1000;
-      positions[source + 1] = model.positions[source + 2] / 1000;
-      positions[source + 2] = model.positions[source + 1] / 1000;
+    let selectedCount = 0;
+    for (const candidate of triangleFaceIds) if (candidate === faceId) selectedCount += 1;
+    const selectedIndices = new Uint32Array(selectedCount * 3);
+    let target = 0;
+    for (let triangle = 0; triangle < triangleFaceIds.length; triangle += 1) {
+      if (triangleFaceIds[triangle] !== faceId) continue;
+      selectedIndices[target] = indices[triangle * 3];
+      selectedIndices[target + 1] = indices[triangle * 3 + 1];
+      selectedIndices[target + 2] = indices[triangle * 3 + 2];
+      target += 3;
     }
+    const result = new BufferGeometry();
     result.setAttribute("position", new Float32BufferAttribute(positions, 3));
-    result.setIndex(selectedIndices);
+    result.setIndex(new Uint32BufferAttribute(selectedIndices, 1));
     return result;
-  }, [faceId, model]);
+  }, [faceId, indices, positions, triangleFaceIds]);
   useEffect(() => () => geometry.dispose(), [geometry]);
   return (
     <mesh geometry={geometry} renderOrder={3}>
