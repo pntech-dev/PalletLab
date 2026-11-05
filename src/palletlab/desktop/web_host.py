@@ -77,6 +77,9 @@ class WebApplicationApi:
     def step_model_snapshot(self, operation_id: object) -> dict[str, Any]:
         return self._step_imports.model_snapshot(operation_id)
 
+    def build_step_pallet(self, operation_id: object, project: object, face_index: object) -> dict[str, Any]:
+        return self._step_imports.build_pallet(operation_id, project, face_index)
+
     def _choose_file(self, mode: str) -> str | None:
         if self._window is None:
             raise RuntimeError("Web window is not ready.")

@@ -28,3 +28,10 @@ def test_protocol_rejects_a_message_from_another_version():
 
     assert messages == []
     assert tail == ""
+
+
+def test_protocol_preserves_worker_performance_metrics():
+    messages, tail = consume_messages("", encode_message("metrics", trace={"points": [{"stage": "worker-start"}]}))
+
+    assert messages == [{"kind": "metrics", "trace": {"points": [{"stage": "worker-start"}]}}]
+    assert tail == ""

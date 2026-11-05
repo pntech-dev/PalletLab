@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
@@ -11,6 +12,15 @@ from typing import Any
 from uuid import uuid4
 
 from palletlab.importers.step_import_protocol import consume_messages
+from palletlab.core.calculator import calculate_direction
+from palletlab.core.models import BeamSection, LayerInput
+from palletlab.core.persistence import ProjectPersistenceError, project_from_dict
+from palletlab.core.validation import CalculationError
+from palletlab.step_performance import StepPerformanceTrace, geometry_footprint, write_step_performance
+
+
+_MODEL_STANDARD_SECTION = BeamSection(70, 50)
+_MODEL_TOP_EDGE_SECTION = BeamSection(25, 100)
 
 
 class StepImportService:
@@ -84,14 +94,92 @@ class StepImportService:
             return status
         if status.get("state") != "completed":
             return {"ok": False, "error": "STEP-модель ещё не подготовлена."}
+        trace = StepPerformanceTrace()
         try:
             from palletlab.importers.step_model import load_cached_step_model
 
             model = load_cached_step_model(str(status["path"]))
             if model is None:
                 raise RuntimeError("Кэш STEP-модели не найден.")
-            return {"ok": True, "model": _snapshot_from_cached_model(model)}
+            trace.checkpoint("cache-load", **geometry_footprint(model.mesh, model.edges))
+            snapshot = _snapshot_from_cached_model(model)
+            trace.checkpoint("snapshot-serialised", **_snapshot_footprint(snapshot))
+            report = trace.report()
+            write_step_performance("model-snapshot", report)
+            return {"ok": True, "model": snapshot, "performance": report}
         except Exception as exc:
+            trace.checkpoint("failed", error=str(exc))
+            write_step_performance("model-snapshot", trace.report())
+            return {"ok": False, "error": str(exc)}
+
+    def build_pallet(self, operation_id: object, project: object, face_index: object) -> dict[str, Any]:
+        """Build the standard STEP-driven pallet from one selected CAD face."""
+        if not isinstance(face_index, int) or isinstance(face_index, bool) or face_index < 0:
+            return {"ok": False, "error": "Некорректная грань опоры."}
+        status = self.status(operation_id)
+        if not status.get("ok"):
+            return status
+        if status.get("state") != "completed":
+            return {"ok": False, "error": "STEP-модель ещё не подготовлена."}
+        trace = StepPerformanceTrace()
+        try:
+            from palletlab.application.service import ApplicationService
+            from palletlab.application.snapshots import project_snapshot
+            from palletlab.importers.step_model import (
+                coplanar_supports,
+                load_cached_step_model,
+                pallet_inputs_from_supports,
+            )
+
+            state = project_from_dict(project)
+            model = load_cached_step_model(str(status["path"]))
+            if model is None:
+                raise RuntimeError("Кэш STEP-модели не найден.")
+            trace.checkpoint("cache-load", **geometry_footprint(model.mesh, model.edges))
+            supports = coplanar_supports(model, face_index)
+            trace.checkpoint("support-detection", supportCount=len(supports))
+            if state.length_input is None or state.width_input is None:
+                raise RuntimeError("В проекте отсутствуют параметры поддона.")
+            length, width, placed_mesh, placed_edges = pallet_inputs_from_supports(
+                model,
+                supports,
+                length_beam_height=_MODEL_STANDARD_SECTION.height,
+                length_beam_width=_MODEL_STANDARD_SECTION.width,
+                width_beam_height=_MODEL_STANDARD_SECTION.height,
+                width_beam_width=_MODEL_STANDARD_SECTION.width,
+                length_margin_start=state.length_input.margin_start,
+                length_margin_end=state.length_input.margin_end,
+                width_margin_start=state.width_input.margin_start,
+                width_margin_end=state.width_input.margin_end,
+                round_pallet_size=state.rounding_step != 0,
+                rounding_step=state.rounding_step or 5,
+                reference_support_index=face_index,
+                pallet_height=_MODEL_STANDARD_SECTION.height * 3,
+            )
+            trace.checkpoint("model-placement", **geometry_footprint(placed_mesh, placed_edges))
+            layers, top_edge_sections = _model_pallet_layers(length, width)
+            state.manual_beams.clear()
+            state.beam_sections.clear()
+            state.layer_sections = top_edge_sections
+            controller, errors = ApplicationService._controller_for(state)
+            if controller.calculate_layers(layers, show_error=False) is None:
+                raise CalculationError(errors[-1] if errors else "Не удалось построить поддон по модели.")
+            trace.checkpoint("pallet-calculation")
+            model_snapshot = _snapshot_from_geometry(placed_mesh, placed_edges, model.faces)
+            trace.checkpoint("snapshot-serialised", **_snapshot_footprint(model_snapshot))
+            report = trace.report()
+            write_step_performance("build-pallet", report)
+            return {
+                "ok": True,
+                "snapshot": project_snapshot(state),
+                "model": model_snapshot,
+                "supportCount": len(supports),
+                "referenceFace": face_index,
+                "performance": report,
+            }
+        except (CalculationError, ProjectPersistenceError, RuntimeError, ValueError) as exc:
+            trace.checkpoint("failed", error=str(exc))
+            write_step_performance("build-pallet", trace.report())
             return {"ok": False, "error": str(exc)}
 
     def _run(self, operation_id: str, path: Path) -> None:
@@ -132,6 +220,8 @@ class StepImportService:
                         )
                     elif message["kind"] == "error":
                         worker_error = str(message["message"])
+                    elif message["kind"] == "metrics":
+                        write_step_performance("import-worker", dict(message["trace"]))
                     elif message["kind"] == "done":
                         worker_done = True
 
@@ -180,17 +270,22 @@ def _snapshot_from_cached_model(model: Any) -> dict[str, Any]:
     a browser click can later be mapped back to support detection without
     re-reading or approximating the CAD topology in JavaScript.
     """
-    faces = model.mesh.faces
-    face_ids = model.mesh.cell_data["step_face_index"]
+    return _snapshot_from_geometry(model.mesh, model.edges, model.faces)
+
+
+def _snapshot_from_geometry(mesh: Any, edges: Any, faces: Any) -> dict[str, Any]:
+    """Flatten cached or placed STEP geometry while preserving face identity."""
+    raw_faces = mesh.faces
+    face_ids = mesh.cell_data["step_face_index"]
     indices: list[int] = []
     triangle_face_ids: list[int] = []
     cursor = 0
     triangle_index = 0
-    while cursor < len(faces):
-        point_count = int(faces[cursor])
+    while cursor < len(raw_faces):
+        point_count = int(raw_faces[cursor])
         if point_count != 3:
             raise RuntimeError("STEP-кэш содержит нетреугольную грань, которую нельзя показать в web viewport.")
-        indices.extend(int(value) for value in faces[cursor + 1:cursor + 4])
+        indices.extend(int(value) for value in raw_faces[cursor + 1:cursor + 4])
         triangle_face_ids.append(int(face_ids[triangle_index]))
         cursor += point_count + 1
         triangle_index += 1
@@ -199,16 +294,16 @@ def _snapshot_from_cached_model(model: Any) -> dict[str, Any]:
 
     selectable_faces = [
         face.index
-        for face in model.faces
+        for face in faces
         if face.point is not None and face.normal is not None
     ]
-    bounds = [float(value) for value in model.mesh.bounds]
+    bounds = [float(value) for value in mesh.bounds]
     return {
-        "positions": [float(value) for point in model.mesh.points for value in point],
+        "positions": [float(value) for point in mesh.points for value in point],
         "indices": indices,
         "triangleFaceIds": triangle_face_ids,
         "selectableFaceIds": selectable_faces,
-        "edgePositions": _edge_segments(model.edges),
+        "edgePositions": _edge_segments(edges),
         "bounds": bounds,
     }
 
@@ -227,3 +322,47 @@ def _edge_segments(edges: Any) -> list[float]:
             segments.extend(float(value) for value in points[end])
         cursor += point_count + 1
     return segments
+
+
+def _snapshot_footprint(snapshot: dict[str, Any]) -> dict[str, int]:
+    """Report JSON bridge cardinality without creating another representation."""
+    return {
+        "positionValues": len(snapshot["positions"]),
+        "indexValues": len(snapshot["indices"]),
+        "edgePositionValues": len(snapshot["edgePositions"]),
+        "triangleCount": len(snapshot["triangleFaceIds"]),
+    }
+
+
+def _model_pallet_layers(length_input: Any, width_input: Any) -> tuple[list[LayerInput], dict[tuple[str, int], BeamSection]]:
+    """Use the same three-layer STEP construction as the existing desktop UI."""
+    length = replace(
+        length_input,
+        beam_height=_MODEL_STANDARD_SECTION.height,
+        beam_width=_MODEL_STANDARD_SECTION.width,
+    )
+    width = replace(
+        width_input,
+        beam_height=_MODEL_STANDARD_SECTION.height,
+        beam_width=_MODEL_STANDARD_SECTION.width,
+    )
+    directions = {"length": length, "width": width}
+    bottom_axis = (
+        "length"
+        if calculate_direction(length).pallet_size >= calculate_direction(width).pallet_size
+        else "width"
+    )
+    middle_axis = "width" if bottom_axis == "length" else "length"
+    top_centres = calculate_direction(directions[bottom_axis]).beam_centers
+    top_sections = {
+        ("layer-1", index): _MODEL_TOP_EDGE_SECTION
+        for index in (0, len(top_centres) - 1)
+    }
+    return (
+        [
+            LayerInput(bottom_axis, bottom_axis, directions[bottom_axis]),
+            LayerInput(middle_axis, middle_axis, directions[middle_axis]),
+            LayerInput("layer-1", bottom_axis, directions[bottom_axis]),
+        ],
+        top_sections,
+    )

@@ -1,4 +1,9 @@
-from palletlab.application.step_import_service import StepImportService, _snapshot_from_cached_model
+from palletlab.application.step_import_service import (
+    StepImportService,
+    _model_pallet_layers,
+    _snapshot_from_cached_model,
+)
+from palletlab.core.models import DirectionInput
 
 
 def test_step_import_rejects_non_step_files_without_starting_a_worker(tmp_path):
@@ -55,3 +60,15 @@ def test_step_snapshot_keeps_triangle_to_cad_face_mapping():
         "edgePositions": [0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 200.0, 300.0],
         "bounds": [0.0, 100.0, 0.0, 200.0, 0.0, 300.0],
     }
+
+
+def test_step_pallet_layers_match_the_desktop_three_layer_construction():
+    length = DirectionInput(70, 50, (1000,), 200, 200, 100, 100)
+    width = DirectionInput(70, 50, (500,), 200, 200, 100, 100)
+
+    layers, sections = _model_pallet_layers(length, width)
+
+    assert [layer.layer_id for layer in layers] == ["length", "width", "layer-1"]
+    assert [layer.axis for layer in layers] == ["length", "width", "length"]
+    assert sections[("layer-1", 0)].height == 25
+    assert sections[("layer-1", 0)].width == 100

@@ -83,6 +83,11 @@ type StepImportOperation = {
   error?: string;
 };
 type StepModelResponse = { ok: boolean; error?: string; model?: StepModelSnapshot };
+type StepPalletResponse = CalculationResponse & {
+  model?: StepModelSnapshot;
+  supportCount?: number;
+  referenceFace?: number;
+};
 
 const AUTOSAVE_KEY = "palletlab.web.autosave.v1";
 const HISTORY_LIMIT = 50;
@@ -157,6 +162,7 @@ declare global {
         step_import_status: (operationId: string) => Promise<StepImportOperation>;
         cancel_step_import: (operationId: string) => Promise<StepImportOperation>;
         step_model_snapshot: (operationId: string) => Promise<StepModelResponse>;
+        build_step_pallet: (operationId: string, project: Project, faceIndex: number) => Promise<StepPalletResponse>;
       };
     };
   }
@@ -178,6 +184,8 @@ export function App() {
   const [stepImport, setStepImport] = useState<StepImportOperation | null>(null);
   const [stepModel, setStepModel] = useState<StepModelSnapshot | null>(null);
   const [selectedStepFace, setSelectedStepFace] = useState<number | null>(null);
+  const [stepPalletBuilt, setStepPalletBuilt] = useState(false);
+  const [buildingStepPallet, setBuildingStepPallet] = useState(false);
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
   const [beamTool, setBeamTool] = useState<"none" | "delete" | "section">("none");
   const [section, setSection] = useState<BeamSection>({
@@ -369,6 +377,8 @@ export function App() {
     if (response.cancelled) return;
     setStepModel(null);
     setSelectedStepFace(null);
+    setStepPalletBuilt(false);
+    setBuildingStepPallet(false);
     setStepImport(response);
   }
 
@@ -401,6 +411,37 @@ export function App() {
     }
     void loadPreparedModel();
   }, [stepImport?.operationId, stepImport?.state]);
+
+  async function buildStepPallet(faceIndex = selectedStepFace) {
+    const api = window.pywebview?.api;
+    if (!api || !project || !stepImport?.operationId || faceIndex === null || buildingStepPallet) return;
+    setBuildingStepPallet(true);
+    try {
+      const response = await api.build_step_pallet(stepImport.operationId, project, faceIndex);
+      applyCalculation(response);
+      if (response.ok && response.snapshot && response.model) {
+        updateHistory(project, response.snapshot.project);
+        applyProject(response.snapshot.project);
+        setStepModel(response.model);
+        setStepPalletBuilt(true);
+        setFitRequest((value) => value + 1);
+        setCalculationError(null);
+      }
+    } catch (error) {
+      setCalculationError(error instanceof Error ? error.message : "Не удалось построить поддон по модели.");
+    } finally {
+      setBuildingStepPallet(false);
+    }
+  }
+
+  function selectStepSupport(faceId: number) {
+    if (stepPalletBuilt || buildingStepPallet) return;
+    setSelectedStepFace(faceId);
+    // The established desktop workflow starts the calculation directly from a
+    // support-face click.  Keeping the web flow identical also prevents the
+    // selected model from looking like a completed, but empty, operation.
+    void buildStepPallet(faceId);
+  }
 
   async function resetProject() {
     const api = window.pywebview?.api;
@@ -879,7 +920,16 @@ export function App() {
               <button type="button" onClick={() => void cancelStepImport()}>Cancel import</button>
             ) : null}
             {stepImport.state === "completed" ? (
-              <span>{stepModel ? "Choose a planar support face in the 3D view." : "Preparing the model for 3D view…"}</span>
+              <>
+                <span>
+                  {stepPalletBuilt
+                    ? "The pallet was built from the selected support plane."
+                    : stepModel
+                      ? "Choose a planar support face in the 3D view."
+                      : "Preparing the model for 3D view…"}
+                </span>
+                {buildingStepPallet ? <span>Building pallet from the selected support…</span> : null}
+              </>
             ) : null}
           </div>
         ) : null}
@@ -1162,8 +1212,8 @@ export function App() {
                 fitRequest={fitRequest}
                 stepModel={stepModel}
                 selectedStepFace={selectedStepFace}
-                onSelectStepFace={setSelectedStepFace}
-                showPallet={stepModel === null}
+                onSelectStepFace={selectStepSupport}
+                showPallet={stepModel === null || stepPalletBuilt}
                 selectedBeams={selectedBeams.map(
                   (beam) => `${beam.layerId}:${beam.layerIndex}`,
                 )}

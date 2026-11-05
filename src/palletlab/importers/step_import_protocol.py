@@ -32,6 +32,9 @@ def _parse_message(raw: object) -> dict[str, object] | None:
     if kind == "stage":
         name = raw.get("name")
         return {"kind": kind, "name": name} if isinstance(name, str) else None
+    if kind == "metrics":
+        trace = raw.get("trace")
+        return {"kind": kind, "trace": trace} if isinstance(trace, dict) else None
     if kind == "error":
         message = raw.get("message")
         return {"kind": kind, "message": message} if isinstance(message, str) else None
