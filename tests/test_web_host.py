@@ -22,13 +22,18 @@ def test_web_api_uses_a_native_folder_choice_for_kompas_export(monkeypatch, tmp_
     assert response == {"ok": True, "project": project, "directory": str(tmp_path)}
 
 
-def test_web_api_returns_solidworks_template_paths(monkeypatch, tmp_path) -> None:
+def test_web_api_returns_one_solidworks_template_path(monkeypatch, tmp_path) -> None:
     api = WebApplicationApi()
     part = tmp_path / "part.prtdot"
-    assembly = tmp_path / "assembly.asmdot"
-    choices = iter((str(part), str(assembly)))
-    monkeypatch.setattr(api, "_choose_file", lambda _mode: next(choices))
+    monkeypatch.setattr(api, "_choose_file", lambda mode: str(part) if mode == "solidworks_part" else None)
 
-    response = api.select_solidworks_templates()
+    response = api.select_solidworks_template("part")
 
-    assert response == {"ok": True, "partTemplate": str(part), "assemblyTemplate": str(assembly)}
+    assert response == {"ok": True, "path": str(part)}
+
+
+def test_web_api_rejects_an_unknown_solidworks_template_type() -> None:
+    assert WebApplicationApi().select_solidworks_template("drawing") == {
+        "ok": False,
+        "error": "Некорректный тип шаблона SolidWorks.",
+    }

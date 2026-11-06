@@ -92,13 +92,18 @@ type StepPalletResponse = CalculationResponse & {
   referenceFace?: number;
 };
 type CommandResponse = { ok: boolean; cancelled?: boolean; error?: string; output?: string };
-type SolidWorksTemplatesResponse = CommandResponse & { partTemplate?: string; assemblyTemplate?: string };
+type SolidWorksTemplateResponse = CommandResponse & { path?: string };
 type SolidWorksMaterialsResponse = CommandResponse & { materialLibrary?: string; materials?: string[] };
 type SolidWorksOptions = {
   partTemplate: string;
   assemblyTemplate: string;
   materialLibrary: string;
   materialName: string;
+};
+type ExportResult = {
+  target: "КОМПАС-3D" | "SolidWorks";
+  ok: boolean;
+  message: string;
 };
 
 const AUTOSAVE_KEY = "palletlab.web.autosave.v1";
@@ -188,7 +193,7 @@ declare global {
           project?: Project;
         }>;
         export_kompas: (project: Project) => Promise<CommandResponse>;
-        select_solidworks_templates: () => Promise<SolidWorksTemplatesResponse>;
+        select_solidworks_template: (kind: "part" | "assembly") => Promise<SolidWorksTemplateResponse>;
         select_solidworks_material_library: () => Promise<SolidWorksMaterialsResponse>;
         export_solidworks: (project: Project, options: SolidWorksOptions) => Promise<CommandResponse>;
         import_step_model: () => Promise<StepImportOperation>;
@@ -221,8 +226,11 @@ export function App() {
   const [stepPalletBuilt, setStepPalletBuilt] = useState(false);
   const [solidWorksOptions, setSolidWorksOptions] = useState<SolidWorksOptions | null>(storedSolidWorksOptions);
   const [solidWorksMaterials, setSolidWorksMaterials] = useState<string[]>([]);
-  const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState<"kompas" | "solidworks" | null>(null);
+  const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const [solidWorksSetupOpen, setSolidWorksSetupOpen] = useState(false);
+  const [solidWorksDraft, setSolidWorksDraft] = useState<SolidWorksOptions | null>(null);
+  const [solidWorksSetupError, setSolidWorksSetupError] = useState<string | null>(null);
   const [buildingStepPallet, setBuildingStepPallet] = useState(false);
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
   const [beamTool, setBeamTool] = useState<"none" | "delete" | "section">("none");
@@ -442,72 +450,109 @@ export function App() {
     }
   }
 
-  async function selectSolidWorksTemplates() {
-    const response = await window.pywebview?.api?.select_solidworks_templates();
+  async function selectSolidWorksTemplate(kind: "part" | "assembly") {
+    const response = await window.pywebview?.api?.select_solidworks_template(kind);
     if (!response || response.cancelled) return;
-    if (!response.ok || !response.partTemplate || !response.assemblyTemplate) {
-      setExportStatus(response?.error ?? "Не удалось выбрать шаблоны SolidWorks.");
+    if (!response.ok || !response.path) {
+      setSolidWorksSetupError(response?.error ?? "Не удалось выбрать шаблоны SolidWorks.");
       return;
     }
-    const previous = solidWorksOptions ?? storedSolidWorksOptions();
-    rememberSolidWorksOptions({
-      partTemplate: response.partTemplate,
-      assemblyTemplate: response.assemblyTemplate,
+    const previous = solidWorksDraft ?? solidWorksOptions ?? storedSolidWorksOptions();
+    setSolidWorksDraft({
+      partTemplate: kind === "part" ? response.path : previous?.partTemplate ?? "",
+      assemblyTemplate: kind === "assembly" ? response.path : previous?.assemblyTemplate ?? "",
       materialLibrary: previous?.materialLibrary ?? "",
       materialName: previous?.materialName ?? "",
     });
-    setExportStatus("Шаблоны SolidWorks выбраны.");
   }
 
   async function selectSolidWorksMaterialLibrary() {
     const response = await window.pywebview?.api?.select_solidworks_material_library();
     if (!response || response.cancelled) return;
     if (!response.ok || !response.materialLibrary || !response.materials?.length) {
-      setExportStatus(response?.error ?? "Не удалось прочитать библиотеку материалов SolidWorks.");
+      setSolidWorksSetupError(response?.error ?? "Не удалось прочитать библиотеку материалов SolidWorks.");
       return;
     }
-    const previous = solidWorksOptions ?? storedSolidWorksOptions();
+    const previous = solidWorksDraft ?? solidWorksOptions ?? storedSolidWorksOptions();
     const materialName = response.materials.includes(previous?.materialName ?? "")
       ? previous!.materialName
       : response.materials[0];
     setSolidWorksMaterials(response.materials);
-    rememberSolidWorksOptions({
+    setSolidWorksDraft({
       partTemplate: previous?.partTemplate ?? "",
       assemblyTemplate: previous?.assemblyTemplate ?? "",
       materialLibrary: response.materialLibrary,
       materialName,
     });
-    setExportStatus("Библиотека материалов SolidWorks выбрана.");
+  }
+
+  function openSolidWorksSetup() {
+    setSolidWorksSetupError(null);
+    setSolidWorksDraft(solidWorksOptions ?? storedSolidWorksOptions() ?? {
+      partTemplate: "",
+      assemblyTemplate: "",
+      materialLibrary: "",
+      materialName: "",
+    });
+    setSolidWorksSetupOpen(true);
   }
 
   async function exportKompas() {
     const api = window.pywebview?.api;
     if (!api || !project) return;
     setExporting("kompas");
-    setExportStatus(null);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     try {
       const response = await api.export_kompas(project);
-      if (!response.cancelled) setExportStatus(response.ok ? `КОМПАС-3D: экспорт завершён (${response.output}).` : response.error ?? "Экспорт в КОМПАС-3D не выполнен.");
+      if (!response.cancelled) {
+        setExportResult({
+          target: "КОМПАС-3D",
+          ok: response.ok,
+          message: response.ok
+            ? `Экспорт завершён. Файлы сохранены в папке:\n${response.output}`
+            : response.error ?? "Экспорт в КОМПАС-3D не выполнен.",
+        });
+      }
     } finally {
       setExporting(null);
     }
   }
 
-  async function exportSolidWorks() {
+  async function exportSolidWorks(options: SolidWorksOptions) {
     const api = window.pywebview?.api;
     if (!api || !project) return;
-    if (!solidWorksOptions || Object.values(solidWorksOptions).some((value) => !value)) {
-      setExportStatus("Перед экспортом выберите шаблоны и библиотеку материалов SolidWorks.");
-      return;
-    }
     setExporting("solidworks");
-    setExportStatus(null);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     try {
-      const response = await api.export_solidworks(project, solidWorksOptions);
-      if (!response.cancelled) setExportStatus(response.ok ? `SolidWorks: экспорт завершён (${response.output}).` : response.error ?? "Экспорт в SolidWorks не выполнен.");
+      const response = await api.export_solidworks(project, options);
+      if (!response.cancelled) {
+        setExportResult({
+          target: "SolidWorks",
+          ok: response.ok,
+          message: response.ok
+            ? `Экспорт завершён. Файлы сохранены в папке:\n${response.output}`
+            : response.error ?? "Экспорт в SolidWorks не выполнен.",
+        });
+      }
     } finally {
       setExporting(null);
     }
+  }
+
+  function beginSolidWorksExport() {
+    if (!solidWorksOptions || Object.values(solidWorksOptions).some((value) => !value)) {
+      openSolidWorksSetup();
+      return;
+    }
+    void exportSolidWorks(solidWorksOptions);
+  }
+
+  function saveSolidWorksSetup() {
+    if (!solidWorksDraft || Object.values(solidWorksDraft).some((value) => !value)) return;
+    rememberSolidWorksOptions(solidWorksDraft);
+    setSolidWorksSetupError(null);
+    setSolidWorksSetupOpen(false);
+    void exportSolidWorks(solidWorksDraft);
   }
 
   async function importStepModel() {
@@ -1098,34 +1143,71 @@ export function App() {
               <button type="button" onClick={() => void exportKompas()} disabled={exporting !== null}>
                 {exporting === "kompas" ? "Exporting KOMPAS-3D…" : "Export KOMPAS-3D"}
               </button>
-              <button type="button" onClick={() => void selectSolidWorksTemplates()} disabled={exporting !== null}>
-                Select SolidWorks templates
-              </button>
-              <button type="button" onClick={() => void selectSolidWorksMaterialLibrary()} disabled={exporting !== null}>
-                Select SolidWorks material library
-              </button>
-              {solidWorksOptions?.materialLibrary ? (
-                <label>
-                  SolidWorks material
-                  <select
-                    value={solidWorksOptions.materialName}
-                    onChange={(event) => rememberSolidWorksOptions({ ...solidWorksOptions, materialName: event.target.value })}
-                  >
-                    {(solidWorksMaterials.length ? solidWorksMaterials : [solidWorksOptions.materialName]).map((name) => (
-                      <option key={name} value={name}>{name}</option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              <button type="button" onClick={() => void exportSolidWorks()} disabled={exporting !== null}>
+              <button type="button" onClick={beginSolidWorksExport} disabled={exporting !== null}>
                 {exporting === "solidworks" ? "Exporting SolidWorks…" : "Export SolidWorks"}
               </button>
+              <button type="button" className="secondary" onClick={openSolidWorksSetup} disabled={exporting !== null}>
+                SolidWorks settings
+              </button>
             </div>
-            <p className="cad-export-note">
-              SolidWorks requires selected part and assembly templates plus a registered material library.
-            </p>
-            {exportStatus ? <p className={exportStatus.includes("не выполнен") ? "error" : "export-status"}>{exportStatus}</p> : null}
+            <p className="cad-export-note">SolidWorks settings are requested only before the first export.</p>
           </fieldset>
+        ) : null}
+        {solidWorksSetupOpen && solidWorksDraft ? (
+          <div className="modal-backdrop" role="presentation">
+            <section className="modal" role="dialog" aria-modal="true" aria-labelledby="solidworks-settings-title">
+              <h2 id="solidworks-settings-title">Настройка экспорта SolidWorks</h2>
+              <p>Выберите шаблоны и библиотеку материалов. Настройка сохранится для следующих запусков.</p>
+              <label className="file-field">
+                Шаблон детали (.prtdot)
+                <span><input value={solidWorksDraft.partTemplate} readOnly /><button type="button" onClick={() => void selectSolidWorksTemplate("part")}>Обзор…</button></span>
+              </label>
+              <label className="file-field">
+                Шаблон сборки (.asmdot)
+                <span><input value={solidWorksDraft.assemblyTemplate} readOnly /><button type="button" onClick={() => void selectSolidWorksTemplate("assembly")}>Обзор…</button></span>
+              </label>
+              <label className="file-field">
+                Библиотека материалов (.sldmat)
+                <span><input value={solidWorksDraft.materialLibrary} readOnly /><button type="button" onClick={() => void selectSolidWorksMaterialLibrary()}>Обзор…</button></span>
+              </label>
+              <p className="modal-hint">Стандартный путь: <code>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\russian\sldmaterials\solidworks materials.sldmat</code></p>
+              <label>
+                Материал SolidWorks
+                <select
+                  value={solidWorksDraft.materialName}
+                  disabled={solidWorksMaterials.length === 0}
+                  onChange={(event) => setSolidWorksDraft({ ...solidWorksDraft, materialName: event.target.value })}
+                >
+                  {solidWorksMaterials.length ? solidWorksMaterials.map((name) => <option key={name} value={name}>{name}</option>) : <option>{solidWorksDraft.materialName || "Сначала выберите библиотеку"}</option>}
+                </select>
+              </label>
+              {solidWorksSetupError ? <p className="error">{solidWorksSetupError}</p> : null}
+              <footer className="modal-actions">
+                <button type="button" onClick={saveSolidWorksSetup} disabled={Object.values(solidWorksDraft).some((value) => !value)}>Сохранить</button>
+                <button type="button" className="secondary" onClick={() => { setSolidWorksSetupError(null); setSolidWorksSetupOpen(false); }}>Отмена</button>
+              </footer>
+            </section>
+          </div>
+        ) : null}
+        {exporting ? (
+          <div className="modal-backdrop" role="presentation">
+            <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite">
+              <h2>Экспорт выполняется</h2>
+              <p>{exporting === "solidworks" ? "SolidWorks создаёт детали и сборку…" : "КОМПАС-3D создаёт детали и сборку…"}</p>
+              <progress aria-label="Процесс экспорта" />
+              <p className="modal-hint">Не закрывайте PalletLab и CAD-систему до завершения операции.</p>
+            </section>
+          </div>
+        ) : null}
+        {exportResult ? (
+          <div className="modal-backdrop" role="presentation">
+            <section className="modal result-modal" role="dialog" aria-modal="true" aria-labelledby="export-result-title">
+              <h2 id="export-result-title">{exportResult.ok ? "Экспорт завершён" : "Не удалось экспортировать"}</h2>
+              <p><strong>{exportResult.target}</strong></p>
+              <p className={exportResult.ok ? "success-message" : "error"}>{exportResult.message}</p>
+              <footer className="modal-actions"><button type="button" onClick={() => setExportResult(null)}>Закрыть</button></footer>
+            </section>
+          </div>
         ) : null}
         {recoveryNotice ? <p className="recovery-notice">{recoveryNotice}</p> : null}
         {stepImport ? (

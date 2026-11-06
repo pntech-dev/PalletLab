@@ -76,14 +76,12 @@ class WebApplicationApi:
         directory = self._choose_directory("Выберите папку для экспорта КОМПАС-3D")
         return {"ok": False, "cancelled": True} if directory is None else ApplicationService().export_kompas(project, directory)
 
-    def select_solidworks_templates(self) -> dict[str, Any]:
-        part = self._choose_file("solidworks_part")
-        if part is None:
-            return {"ok": False, "cancelled": True}
-        assembly = self._choose_file("solidworks_assembly")
-        if assembly is None:
-            return {"ok": False, "cancelled": True}
-        return {"ok": True, "partTemplate": part, "assemblyTemplate": assembly}
+    def select_solidworks_template(self, kind: object) -> dict[str, Any]:
+        """Select exactly one template for the settings modal."""
+        if kind not in {"part", "assembly"}:
+            return {"ok": False, "error": "Некорректный тип шаблона SolidWorks."}
+        path = self._choose_file(f"solidworks_{kind}")
+        return {"ok": False, "cancelled": True} if path is None else {"ok": True, "path": path}
 
     def select_solidworks_material_library(self) -> dict[str, Any]:
         library = self._choose_file("solidworks_material")
