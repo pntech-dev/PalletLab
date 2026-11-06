@@ -12,6 +12,7 @@ from typing import Any
 from palletlab.application.service import ApplicationService
 from palletlab.application.step_import_service import StepImportService
 from palletlab.application.snapshots import SNAPSHOT_VERSION
+from palletlab.exporters.solidworks import SolidWorksMaterialLibraryError, available_materials
 from palletlab.version import __version__
 
 
@@ -71,6 +72,33 @@ class WebApplicationApi:
         path = self._choose_file("open")
         return {"ok": False, "cancelled": True} if path is None else ApplicationService().load(path)
 
+    def export_kompas(self, project: object) -> dict[str, Any]:
+        directory = self._choose_directory("Выберите папку для экспорта КОМПАС-3D")
+        return {"ok": False, "cancelled": True} if directory is None else ApplicationService().export_kompas(project, directory)
+
+    def select_solidworks_templates(self) -> dict[str, Any]:
+        part = self._choose_file("solidworks_part")
+        if part is None:
+            return {"ok": False, "cancelled": True}
+        assembly = self._choose_file("solidworks_assembly")
+        if assembly is None:
+            return {"ok": False, "cancelled": True}
+        return {"ok": True, "partTemplate": part, "assemblyTemplate": assembly}
+
+    def select_solidworks_material_library(self) -> dict[str, Any]:
+        library = self._choose_file("solidworks_material")
+        if library is None:
+            return {"ok": False, "cancelled": True}
+        try:
+            names = available_materials(library)
+        except SolidWorksMaterialLibraryError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "materialLibrary": library, "materials": list(names)}
+
+    def export_solidworks(self, project: object, options: object) -> dict[str, Any]:
+        directory = self._choose_directory("Выберите папку для экспорта SolidWorks")
+        return {"ok": False, "cancelled": True} if directory is None else ApplicationService().export_solidworks(project, directory, options)
+
     def import_step_model(self) -> dict[str, Any]:
         """Choose a source model and start its isolated cached import."""
         path = self._choose_file("step")
@@ -103,9 +131,23 @@ class WebApplicationApi:
             file_types=(
                 ("STEP model (*.step;*.stp)",)
                 if mode == "step"
+                else ("SolidWorks part template (*.prtdot)",)
+                if mode == "solidworks_part"
+                else ("SolidWorks assembly template (*.asmdot)",)
+                if mode == "solidworks_assembly"
+                else ("SolidWorks material library (*.sldmat)",)
+                if mode == "solidworks_material"
                 else ("PalletLab project (*.palletlab.json)",)
             ),
         )
+        return str(selected[0]) if selected else None
+
+    def _choose_directory(self, title: str) -> str | None:
+        if self._window is None:
+            raise RuntimeError("Web window is not ready.")
+        import webview
+
+        selected = self._window.create_file_dialog(webview.FileDialog.FOLDER, directory="", allow_multiple=False)
         return str(selected[0]) if selected else None
 
 

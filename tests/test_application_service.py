@@ -212,3 +212,76 @@ def test_save_and_load_preserve_a_valid_project(tmp_path) -> None:
     assert saved == {"ok": True}
     assert loaded["ok"] is True
     assert loaded["project"]["pallet"]["material_id"] == "pine"
+
+
+def test_kompas_export_recalculates_the_project_before_calling_the_exporter(tmp_path, monkeypatch) -> None:
+    service = ApplicationService()
+    output = tmp_path / "pallet"
+    captured = {}
+
+    def export(result, parent, material_id):
+        captured.update(result=result, parent=parent, material_id=material_id)
+        return output
+
+    monkeypatch.setattr("palletlab.application.service.export_kompas_pallet", export)
+
+    response = service.export_kompas(service.default_project(), str(tmp_path))
+
+    assert response == {"ok": True, "output": str(output)}
+    assert captured["parent"] == tmp_path
+    assert captured["material_id"] == "pine"
+    assert captured["result"].beams_3d
+
+
+def test_solidworks_export_passes_explicit_web_resources(tmp_path, monkeypatch) -> None:
+    service = ApplicationService()
+    part = tmp_path / "part.prtdot"
+    assembly = tmp_path / "assembly.asmdot"
+    library = tmp_path / "materials.sldmat"
+    for path in (part, assembly, library):
+        path.touch()
+    output = tmp_path / "pallet"
+    captured = {}
+
+    def export(result, parent, templates, material_id, material_library, material_name):
+        captured.update(
+            result=result,
+            parent=parent,
+            templates=templates,
+            material_id=material_id,
+            material_library=material_library,
+            material_name=material_name,
+        )
+        return output
+
+    monkeypatch.setattr("palletlab.application.service.export_solidworks_pallet", export)
+
+    response = service.export_solidworks(
+        service.default_project(),
+        str(tmp_path),
+        {
+            "partTemplate": str(part),
+            "assemblyTemplate": str(assembly),
+            "materialLibrary": str(library),
+            "materialName": "Pine",
+        },
+    )
+
+    assert response == {"ok": True, "output": str(output)}
+    assert captured["templates"] == (str(part), str(assembly))
+    assert captured["material_library"] == str(library)
+    assert captured["material_name"] == "Pine"
+    assert captured["result"].beams_3d
+
+
+def test_solidworks_export_rejects_missing_web_resources(tmp_path) -> None:
+    response = ApplicationService().export_solidworks(
+        ApplicationService().default_project(),
+        str(tmp_path),
+        {},
+    )
+
+    assert response == {
+        "ok": False,
+        "error": "Выберите шаблоны и материал SolidWorks перед экспортом.",
+    }

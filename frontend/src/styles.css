@@ -24,6 +24,10 @@ h1 { margin: 0; font-size: 1.75rem; }
 button { border: 0; border-radius: 6px; background: #315b6c; color: #fff; cursor: pointer; padding: 10px 14px; }
 button:disabled { cursor: wait; opacity: 0.55; }
 .file-actions { display: flex; gap: 8px; margin-top: 12px; }
+.cad-export { margin-top: 16px; }
+.cad-export-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.cad-export-actions label { min-width: 220px; }
+.cad-export-note, .export-status { margin: 0; color: #3f5965; font-size: 0.85rem; }
 .result { color: #245b42; font-weight: 600; }
 .selection-status { color: #56656c; font-size: 0.85rem; }
 .recovery-notice { color: #245b42; font-size: 0.9rem; }

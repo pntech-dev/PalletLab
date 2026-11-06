@@ -91,8 +91,18 @@ type StepPalletResponse = CalculationResponse & {
   supportCount?: number;
   referenceFace?: number;
 };
+type CommandResponse = { ok: boolean; cancelled?: boolean; error?: string; output?: string };
+type SolidWorksTemplatesResponse = CommandResponse & { partTemplate?: string; assemblyTemplate?: string };
+type SolidWorksMaterialsResponse = CommandResponse & { materialLibrary?: string; materials?: string[] };
+type SolidWorksOptions = {
+  partTemplate: string;
+  assemblyTemplate: string;
+  materialLibrary: string;
+  materialName: string;
+};
 
 const AUTOSAVE_KEY = "palletlab.web.autosave.v1";
+const SOLIDWORKS_OPTIONS_KEY = "palletlab.web.solidworks-options.v1";
 const HISTORY_LIMIT = 50;
 
 function copyProject(project: Project): Project {
@@ -117,6 +127,22 @@ function discardRecoveredProject() {
     window.localStorage.removeItem(AUTOSAVE_KEY);
   } catch {
     // Recovery is optional when an embedded browser disables local storage.
+  }
+}
+
+function storedSolidWorksOptions(): SolidWorksOptions | null {
+  try {
+    const raw = window.localStorage.getItem(SOLIDWORKS_OPTIONS_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<SolidWorksOptions>;
+    return typeof value.partTemplate === "string"
+      && typeof value.assemblyTemplate === "string"
+      && typeof value.materialLibrary === "string"
+      && typeof value.materialName === "string"
+      ? value as SolidWorksOptions
+      : null;
+  } catch {
+    return null;
   }
 }
 
@@ -161,6 +187,10 @@ declare global {
           error?: string;
           project?: Project;
         }>;
+        export_kompas: (project: Project) => Promise<CommandResponse>;
+        select_solidworks_templates: () => Promise<SolidWorksTemplatesResponse>;
+        select_solidworks_material_library: () => Promise<SolidWorksMaterialsResponse>;
+        export_solidworks: (project: Project, options: SolidWorksOptions) => Promise<CommandResponse>;
         import_step_model: () => Promise<StepImportOperation>;
         step_import_status: (operationId: string) => Promise<StepImportOperation>;
         cancel_step_import: (operationId: string) => Promise<StepImportOperation>;
@@ -189,6 +219,10 @@ export function App() {
   const [stepModel, setStepModel] = useState<StepModelSnapshot | null>(null);
   const [selectedStepFace, setSelectedStepFace] = useState<number | null>(null);
   const [stepPalletBuilt, setStepPalletBuilt] = useState(false);
+  const [solidWorksOptions, setSolidWorksOptions] = useState<SolidWorksOptions | null>(storedSolidWorksOptions);
+  const [solidWorksMaterials, setSolidWorksMaterials] = useState<string[]>([]);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<"kompas" | "solidworks" | null>(null);
   const [buildingStepPallet, setBuildingStepPallet] = useState(false);
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
   const [beamTool, setBeamTool] = useState<"none" | "delete" | "section">("none");
@@ -396,6 +430,83 @@ export function App() {
       setHistoryVersion((value) => value + 1);
     } else if (!response.cancelled) {
       setCalculationError(response.error ?? "Не удалось открыть проект.");
+    }
+  }
+
+  function rememberSolidWorksOptions(options: SolidWorksOptions) {
+    setSolidWorksOptions(options);
+    try {
+      window.localStorage.setItem(SOLIDWORKS_OPTIONS_KEY, JSON.stringify(options));
+    } catch {
+      // Export configuration is optional when embedded storage is unavailable.
+    }
+  }
+
+  async function selectSolidWorksTemplates() {
+    const response = await window.pywebview?.api?.select_solidworks_templates();
+    if (!response || response.cancelled) return;
+    if (!response.ok || !response.partTemplate || !response.assemblyTemplate) {
+      setExportStatus(response?.error ?? "Не удалось выбрать шаблоны SolidWorks.");
+      return;
+    }
+    const previous = solidWorksOptions ?? storedSolidWorksOptions();
+    rememberSolidWorksOptions({
+      partTemplate: response.partTemplate,
+      assemblyTemplate: response.assemblyTemplate,
+      materialLibrary: previous?.materialLibrary ?? "",
+      materialName: previous?.materialName ?? "",
+    });
+    setExportStatus("Шаблоны SolidWorks выбраны.");
+  }
+
+  async function selectSolidWorksMaterialLibrary() {
+    const response = await window.pywebview?.api?.select_solidworks_material_library();
+    if (!response || response.cancelled) return;
+    if (!response.ok || !response.materialLibrary || !response.materials?.length) {
+      setExportStatus(response?.error ?? "Не удалось прочитать библиотеку материалов SolidWorks.");
+      return;
+    }
+    const previous = solidWorksOptions ?? storedSolidWorksOptions();
+    const materialName = response.materials.includes(previous?.materialName ?? "")
+      ? previous!.materialName
+      : response.materials[0];
+    setSolidWorksMaterials(response.materials);
+    rememberSolidWorksOptions({
+      partTemplate: previous?.partTemplate ?? "",
+      assemblyTemplate: previous?.assemblyTemplate ?? "",
+      materialLibrary: response.materialLibrary,
+      materialName,
+    });
+    setExportStatus("Библиотека материалов SolidWorks выбрана.");
+  }
+
+  async function exportKompas() {
+    const api = window.pywebview?.api;
+    if (!api || !project) return;
+    setExporting("kompas");
+    setExportStatus(null);
+    try {
+      const response = await api.export_kompas(project);
+      if (!response.cancelled) setExportStatus(response.ok ? `КОМПАС-3D: экспорт завершён (${response.output}).` : response.error ?? "Экспорт в КОМПАС-3D не выполнен.");
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  async function exportSolidWorks() {
+    const api = window.pywebview?.api;
+    if (!api || !project) return;
+    if (!solidWorksOptions || Object.values(solidWorksOptions).some((value) => !value)) {
+      setExportStatus("Перед экспортом выберите шаблоны и библиотеку материалов SolidWorks.");
+      return;
+    }
+    setExporting("solidworks");
+    setExportStatus(null);
+    try {
+      const response = await api.export_solidworks(project, solidWorksOptions);
+      if (!response.cancelled) setExportStatus(response.ok ? `SolidWorks: экспорт завершён (${response.output}).` : response.error ?? "Экспорт в SolidWorks не выполнен.");
+    } finally {
+      setExporting(null);
     }
   }
 
@@ -980,6 +1091,42 @@ export function App() {
             Import STEP model
           </button>
         </div>
+        {project ? (
+          <fieldset className="cad-export">
+            <legend>CAD export</legend>
+            <div className="cad-export-actions">
+              <button type="button" onClick={() => void exportKompas()} disabled={exporting !== null}>
+                {exporting === "kompas" ? "Exporting KOMPAS-3D…" : "Export KOMPAS-3D"}
+              </button>
+              <button type="button" onClick={() => void selectSolidWorksTemplates()} disabled={exporting !== null}>
+                Select SolidWorks templates
+              </button>
+              <button type="button" onClick={() => void selectSolidWorksMaterialLibrary()} disabled={exporting !== null}>
+                Select SolidWorks material library
+              </button>
+              {solidWorksOptions?.materialLibrary ? (
+                <label>
+                  SolidWorks material
+                  <select
+                    value={solidWorksOptions.materialName}
+                    onChange={(event) => rememberSolidWorksOptions({ ...solidWorksOptions, materialName: event.target.value })}
+                  >
+                    {(solidWorksMaterials.length ? solidWorksMaterials : [solidWorksOptions.materialName]).map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button type="button" onClick={() => void exportSolidWorks()} disabled={exporting !== null}>
+                {exporting === "solidworks" ? "Exporting SolidWorks…" : "Export SolidWorks"}
+              </button>
+            </div>
+            <p className="cad-export-note">
+              SolidWorks requires selected part and assembly templates plus a registered material library.
+            </p>
+            {exportStatus ? <p className={exportStatus.includes("не выполнен") ? "error" : "export-status"}>{exportStatus}</p> : null}
+          </fieldset>
+        ) : null}
         {recoveryNotice ? <p className="recovery-notice">{recoveryNotice}</p> : null}
         {stepImport ? (
           <div className={stepImport.state === "failed" ? "step-import error" : "step-import"}>

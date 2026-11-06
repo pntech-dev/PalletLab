@@ -12,6 +12,8 @@ from palletlab.core.models import BeamSection, DirectionInput, LayerInput
 from palletlab.core.materials import MATERIALS
 from palletlab.core.persistence import ProjectPersistenceError, load_project, project_from_dict, project_to_dict, save_project
 from palletlab.core.project_state import ProjectState
+from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
+from palletlab.exporters.solidworks import SolidWorksExportError, export_pallet as export_solidworks_pallet
 
 
 class ApplicationService:
@@ -189,6 +191,69 @@ class ApplicationService:
         except (OSError, ProjectPersistenceError) as exc:
             return {"ok": False, "error": str(exc)}
 
+    def export_kompas(self, project: object, parent_directory: object) -> dict[str, Any]:
+        """Recalculate and export the current project through KOMPAS-3D.
+
+        The bridge receives a persisted project rather than a viewport snapshot so
+        CAD output is always produced by the same calculation path as PyQt.
+        """
+        state, directory, error = self._export_input(project, parent_directory)
+        if error:
+            return {"ok": False, "error": error}
+        result, error = self._calculate_result(state)
+        if error:
+            return {"ok": False, "error": error}
+        try:
+            output = export_kompas_pallet(result, directory, state.material_id)
+        except KompasExportError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "output": str(output)}
+
+    def export_solidworks(self, project: object, parent_directory: object, options: object) -> dict[str, Any]:
+        """Recalculate and export the current project through SolidWorks."""
+        state, directory, error = self._export_input(project, parent_directory)
+        if error:
+            return {"ok": False, "error": error}
+        templates, material_library, material_name, error = _solidworks_options(options)
+        if error:
+            return {"ok": False, "error": error}
+        result, error = self._calculate_result(state)
+        if error:
+            return {"ok": False, "error": error}
+        try:
+            output = export_solidworks_pallet(
+                result,
+                directory,
+                templates,
+                state.material_id,
+                material_library,
+                material_name,
+            )
+        except SolidWorksExportError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "output": str(output)}
+
+    def _export_input(self, project: object, parent_directory: object) -> tuple[ProjectState | None, Path | None, str | None]:
+        try:
+            state = project_from_dict(project)
+        except ProjectPersistenceError as exc:
+            return None, None, str(exc)
+        if not isinstance(parent_directory, str) or not parent_directory.strip():
+            return None, None, "Выберите папку для экспорта."
+        directory = Path(parent_directory)
+        if not directory.is_dir():
+            return None, None, "Выбранная папка для экспорта не существует."
+        return state, directory, None
+
+    def _calculate_result(self, state: ProjectState | None) -> tuple[Any | None, str | None]:
+        if state is None:
+            return None, "Некорректный проект."
+        controller, errors = self._controller_for(state)
+        result = controller.recalculate_from_state(show_error=False)
+        if result is None:
+            return None, errors[-1] if errors else "Не удалось рассчитать поддон."
+        return result, None
+
     @staticmethod
     def _controller_for(state: ProjectState) -> tuple[PalletController, list[str]]:
         errors: list[str] = []
@@ -309,6 +374,23 @@ def _manual_options(value: object):
     if error or reference_face not in {"x_min", "x_max", "y_min", "y_max"}:
         return 0.0, None, None, None, None, "Некорректная грань точки отсчёта."
     return float(distance), beam_section, parsed[0], reference_face, start_point, None
+
+
+def _solidworks_options(value: object) -> tuple[tuple[str, str] | None, str | None, str | None, str | None]:
+    """Validate the explicit SolidWorks resources selected in the web UI."""
+    if not isinstance(value, dict):
+        return None, None, None, "Некорректные параметры экспорта SolidWorks."
+    part_template = value.get("partTemplate")
+    assembly_template = value.get("assemblyTemplate")
+    material_library = value.get("materialLibrary")
+    material_name = value.get("materialName")
+    values = (part_template, assembly_template, material_library, material_name)
+    if any(not isinstance(item, str) or not item.strip() for item in values):
+        return None, None, None, "Выберите шаблоны и материал SolidWorks перед экспортом."
+    paths = (Path(part_template), Path(assembly_template), Path(material_library))
+    if any(not path.is_file() for path in paths):
+        return None, None, None, "Выбранный файл SolidWorks больше не существует."
+    return (part_template, assembly_template), material_library, material_name, None
 
 
 class _Signal:
