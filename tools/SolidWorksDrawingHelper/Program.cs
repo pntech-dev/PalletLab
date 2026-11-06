@@ -12,6 +12,10 @@ const double ManualAnnotationReserve = 0.035;
 const double AssemblyRequirementsLeftMargin = 0.025;
 const double AssemblyRequirementsBottomMargin = 0.010;
 const double AssemblyRequirementsLowerReserve = 0.135;
+const double TitleBlockLeft = 0.230;
+const double TitleBlockTop = 0.060;
+const double SpecificationHeaderHeight = 0.012;
+const double SpecificationRowHeight = 0.008;
 const string AssemblyTechnicalRequirements =
     "1. *Размеры для справок.\n" +
     "2. Сварные соединения по ГОСТ 14771-76.\n" +
@@ -69,7 +73,7 @@ try
         AddOverallDimensions(drawing, pallet.Pallet, palletViewLayout);
     if (hasAssemblyRequirements)
     {
-        AddAssemblySpecification(drawingModel, pallet?.Specification);
+        AddAssemblySpecification(drawing, drawingModel, pallet?.Specification);
         AddAssemblyTechnicalRequirements(drawing, drawingModel);
     }
     drawingModel.ForceRebuild3(false);
@@ -367,42 +371,103 @@ static void CreateReferenceLinearDimension(
     result.SetText((int)swDimensionTextParts_e.swDimensionTextSuffix, "*");
 }
 
-static void AddAssemblySpecification(ModelDoc2 drawingModel, SpecificationRow[]? rows)
+static void AddAssemblySpecification(DrawingDoc drawing, ModelDoc2 drawingModel, SpecificationRow[]? rows)
 {
     if (rows is not { Length: > 0 })
         return;
 
     // A native General Table is deliberately used instead of an image or a
     // pasted spreadsheet: every cell remains editable in SolidWorks.
+    // The table shares the title block's left edge and rests directly on its
+    // upper edge.  Its grid remains editable in SolidWorks.
+    var tableRowCount = rows.Length + 4;
+    var tableHeight = SpecificationHeaderHeight + (tableRowCount - 1) * SpecificationRowHeight;
     var table = drawingModel.Extension.InsertGeneralTableAnnotation(
-        true, 0.050, 0.080,
+        true, TitleBlockLeft, TitleBlockTop + tableHeight,
         (int)swBOMConfigurationAnchorType_e.swBOMConfigurationAnchor_TopLeft,
-        "", rows.Length + 1, 4)
+        "", tableRowCount, 7)
         ?? throw new InvalidOperationException("SolidWorks did not create the assembly specification table.");
     var annotation = table.GetAnnotation()
         ?? throw new InvalidOperationException("SolidWorks did not expose the specification table annotation.");
-    // InsertGeneralTableAnnotation may initially attach a new table to the
-    // graphics viewport.  Reposition it explicitly in the active sheet's
-    // coordinates; this keeps it inside the lower-left working area.
-    if (!annotation.SetPosition(0.050, 0.080, 0.0))
+    table.BorderLineWeight = (int)swLineWeights_e.swLW_THIN;
+    table.GridLineWeight = (int)swLineWeights_e.swLW_THIN;
+    if (!annotation.SetPosition(TitleBlockLeft, TitleBlockTop + tableHeight, 0.0))
         throw new InvalidOperationException("SolidWorks did not position the assembly specification table on the sheet.");
-    var headers = new[] { "Поз.", "Наименование", "Размеры, мм", "Кол." };
+    var headers = new[] { "", "", "", "Обозначение детали", "Наименование", "", "Приме-\nчание" };
     for (var column = 0; column < headers.Length; column++)
         table.Text[0, column] = headers[column];
 
+    // Preserve the conventional empty separation rows and section heading.
+    table.Text[2, 4] = "Прочие изделия";
     for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
     {
         var row = rows[rowIndex];
-        var tableRow = rowIndex + 1;
-        table.Text[tableRow, 0] = row.Position.ToString();
-        table.Text[tableRow, 1] = row.Name;
-        table.Text[tableRow, 2] = row.Dimensions;
-        table.Text[tableRow, 3] = row.Quantity.ToString();
+        var tableRow = rowIndex + 4;
+        table.Text[tableRow, 2] = row.Position.ToString();
+        table.Text[tableRow, 3] = row.Designation;
+        table.Text[tableRow, 5] = row.Quantity.ToString();
     }
-    table.SetColumnWidth(0, 0.015, 0);
-    table.SetColumnWidth(1, 0.040, 0);
-    table.SetColumnWidth(2, 0.050, 0);
-    table.SetColumnWidth(3, 0.015, 0);
+    // 185 mm total: exactly the standard A3 main-title-block width.
+    var columnWidths = new[] { 0.007, 0.007, 0.009, 0.064, 0.058, 0.010, 0.030 };
+    for (var column = 0; column < columnWidths.Length; column++)
+        table.SetColumnWidth(column, columnWidths[column], 0);
+    table.SetRowHeight(0, SpecificationHeaderHeight, 0);
+    for (var row = 1; row < tableRowCount; row++)
+        table.SetRowHeight(row, SpecificationRowHeight, 0);
+    drawingModel.ForceRebuild3(false);
+
+    // Table row styles can override requested heights.  Read the actual row
+    // heights after rebuilding and use them to keep the lower border exactly
+    // on the title block's upper border.
+    var actualTableHeight = Enumerable.Range(0, tableRowCount).Sum(table.GetRowHeight);
+    if (!annotation.SetPosition(TitleBlockLeft, TitleBlockTop + actualTableHeight, 0.0))
+        throw new InvalidOperationException("SolidWorks did not align the assembly specification with the title block.");
+    AddRotatedSpecificationHeaders(drawing, drawingModel, TitleBlockTop + actualTableHeight, columnWidths);
+}
+
+static void AddRotatedSpecificationHeaders(
+    DrawingDoc drawing, ModelDoc2 drawingModel, double tableTop, IReadOnlyList<double> columnWidths)
+{
+    // General Table ignores Escapement for some document styles.  Native notes
+    // render the angle reliably, so they are used for the four narrow headers.
+    var captions = new Dictionary<int, (string Text, double Height)>
+    {
+        [0] = ("Формат", 0.0020),
+        [1] = ("Зона", 0.0025),
+        [2] = ("Поз.", 0.0025),
+        [5] = ("Кол.", 0.0030),
+    };
+    var x = TitleBlockLeft;
+    var notes = new List<(Note Note, double CenterX, double CenterY)>();
+    for (var column = 0; column < columnWidths.Count; column++)
+    {
+        if (captions.TryGetValue(column, out var caption)
+            && drawing.CreateText2(
+                caption.Text,
+                x + columnWidths[column] / 2d,
+                tableTop - SpecificationHeaderHeight / 2d,
+                0.0,
+                caption.Height,
+                Math.PI / 2d) is Note note)
+        {
+            notes.Add((note, x + columnWidths[column] / 2d, tableTop - SpecificationHeaderHeight / 2d));
+        }
+        else if (captions.ContainsKey(column))
+            throw new InvalidOperationException("SolidWorks did not create a rotated specification header.");
+        x += columnWidths[column];
+    }
+    drawingModel.ForceRebuild3(false);
+    foreach (var (note, centerX, centerY) in notes)
+    {
+        var annotation = note.GetAnnotation() as Annotation
+            ?? throw new InvalidOperationException("SolidWorks did not expose a rotated specification header.");
+        var extent = GetNoteExtent(note);
+        var position = (Array)annotation.GetPosition();
+        var targetX = Convert.ToDouble(position.GetValue(0)) + centerX - (extent.Left + extent.Right) / 2d;
+        var targetY = Convert.ToDouble(position.GetValue(1)) + centerY - (extent.Bottom + extent.Top) / 2d;
+        if (!annotation.SetPosition2(targetX, targetY, 0.0))
+            throw new InvalidOperationException("SolidWorks did not center a rotated specification header.");
+    }
 }
 
 sealed class PalletDrawingData
@@ -417,6 +482,7 @@ sealed class SpecificationRow
     public string Name { get; init; } = "";
     public string Dimensions { get; init; } = "";
     public int Quantity { get; init; }
+    public string Designation { get; init; } = "";
 }
 
 sealed class PalletEnvelope

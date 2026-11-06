@@ -120,9 +120,22 @@ class WebApplicationApi:
 
     def create_drawings(self, project: object, cad: object, scope: object, template: object) -> dict[str, Any]:
         directory = self._choose_directory("Выберите папку экспорта с CAD-моделями")
-        return {"ok": False, "cancelled": True} if directory is None else ApplicationService().create_drawings(
-            project, cad, scope, directory, template
-        )
+        if directory is None:
+            return {"ok": False, "cancelled": True}
+        service = ApplicationService()
+        response = service.create_drawings(project, cad, scope, directory, template)
+        if not response.get("needsTemplate"):
+            return response
+
+        selected = self._choose_file(f"{cad}_drawing")
+        if selected is None:
+            if cad == "kompas":
+                # KOMPAS can deliberately use its own configured default.
+                return service.create_drawings(project, cad, scope, directory, None)
+            return {"ok": False, "error": "Создание чертежей SolidWorks отменено: не выбран шаблон."}
+        if not self._settings.save_drawing_template(str(cad), selected):
+            return {"ok": False, "error": "Не удалось сохранить шаблон чертежа."}
+        return service.create_drawings(project, cad, scope, directory, selected)
 
     def solidworks_export_settings(self) -> dict[str, Any]:
         """Load web CAD preferences independently of the temporary web origin."""

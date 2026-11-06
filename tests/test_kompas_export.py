@@ -224,48 +224,25 @@ def test_kompas_drawing_opens_a_template_with_api5_methods(tmp_path):
     assert kompas.Document2D.calls[-1] == ("save", str(output))
 
 
-def test_kompas_assembly_requirements_are_native_numbered_technical_demands():
-    class _Item:
-        def Init(self):
-            pass
-
+def test_kompas_assembly_requirements_use_the_fixed_lower_left_esqd_position():
     class _Document:
         def __init__(self):
-            self.calls = []
             self.texts = []
 
-        def ksOpenTechnicalDemand(self, bounds, style):
-            self.calls.append(("open", bounds, style))
+        def ksText(self, *args):
+            self.texts.append(args)
             return True
-
-        def ksTextLine(self, item):
-            self.texts.append(item.s)
-            return True
-
-        def ksCloseTechnicalDemand(self):
-            self.calls.append(("close",))
-            return True
-
-    class _Kompas:
-        def GetParamStruct(self, _parameter_type):
-            return _Item()
 
     document = _Document()
-    constants = SimpleNamespace(ko_TextItemParam="item")
 
-    _add_assembly_technical_requirements(document, _Kompas(), constants)
+    _add_assembly_technical_requirements(document, None, None)
 
-    assert document.calls == [("open", None, 0), ("close",)]
-    assert all(len(text) <= 100 for text in document.texts)
-    assert "".join(document.texts).splitlines() == [
-        "1. *Размеры для справок.",
-        "2. Сварные соединения по ГОСТ 14771-76.",
-        "3. Острые кромки притупить.",
-        "4. Общие допуски по ГОСТ 30893.1: Н14, h14, ±IТ14/2.",
-        "5. Общие допуски формы и расположения — ГОСТ 30893.2—К.",
-        "6. Остальные ТТ по СТБ 1022-96.",
-        "7. Все сварные швы зачистить Rz40.",
+    assert [text[0:2] for text in document.texts] == [
+        (25.0, 10.0), (25.0, 15.0), (25.0, 20.0), (25.0, 25.0),
+        (25.0, 30.0), (25.0, 35.0), (25.0, 40.0),
     ]
+    assert document.texts[-1][-1] == "1. *Размеры для справок."
+    assert document.texts[0][-1] == "7. Все сварные швы зачистить Rz40."
 
 
 def test_kompas_technical_requirement_chunks_preserve_every_line_break():
@@ -302,8 +279,12 @@ def test_kompas_assembly_specification_is_an_editable_native_table():
 
     assert document.calls[0] == ("table",)
     assert ("end",) in document.calls
+    lines = [call for call in document.calls if call[0] == "line"]
+    assert ("line", 235.0, 60.0, 415.0, 60.0, 1) in lines
+    assert all(call[-1] == 1 for call in lines)
     assert [call[-1] for call in document.calls if call[0] == "text"] == [
-        "Поз.", "Наименование", "Размеры, мм", "Кол.", "1", "Брус", "2000×100×70", "4",
+        "Формат", "Зона", "Поз.", "ОБОЗНАЧЕНИЕ ДЕТАЛИ", "Наименование", "Кол.", "Приме-\nчание",
+        "Прочие изделия", "1", "4",
     ]
 
 

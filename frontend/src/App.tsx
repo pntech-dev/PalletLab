@@ -582,7 +582,6 @@ export function App() {
       if (!await rememberSolidWorksOptions(solidWorksDraft)) return;
       setSolidWorksSetupError(null);
       setSolidWorksSetupOpen(false);
-      void exportSolidWorks(solidWorksDraft);
     })();
   }
 

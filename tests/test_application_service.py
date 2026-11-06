@@ -315,3 +315,18 @@ def test_create_drawings_rejects_invalid_web_options(tmp_path) -> None:
     )
 
     assert response == {"ok": False, "error": "Выберите CAD-систему для создания чертежей."}
+
+
+def test_create_drawings_requests_a_template_when_the_cad_default_is_missing(tmp_path, monkeypatch) -> None:
+    from palletlab.exporters.drawings import DrawingTemplateError
+
+    monkeypatch.setattr(
+        "palletlab.application.service.create_solidworks_drawings",
+        lambda *_args: (_ for _ in ()).throw(DrawingTemplateError("Не найден шаблон.")),
+    )
+
+    response = ApplicationService().create_drawings(
+        ApplicationService().default_project(), "solidworks", "assembly", str(tmp_path), None
+    )
+
+    assert response == {"ok": False, "error": "Не найден шаблон.", "needsTemplate": True}

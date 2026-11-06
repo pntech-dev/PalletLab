@@ -45,10 +45,20 @@ _ASSEMBLY_TECHNICAL_REQUIREMENTS = (
     "Все сварные швы зачистить Rz40.",
 )
 _KOMPAS_TEXT_ITEM_LIMIT = 100
-_SPECIFICATION_LEFT = 250.0
-_SPECIFICATION_TOP = 150.0
-_SPECIFICATION_ROW_HEIGHT = 7.0
-_SPECIFICATION_COLUMNS = (12.0, 35.0, 65.0, 16.0)
+# The main title block of an A3 landscape sheet is 180×55 mm, aligned to the
+# bottom-right frame.  The specification is joined to its upper edge.
+_TITLE_BLOCK_LEFT = 235.0
+_TITLE_BLOCK_TOP = 60.0
+_SPECIFICATION_LEFT = _TITLE_BLOCK_LEFT
+_SPECIFICATION_BOTTOM = _TITLE_BLOCK_TOP
+_SPECIFICATION_COLUMNS = (7.0, 7.0, 9.0, 70.0, 62.0, 10.0, 15.0)
+_SPECIFICATION_HEADER_HEIGHT = 12.0
+_SPECIFICATION_ROW_HEIGHT = 8.0
+_SPECIFICATION_LINE_STYLE = 1
+_TECHNICAL_REQUIREMENTS_LEFT = 25.0
+_TECHNICAL_REQUIREMENTS_BOTTOM = 10.0
+_TECHNICAL_REQUIREMENTS_LINE_HEIGHT = 5.0
+_TECHNICAL_REQUIREMENTS_TEXT_HEIGHT = 3.5
 
 
 class KompasExportError(RuntimeError):
@@ -222,25 +232,28 @@ def _add_reference_linear_dimension(
 
 
 def _add_assembly_technical_requirements(document, kompas, constants) -> None:
-    """Insert the enterprise assembly requirements as KOMPAS's native TT object."""
-    if not document.ksOpenTechnicalDemand(None, 0):
-        raise DrawingExportError("КОМПАС-3D не открыл объект технических требований.")
-    try:
-        # API5 truncates the ``s`` field of a text item on some KOMPAS builds.
-        # Keep every item well below that limit, but retain explicit line feeds:
-        # the requirements stay a single native TT block and every item starts
-        # on the following visible line.
-        for text in _assembly_requirement_text_chunks():
-            item = kompas.GetParamStruct(constants.ko_TextItemParam)
-            item.Init()
-            item.s = text
-            if not document.ksTextLine(item):
-                raise DrawingExportError("КОМПАС-3D не создал текст технических требований.")
-    except Exception:
-        document.ksCloseTechnicalDemand()
-        raise
-    if not document.ksCloseTechnicalDemand():
-        raise DrawingExportError("КОМПАС-3D не завершил создание технических требований.")
+    """Place technical requirements 5 mm inside the A3 drawing frame.
+
+    KOMPAS's native technical-demand object is auto-positioned by the active
+    template.  That made the output depend on local CAD preferences, so use
+    ordinary editable drawing text for the fixed ESKD placement instead.
+    """
+    lines = tuple(
+        f"{number}. {requirement}"
+        for number, requirement in enumerate(_ASSEMBLY_TECHNICAL_REQUIREMENTS, start=1)
+    )
+    for line_index, text in enumerate(reversed(lines)):
+        y = _TECHNICAL_REQUIREMENTS_BOTTOM + line_index * _TECHNICAL_REQUIREMENTS_LINE_HEIGHT
+        if not document.ksText(
+            _TECHNICAL_REQUIREMENTS_LEFT,
+            y,
+            0.0,
+            _TECHNICAL_REQUIREMENTS_TEXT_HEIGHT,
+            1,
+            0,
+            text,
+        ):
+            raise DrawingExportError("КОМПАС-3D не создал текст технических требований.")
 
 
 def _assembly_requirement_text_chunks() -> tuple[str, ...]:
@@ -264,25 +277,38 @@ def _assembly_requirement_text_chunks() -> tuple[str, ...]:
 
 
 def _add_assembly_specification(document, rows: tuple[SpecificationRow, ...]) -> None:
-    """Create an editable native KOMPAS table with the assembly composition."""
+    """Create the ESKD-style specification joined to the main title block."""
     if not rows:
         return
-    row_count = len(rows) + 1
     width = sum(_SPECIFICATION_COLUMNS)
-    height = row_count * _SPECIFICATION_ROW_HEIGHT
+    table_rows: list[tuple[float, tuple[str, ...], bool]] = [
+        (_SPECIFICATION_HEADER_HEIGHT, ("Формат", "Зона", "Поз.", "ОБОЗНАЧЕНИЕ ДЕТАЛИ", "Наименование", "Кол.", "Приме-\nчание"), True),
+        (_SPECIFICATION_ROW_HEIGHT, ("", "", "", "", "", "", ""), False),
+        (_SPECIFICATION_ROW_HEIGHT, ("", "", "", "", "Прочие изделия", "", ""), False),
+        (_SPECIFICATION_ROW_HEIGHT, ("", "", "", "", "", "", ""), False),
+        *(
+            (_SPECIFICATION_ROW_HEIGHT, ("", "", str(row.position), row.designation, "", str(row.quantity), ""), False)
+            for row in rows
+        ),
+    ]
+    height = sum(row_height for row_height, _, _ in table_rows)
+    top = _SPECIFICATION_BOTTOM + height
     if not document.ksTable():
         raise DrawingExportError("КОМПАС-3D не начал создание таблицы спецификации.")
     try:
-        for row in range(row_count + 1):
-            y = _SPECIFICATION_TOP - row * _SPECIFICATION_ROW_HEIGHT
-            if not document.ksLineSeg(_SPECIFICATION_LEFT, y, _SPECIFICATION_LEFT + width, y, 2):
+        y = top
+        if not document.ksLineSeg(_SPECIFICATION_LEFT, y, _SPECIFICATION_LEFT + width, y, _SPECIFICATION_LINE_STYLE):
+            raise DrawingExportError("КОМПАС-3D не создал строку таблицы спецификации.")
+        for row_height, _, _ in table_rows:
+            y -= row_height
+            if not document.ksLineSeg(_SPECIFICATION_LEFT, y, _SPECIFICATION_LEFT + width, y, _SPECIFICATION_LINE_STYLE):
                 raise DrawingExportError("КОМПАС-3D не создал строку таблицы спецификации.")
         x = _SPECIFICATION_LEFT
         for column_width in _SPECIFICATION_COLUMNS:
-            if not document.ksLineSeg(x, _SPECIFICATION_TOP, x, _SPECIFICATION_TOP - height, 2):
+            if not document.ksLineSeg(x, top, x, _SPECIFICATION_BOTTOM, _SPECIFICATION_LINE_STYLE):
                 raise DrawingExportError("КОМПАС-3D не создал столбец таблицы спецификации.")
             x += column_width
-        if not document.ksLineSeg(x, _SPECIFICATION_TOP, x, _SPECIFICATION_TOP - height, 2):
+        if not document.ksLineSeg(x, top, x, _SPECIFICATION_BOTTOM, _SPECIFICATION_LINE_STYLE):
             raise DrawingExportError("КОМПАС-3D не завершил рамку таблицы спецификации.")
     except Exception:
         document.ksEndObj()
@@ -292,15 +318,17 @@ def _add_assembly_specification(document, rows: tuple[SpecificationRow, ...]) ->
     # API5 permits the table grid to be built as a compound object, but on
     # recent KOMPAS versions rejects text creation while that object is open.
     # Add ordinary editable drawing texts immediately after closing the grid.
-    values = (("Поз.", "Наименование", "Размеры, мм", "Кол."), *(
-        (str(row.position), row.name, row.dimensions, str(row.quantity)) for row in rows
-    ))
-    for row_index, values_in_row in enumerate(values):
+    y = top
+    for row_height, values_in_row, is_header in table_rows:
+        baseline = y - row_height * 0.67
         x = _SPECIFICATION_LEFT
-        y = _SPECIFICATION_TOP - (row_index + 0.72) * _SPECIFICATION_ROW_HEIGHT
-        for column_width, value in zip(_SPECIFICATION_COLUMNS, values_in_row, strict=True):
-            document.ksText(x + 1.5, y, 0.0, 3.5, 1, 0, value)
+        for column_index, (column_width, value) in enumerate(zip(_SPECIFICATION_COLUMNS, values_in_row, strict=True)):
+            if value:
+                angle = 90.0 if is_header and column_index < 3 else 0.0
+                size = 3.0 if is_header else 3.5
+                document.ksText(x + 1.5, baseline, angle, size, 1, 0, value)
             x += column_width
+        y -= row_height
 
 
 def _configure_standard_sheet(document_parameters, constants) -> None:

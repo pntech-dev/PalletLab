@@ -265,7 +265,9 @@ class ApplicationService:
         try:
             create = create_solidworks_drawings if cad == "solidworks" else create_kompas_drawings
             output = create(Path(model_directory), scopes[scope], template or None, result)
-        except (DrawingExportError, DrawingTemplateError) as exc:
+        except DrawingTemplateError as exc:
+            return {"ok": False, "error": str(exc), "needsTemplate": True}
+        except DrawingExportError as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "output": str(output)}
 
