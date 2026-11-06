@@ -238,6 +238,7 @@ export function App() {
   const [solidWorksMaterials, setSolidWorksMaterials] = useState<string[]>([]);
   const [exporting, setExporting] = useState<"kompas" | "solidworks" | "drawings" | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const [exportChoiceOpen, setExportChoiceOpen] = useState(false);
   const [solidWorksSetupOpen, setSolidWorksSetupOpen] = useState(false);
   const [solidWorksDraft, setSolidWorksDraft] = useState<SolidWorksOptions | null>(null);
   const [solidWorksSetupError, setSolidWorksSetupError] = useState<string | null>(null);
@@ -1172,65 +1173,51 @@ export function App() {
   ) : null;
 
   return (
-    <main className="migration-shell">
-      <section>
-        <p className="eyebrow">PalletLab</p>
-        <h1>Web application host</h1>
-        <p>
-          This temporary shell verifies the React-to-Python bridge before the
-          existing workflows move here.
-        </p>
-        <p className="status">
-          {status
-            ? `${status.application} ${status.version} · API ${status.snapshotVersion}`
-            : "Connecting to Python…"}
-        </p>
-        <button type="button" onClick={calculateProject} disabled={!status}>
-          Calculate project
-        </button>
-        <div className="file-actions">
-          <button type="button" onClick={openProject} disabled={!status}>
-            Open
-          </button>
-          <button type="button" onClick={saveProject} disabled={!project}>
-            Save
-          </button>
-          <button type="button" onClick={() => void resetProject()} disabled={!project}>
-            Reset example
-          </button>
-          <button type="button" onClick={undo} disabled={!project || undoStack.current.length === 0}>
-            Undo
-          </button>
-          <button type="button" onClick={redo} disabled={!project || redoStack.current.length === 0}>
-            Redo
-          </button>
+    <main className="app-shell">
+      <header className="app-header">
+        <strong className="app-brand">PalletLab</strong>
+        <nav className="app-actions" aria-label="Действия с проектом">
+          <button type="button" className="secondary" onClick={openProject} disabled={!status}>Открыть</button>
+          <button type="button" className="secondary" onClick={saveProject} disabled={!project}>Сохранить</button>
           <button
             type="button"
+            className="secondary"
             onClick={() => void importStepModel()}
             disabled={!status || stepImport?.state === "running" || stepImport?.state === "cancelling"}
           >
-            Import STEP model
+            Импорт
           </button>
-        </div>
-        {project ? (
-          <fieldset className="cad-export">
-            <legend>CAD export</legend>
-            <div className="cad-export-actions">
-              <button type="button" onClick={() => void exportKompas()} disabled={exporting !== null}>
-                {exporting === "kompas" ? "Exporting KOMPAS-3D…" : "Export KOMPAS-3D"}
-              </button>
-              <button type="button" onClick={beginSolidWorksExport} disabled={exporting !== null}>
-                {exporting === "solidworks" ? "Exporting SolidWorks…" : "Export SolidWorks"}
-              </button>
-              <button type="button" className="secondary" onClick={openSolidWorksSetup} disabled={exporting !== null}>
-                SolidWorks settings
-              </button>
-              <button type="button" className="secondary" onClick={openDrawingsSetup} disabled={exporting !== null}>
-                Create drawings
-              </button>
-            </div>
-            <p className="cad-export-note">SolidWorks settings are requested only before the first export.</p>
-          </fieldset>
+          <button type="button" onClick={() => setExportChoiceOpen(true)} disabled={!project || exporting !== null}>
+            Экспорт
+          </button>
+          <button type="button" className="secondary" onClick={openDrawingsSetup} disabled={!project || exporting !== null}>
+            Создать чертёж
+          </button>
+        </nav>
+        <button type="button" className="secondary export-settings" onClick={openSolidWorksSetup} disabled={!project || exporting !== null}>
+          Настройки экспорта
+        </button>
+      </header>
+      <div className="workspace">
+        <aside className="editor-panel" aria-label="Редактор поддона">
+          <div className="editor-heading">
+            <p className="eyebrow">Редактор</p>
+            <p className="status">
+              {status ? `${status.application} ${status.version}` : "Подключение…"}
+            </p>
+          </div>
+        {exportChoiceOpen ? (
+          <div className="modal-backdrop" role="presentation">
+            <section className="modal export-choice-modal" role="dialog" aria-modal="true" aria-labelledby="export-choice-title">
+              <h2 id="export-choice-title">Экспорт модели</h2>
+              <p>Выберите CAD-систему для экспорта поддона.</p>
+              <div className="export-choice-actions">
+                <button type="button" onClick={() => { setExportChoiceOpen(false); void exportKompas(); }}>КОМПАС-3D</button>
+                <button type="button" onClick={() => { setExportChoiceOpen(false); beginSolidWorksExport(); }}>SolidWorks</button>
+              </div>
+              <footer className="modal-actions"><button type="button" className="secondary" onClick={() => setExportChoiceOpen(false)}>Отмена</button></footer>
+            </section>
+          </div>
         ) : null}
         {solidWorksSetupOpen && solidWorksDraft ? (
           <div className="modal-backdrop" role="presentation">
@@ -1475,6 +1462,19 @@ export function App() {
             ))}
           </div>
         ) : null}
+        </aside>
+        <section className="viewport-panel" aria-label="3D просмотр">
+          <div className="viewport-toolbar">
+            <div>
+              <p className="eyebrow">3D вид</p>
+              <h1>Конструкция поддона</h1>
+            </div>
+            <div className="history-actions">
+              <button type="button" className="secondary" onClick={() => void resetProject()} disabled={!project}>Сбросить</button>
+              <button type="button" className="secondary" onClick={undo} disabled={!project || undoStack.current.length === 0}>Назад</button>
+              <button type="button" className="secondary" onClick={redo} disabled={!project || redoStack.current.length === 0}>Вперёд</button>
+            </div>
+          </div>
         {calculation?.ok && calculation.snapshot?.pallet ? (
           <>
             <p className="result">
@@ -1654,7 +1654,8 @@ export function App() {
           </>
         ) : null}
         {calculationError ? <p className="error">{calculationError}</p> : null}
-      </section>
+        </section>
+      </div>
     </main>
   );
 }

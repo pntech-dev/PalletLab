@@ -31,6 +31,8 @@ def test_default_project_matches_the_current_multilayer_starting_point() -> None
     assert response["ok"] is True
     assert response["snapshot"]["project"]["pallet"]["multi_layer_mode"] is True
     assert len(response["snapshot"]["pallet"]["layers"]) == 3
+    assert response["snapshot"]["project"]["pallet"]["length"]["rounding_step"] == 50
+    assert response["snapshot"]["project"]["pallet"]["length"]["round_pallet_size"] is True
 
 
 def test_delete_beams_uses_rendered_layer_indices_and_returns_updated_snapshot() -> None:

@@ -161,8 +161,8 @@ class ApplicationService:
 
     def default_project(self) -> dict[str, Any]:
         """Return the same starting configuration as the current desktop reset."""
-        length = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100)
-        width = DirectionInput(70, 50, (560, 720), 277, 179, 100, 100)
+        length = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100, True, 50)
+        width = DirectionInput(70, 50, (560, 720), 277, 179, 100, 100, True, 50)
         layers = [
             LayerInput("length", "length", length),
             LayerInput("width", "width", width),
