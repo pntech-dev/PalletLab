@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
 import sys
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import mimetypes
 from pathlib import Path
@@ -23,6 +26,7 @@ class WebApplicationApi:
         self._window: Any | None = None
         self._step_imports = StepImportService()
         self._assets = _StepAssetServer()
+        self._settings = _WebSettings()
 
     def attach_window(self, window: Any) -> None:
         self._window = window
@@ -97,6 +101,15 @@ class WebApplicationApi:
         directory = self._choose_directory("Выберите папку для экспорта SolidWorks")
         return {"ok": False, "cancelled": True} if directory is None else ApplicationService().export_solidworks(project, directory, options)
 
+    def solidworks_export_settings(self) -> dict[str, Any]:
+        """Load web CAD preferences independently of the temporary web origin."""
+        return {"ok": True, "options": self._settings.solidworks_options()}
+
+    def save_solidworks_export_settings(self, options: object) -> dict[str, Any]:
+        if not self._settings.save_solidworks_options(options):
+            return {"ok": False, "error": "Не удалось сохранить настройки экспорта SolidWorks."}
+        return {"ok": True}
+
     def import_step_model(self) -> dict[str, Any]:
         """Choose a source model and start its isolated cached import."""
         path = self._choose_file("step")
@@ -147,6 +160,59 @@ class WebApplicationApi:
 
         selected = self._window.create_file_dialog(webview.FileDialog.FOLDER, directory="", allow_multiple=False)
         return str(selected[0]) if selected else None
+
+
+class _WebSettings:
+    """Small persistent store for preferences that must survive a new webview URL."""
+
+    _KEYS = ("partTemplate", "assemblyTemplate", "materialLibrary", "materialName")
+
+    def __init__(self, path: Path | None = None) -> None:
+        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "PalletLab"
+        self._path = path or root / "web_settings.json"
+        self._lock = Lock()
+
+    def solidworks_options(self) -> dict[str, str] | None:
+        with self._lock:
+            try:
+                payload = json.loads(self._path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+        options = payload.get("solidworks") if isinstance(payload, dict) else None
+        if not isinstance(options, dict) or any(not isinstance(options.get(key), str) for key in self._KEYS):
+            return None
+        return {key: options[key] for key in self._KEYS}
+
+    def save_solidworks_options(self, options: object) -> bool:
+        if not isinstance(options, dict) or any(not isinstance(options.get(key), str) or not options[key] for key in self._KEYS):
+            return False
+        normalized = {key: options[key] for key in self._KEYS}
+        with self._lock:
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                payload = {}
+                try:
+                    payload = json.loads(self._path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    pass
+                if not isinstance(payload, dict):
+                    payload = {}
+                payload["solidworks"] = normalized
+                serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=self._path.parent, delete=False) as stream:
+                    stream.write(serialized)
+                    temporary = Path(stream.name)
+                try:
+                    temporary.replace(self._path)
+                except OSError:
+                    # Some sandboxed Windows hosts deny atomic replacement in
+                    # their temporary directory.  Preferences are noncritical,
+                    # so a direct replacement is an acceptable fallback.
+                    self._path.write_text(serialized, encoding="utf-8")
+                    temporary.unlink(missing_ok=True)
+            except OSError:
+                return False
+        return True
 
 
 class _StepAssetServer:

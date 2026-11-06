@@ -100,6 +100,7 @@ type SolidWorksOptions = {
   materialLibrary: string;
   materialName: string;
 };
+type SolidWorksSettingsResponse = CommandResponse & { options?: SolidWorksOptions | null };
 type ExportResult = {
   target: "КОМПАС-3D" | "SolidWorks";
   ok: boolean;
@@ -195,6 +196,8 @@ declare global {
         export_kompas: (project: Project) => Promise<CommandResponse>;
         select_solidworks_template: (kind: "part" | "assembly") => Promise<SolidWorksTemplateResponse>;
         select_solidworks_material_library: () => Promise<SolidWorksMaterialsResponse>;
+        solidworks_export_settings: () => Promise<SolidWorksSettingsResponse>;
+        save_solidworks_export_settings: (options: SolidWorksOptions) => Promise<CommandResponse>;
         export_solidworks: (project: Project, options: SolidWorksOptions) => Promise<CommandResponse>;
         import_step_model: () => Promise<StepImportOperation>;
         step_import_status: (operationId: string) => Promise<StepImportOperation>;
@@ -360,10 +363,11 @@ export function App() {
       const api = window.pywebview?.api;
       if (!api) return;
       try {
-        const [nextStatus, defaultProject, nextMaterials] = await Promise.all([
+        const [nextStatus, defaultProject, nextMaterials, savedSolidWorksSettings] = await Promise.all([
           api.status(),
           api.default_project(),
           api.materials(),
+          api.solidworks_export_settings(),
         ]);
         const recovered = recoveredProject();
         if (recovered) {
@@ -381,6 +385,9 @@ export function App() {
         }
         setStatus(nextStatus);
         setMaterials(nextMaterials);
+        if (savedSolidWorksSettings.ok && savedSolidWorksSettings.options) {
+          setSolidWorksOptions(savedSolidWorksSettings.options);
+        }
       } catch {
         setStatus(null);
       }
@@ -441,13 +448,19 @@ export function App() {
     }
   }
 
-  function rememberSolidWorksOptions(options: SolidWorksOptions) {
+  async function rememberSolidWorksOptions(options: SolidWorksOptions): Promise<boolean> {
     setSolidWorksOptions(options);
     try {
       window.localStorage.setItem(SOLIDWORKS_OPTIONS_KEY, JSON.stringify(options));
     } catch {
       // Export configuration is optional when embedded storage is unavailable.
     }
+    const response = await window.pywebview?.api?.save_solidworks_export_settings(options);
+    if (!response?.ok) {
+      setSolidWorksSetupError(response?.error ?? "Не удалось сохранить настройки экспорта SolidWorks.");
+      return false;
+    }
+    return true;
   }
 
   async function selectSolidWorksTemplate(kind: "part" | "assembly") {
@@ -549,10 +562,12 @@ export function App() {
 
   function saveSolidWorksSetup() {
     if (!solidWorksDraft || Object.values(solidWorksDraft).some((value) => !value)) return;
-    rememberSolidWorksOptions(solidWorksDraft);
-    setSolidWorksSetupError(null);
-    setSolidWorksSetupOpen(false);
-    void exportSolidWorks(solidWorksDraft);
+    void (async () => {
+      if (!await rememberSolidWorksOptions(solidWorksDraft)) return;
+      setSolidWorksSetupError(null);
+      setSolidWorksSetupOpen(false);
+      void exportSolidWorks(solidWorksDraft);
+    })();
   }
 
   async function importStepModel() {

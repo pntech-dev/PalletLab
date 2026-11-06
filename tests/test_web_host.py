@@ -1,4 +1,4 @@
-from palletlab.desktop.web_host import WebApplicationApi
+from palletlab.desktop.web_host import WebApplicationApi, _WebSettings
 
 
 def test_web_application_api_reports_compatible_snapshot_version() -> None:
@@ -37,3 +37,16 @@ def test_web_api_rejects_an_unknown_solidworks_template_type() -> None:
         "ok": False,
         "error": "Некорректный тип шаблона SolidWorks.",
     }
+
+
+def test_web_settings_persist_solidworks_options(tmp_path) -> None:
+    path = tmp_path / "web_settings.json"
+    options = {
+        "partTemplate": r"C:\templates\part.prtdot",
+        "assemblyTemplate": r"C:\templates\assembly.asmdot",
+        "materialLibrary": r"C:\materials\solidworks materials.sldmat",
+        "materialName": "Pine",
+    }
+
+    assert _WebSettings(path).save_solidworks_options(options) is True
+    assert _WebSettings(path).solidworks_options() == options
