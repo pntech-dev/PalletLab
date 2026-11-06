@@ -1175,15 +1175,15 @@ export function App() {
               <p>Выберите шаблоны и библиотеку материалов. Настройка сохранится для следующих запусков.</p>
               <label className="file-field">
                 Шаблон детали (.prtdot)
-                <span><input value={solidWorksDraft.partTemplate} readOnly /><button type="button" onClick={() => void selectSolidWorksTemplate("part")}>Обзор…</button></span>
+                <div className="file-field-control"><input value={solidWorksDraft.partTemplate} readOnly /><button type="button" onClick={() => void selectSolidWorksTemplate("part")}>Обзор…</button></div>
               </label>
               <label className="file-field">
                 Шаблон сборки (.asmdot)
-                <span><input value={solidWorksDraft.assemblyTemplate} readOnly /><button type="button" onClick={() => void selectSolidWorksTemplate("assembly")}>Обзор…</button></span>
+                <div className="file-field-control"><input value={solidWorksDraft.assemblyTemplate} readOnly /><button type="button" onClick={() => void selectSolidWorksTemplate("assembly")}>Обзор…</button></div>
               </label>
               <label className="file-field">
                 Библиотека материалов (.sldmat)
-                <span><input value={solidWorksDraft.materialLibrary} readOnly /><button type="button" onClick={() => void selectSolidWorksMaterialLibrary()}>Обзор…</button></span>
+                <div className="file-field-control"><input value={solidWorksDraft.materialLibrary} readOnly /><button type="button" onClick={() => void selectSolidWorksMaterialLibrary()}>Обзор…</button></div>
               </label>
               <p className="modal-hint">Стандартный путь: <code>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\russian\sldmaterials\solidworks materials.sldmat</code></p>
               <label>
