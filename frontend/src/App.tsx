@@ -1186,7 +1186,7 @@ export function App() {
                 <div className="file-field-control"><input value={solidWorksDraft.materialLibrary} readOnly /><button type="button" onClick={() => void selectSolidWorksMaterialLibrary()}>Обзор…</button></div>
               </label>
               <p className="modal-hint">Стандартный путь: <code>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\russian\sldmaterials\solidworks materials.sldmat</code></p>
-              <label>
+              <label className="material-field">
                 Материал SolidWorks
                 <select
                   value={solidWorksDraft.materialName}
