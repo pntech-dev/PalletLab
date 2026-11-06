@@ -14,6 +14,9 @@ from palletlab.core.persistence import ProjectPersistenceError, load_project, pr
 from palletlab.core.project_state import ProjectState
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
 from palletlab.exporters.solidworks import SolidWorksExportError, export_pallet as export_solidworks_pallet
+from palletlab.exporters.drawings import DrawingExportError, DrawingScope, DrawingTemplateError
+from palletlab.exporters.kompas import create_drawings as create_kompas_drawings
+from palletlab.exporters.solidworks import create_drawings as create_solidworks_drawings
 
 
 class ApplicationService:
@@ -230,6 +233,39 @@ class ApplicationService:
                 material_name,
             )
         except SolidWorksExportError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "output": str(output)}
+
+    def create_drawings(
+        self,
+        project: object,
+        cad: object,
+        scope: object,
+        model_directory: object,
+        template: object,
+    ) -> dict[str, Any]:
+        """Create native drawings from an existing web-exported CAD directory."""
+        try:
+            state = project_from_dict(project)
+        except ProjectPersistenceError as exc:
+            return {"ok": False, "error": str(exc)}
+        if cad not in {"solidworks", "kompas"}:
+            return {"ok": False, "error": "Выберите CAD-систему для создания чертежей."}
+        scopes = {item.value: item for item in DrawingScope}
+        if scope not in scopes:
+            return {"ok": False, "error": "Выберите состав чертежей."}
+        if not isinstance(model_directory, str) or not Path(model_directory).is_dir():
+            return {"ok": False, "error": "Выберите папку с экспортированными CAD-моделями."}
+        if template is not None and (not isinstance(template, str) or not template.strip()):
+            return {"ok": False, "error": "Некорректный шаблон чертежа."}
+
+        result, error = self._calculate_result(state)
+        if error:
+            return {"ok": False, "error": error}
+        try:
+            create = create_solidworks_drawings if cad == "solidworks" else create_kompas_drawings
+            output = create(Path(model_directory), scopes[scope], template or None, result)
+        except (DrawingExportError, DrawingTemplateError) as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "output": str(output)}
 

@@ -101,8 +101,11 @@ type SolidWorksOptions = {
   materialName: string;
 };
 type SolidWorksSettingsResponse = CommandResponse & { options?: SolidWorksOptions | null };
+type DrawingCad = "solidworks" | "kompas";
+type DrawingScope = "assembly" | "parts_and_assembly";
+type DrawingTemplatesResponse = CommandResponse & { templates?: Partial<Record<DrawingCad, string>> };
 type ExportResult = {
-  target: "КОМПАС-3D" | "SolidWorks";
+  target: "КОМПАС-3D" | "SolidWorks" | "Чертежи SolidWorks" | "Чертежи КОМПАС-3D";
   ok: boolean;
   message: string;
 };
@@ -199,6 +202,10 @@ declare global {
         solidworks_export_settings: () => Promise<SolidWorksSettingsResponse>;
         save_solidworks_export_settings: (options: SolidWorksOptions) => Promise<CommandResponse>;
         export_solidworks: (project: Project, options: SolidWorksOptions) => Promise<CommandResponse>;
+        select_drawing_template: (cad: DrawingCad) => Promise<SolidWorksTemplateResponse>;
+        drawing_settings: () => Promise<DrawingTemplatesResponse>;
+        save_drawing_template: (cad: DrawingCad, template: string) => Promise<CommandResponse>;
+        create_drawings: (project: Project, cad: DrawingCad, scope: DrawingScope, template: string | null) => Promise<CommandResponse>;
         import_step_model: () => Promise<StepImportOperation>;
         step_import_status: (operationId: string) => Promise<StepImportOperation>;
         cancel_step_import: (operationId: string) => Promise<StepImportOperation>;
@@ -229,11 +236,16 @@ export function App() {
   const [stepPalletBuilt, setStepPalletBuilt] = useState(false);
   const [solidWorksOptions, setSolidWorksOptions] = useState<SolidWorksOptions | null>(storedSolidWorksOptions);
   const [solidWorksMaterials, setSolidWorksMaterials] = useState<string[]>([]);
-  const [exporting, setExporting] = useState<"kompas" | "solidworks" | null>(null);
+  const [exporting, setExporting] = useState<"kompas" | "solidworks" | "drawings" | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [solidWorksSetupOpen, setSolidWorksSetupOpen] = useState(false);
   const [solidWorksDraft, setSolidWorksDraft] = useState<SolidWorksOptions | null>(null);
   const [solidWorksSetupError, setSolidWorksSetupError] = useState<string | null>(null);
+  const [drawingsSetupOpen, setDrawingsSetupOpen] = useState(false);
+  const [drawingCad, setDrawingCad] = useState<DrawingCad>("solidworks");
+  const [drawingScope, setDrawingScope] = useState<DrawingScope>("assembly");
+  const [drawingTemplates, setDrawingTemplates] = useState<Partial<Record<DrawingCad, string>>>({});
+  const [drawingSetupError, setDrawingSetupError] = useState<string | null>(null);
   const [buildingStepPallet, setBuildingStepPallet] = useState(false);
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
   const [beamTool, setBeamTool] = useState<"none" | "delete" | "section">("none");
@@ -363,11 +375,12 @@ export function App() {
       const api = window.pywebview?.api;
       if (!api) return;
       try {
-        const [nextStatus, defaultProject, nextMaterials, savedSolidWorksSettings] = await Promise.all([
+        const [nextStatus, defaultProject, nextMaterials, savedSolidWorksSettings, savedDrawingSettings] = await Promise.all([
           api.status(),
           api.default_project(),
           api.materials(),
           api.solidworks_export_settings(),
+          api.drawing_settings(),
         ]);
         const recovered = recoveredProject();
         if (recovered) {
@@ -387,6 +400,9 @@ export function App() {
         setMaterials(nextMaterials);
         if (savedSolidWorksSettings.ok && savedSolidWorksSettings.options) {
           setSolidWorksOptions(savedSolidWorksSettings.options);
+        }
+        if (savedDrawingSettings.ok && savedDrawingSettings.templates) {
+          setDrawingTemplates(savedDrawingSettings.templates);
         }
       } catch {
         setStatus(null);
@@ -568,6 +584,52 @@ export function App() {
       setSolidWorksSetupOpen(false);
       void exportSolidWorks(solidWorksDraft);
     })();
+  }
+
+  async function selectDrawingTemplate() {
+    const api = window.pywebview?.api;
+    if (!api) return;
+    const response = await api.select_drawing_template(drawingCad);
+    if (!response || response.cancelled) return;
+    if (!response.ok || !response.path) {
+      setDrawingSetupError(response?.error ?? "Не удалось выбрать шаблон чертежа.");
+      return;
+    }
+    const saved = await api.save_drawing_template(drawingCad, response.path);
+    if (!saved.ok) {
+      setDrawingSetupError(saved.error ?? "Не удалось сохранить шаблон чертежа.");
+      return;
+    }
+    setDrawingTemplates((current) => ({ ...current, [drawingCad]: response.path! }));
+    setDrawingSetupError(null);
+  }
+
+  function openDrawingsSetup() {
+    setDrawingSetupError(null);
+    setDrawingsSetupOpen(true);
+  }
+
+  async function createDrawings() {
+    const api = window.pywebview?.api;
+    if (!api || !project) return;
+    setDrawingsSetupOpen(false);
+    setExporting("drawings");
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    try {
+      const response = await api.create_drawings(project, drawingCad, drawingScope, drawingTemplates[drawingCad] ?? null);
+      if (!response.cancelled) {
+        const target = drawingCad === "solidworks" ? "Чертежи SolidWorks" : "Чертежи КОМПАС-3D";
+        setExportResult({
+          target,
+          ok: response.ok,
+          message: response.ok
+            ? `Чертежи сохранены в папке:\n${response.output}`
+            : response.error ?? "Создание чертежей не выполнено.",
+        });
+      }
+    } finally {
+      setExporting(null);
+    }
   }
 
   async function importStepModel() {
@@ -1164,6 +1226,9 @@ export function App() {
               <button type="button" className="secondary" onClick={openSolidWorksSetup} disabled={exporting !== null}>
                 SolidWorks settings
               </button>
+              <button type="button" className="secondary" onClick={openDrawingsSetup} disabled={exporting !== null}>
+                Create drawings
+              </button>
             </div>
             <p className="cad-export-note">SolidWorks settings are requested only before the first export.</p>
           </fieldset>
@@ -1204,11 +1269,46 @@ export function App() {
             </section>
           </div>
         ) : null}
+        {drawingsSetupOpen ? (
+          <div className="modal-backdrop" role="presentation">
+            <section className="modal drawing-modal" role="dialog" aria-modal="true" aria-labelledby="drawings-title">
+              <h2 id="drawings-title">Создание CAD-чертежей</h2>
+              <p>Выберите CAD-систему и состав чертежей. Затем укажите папку ранее экспортированных моделей.</p>
+              <label>
+                CAD-система
+                <select value={drawingCad} onChange={(event) => setDrawingCad(event.target.value as DrawingCad)}>
+                  <option value="solidworks">SolidWorks</option>
+                  <option value="kompas">КОМПАС-3D</option>
+                </select>
+              </label>
+              <label>
+                Состав чертежей
+                <select value={drawingScope} onChange={(event) => setDrawingScope(event.target.value as DrawingScope)}>
+                  <option value="assembly">Только сборка</option>
+                  <option value="parts_and_assembly">Детали и сборка</option>
+                </select>
+              </label>
+              <label className="file-field">
+                Шаблон чертежа ({drawingCad === "solidworks" ? ".drwdot" : ".cdt"}, необязательно)
+                <div className="file-field-control">
+                  <input value={drawingTemplates[drawingCad] ?? ""} readOnly placeholder="Будет использован шаблон CAD по умолчанию" />
+                  <button type="button" onClick={() => void selectDrawingTemplate()}>Обзор…</button>
+                </div>
+              </label>
+              <p className="modal-hint">Выбранный шаблон сохраняется для последующих запусков.</p>
+              {drawingSetupError ? <p className="error">{drawingSetupError}</p> : null}
+              <footer className="modal-actions">
+                <button type="button" onClick={() => void createDrawings()}>Выбрать папку и создать</button>
+                <button type="button" className="secondary" onClick={() => setDrawingsSetupOpen(false)}>Отмена</button>
+              </footer>
+            </section>
+          </div>
+        ) : null}
         {exporting ? (
           <div className="modal-backdrop" role="presentation">
             <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite">
               <h2>Экспорт выполняется</h2>
-              <p>{exporting === "solidworks" ? "SolidWorks создаёт детали и сборку…" : "КОМПАС-3D создаёт детали и сборку…"}</p>
+              <p>{exporting === "drawings" ? "CAD-система создаёт чертежи…" : exporting === "solidworks" ? "SolidWorks создаёт детали и сборку…" : "КОМПАС-3D создаёт детали и сборку…"}</p>
               <progress aria-label="Процесс экспорта" />
               <p className="modal-hint">Не закрывайте PalletLab и CAD-систему до завершения операции.</p>
             </section>

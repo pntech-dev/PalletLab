@@ -50,3 +50,37 @@ def test_web_settings_persist_solidworks_options(tmp_path) -> None:
 
     assert _WebSettings(path).save_solidworks_options(options) is True
     assert _WebSettings(path).solidworks_options() == options
+
+
+def test_web_settings_persist_drawing_templates(tmp_path) -> None:
+    path = tmp_path / "web_settings.json"
+    settings = _WebSettings(path)
+
+    assert settings.save_drawing_template("solidworks", r"C:\templates\drawing.drwdot") is True
+    assert settings.save_drawing_template("kompas", r"C:\templates\drawing.cdt") is True
+    assert _WebSettings(path).drawing_templates() == {
+        "solidworks": r"C:\templates\drawing.drwdot",
+        "kompas": r"C:\templates\drawing.cdt",
+    }
+
+
+def test_web_api_returns_drawing_template_path(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    template = tmp_path / "drawing.cdt"
+    monkeypatch.setattr(api, "_choose_file", lambda mode: str(template) if mode == "kompas_drawing" else None)
+
+    assert api.select_drawing_template("kompas") == {"ok": True, "path": str(template)}
+
+
+def test_web_api_creates_drawings_from_a_native_folder_choice(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    project = {"project": "payload"}
+    monkeypatch.setattr(api, "_choose_directory", lambda _title: str(tmp_path))
+    monkeypatch.setattr(
+        "palletlab.desktop.web_host.ApplicationService.create_drawings",
+        lambda _service, *args: {"ok": True, "args": args},
+    )
+
+    response = api.create_drawings(project, "kompas", "assembly", None)
+
+    assert response == {"ok": True, "args": (project, "kompas", "assembly", str(tmp_path), None)}

@@ -36,6 +36,8 @@ button.secondary { border: 1px solid #78909b; background: #fff; color: #315b6c; 
 .modal label { min-width: 0; }
 .material-field { display: flex; flex-direction: column; width: calc(100% - 24px); max-width: calc(100% - 24px); gap: 4px; }
 .material-field select { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
+.drawing-modal > label:not(.file-field) { display: flex; flex-direction: column; width: calc(100% - 24px); max-width: calc(100% - 24px); gap: 4px; }
+.drawing-modal > label:not(.file-field) select { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 .modal-hint { color: #53666f; font-size: 0.85rem; line-height: 1.45; }
 .modal-hint code { word-break: break-all; }
 .file-field { min-width: 0; }

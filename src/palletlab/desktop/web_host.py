@@ -101,6 +101,29 @@ class WebApplicationApi:
         directory = self._choose_directory("Выберите папку для экспорта SolidWorks")
         return {"ok": False, "cancelled": True} if directory is None else ApplicationService().export_solidworks(project, directory, options)
 
+    def select_drawing_template(self, cad: object) -> dict[str, Any]:
+        if cad not in {"solidworks", "kompas"}:
+            return {"ok": False, "error": "Некорректная CAD-система."}
+        path = self._choose_file(f"{cad}_drawing")
+        return {"ok": False, "cancelled": True} if path is None else {"ok": True, "path": path}
+
+    def drawing_settings(self) -> dict[str, Any]:
+        return {"ok": True, "templates": self._settings.drawing_templates()}
+
+    def save_drawing_template(self, cad: object, template: object) -> dict[str, Any]:
+        if cad not in {"solidworks", "kompas"} or not isinstance(template, str) or not template:
+            return {"ok": False, "error": "Некорректные настройки шаблона чертежа."}
+        return {"ok": True} if self._settings.save_drawing_template(cad, template) else {
+            "ok": False,
+            "error": "Не удалось сохранить шаблон чертежа.",
+        }
+
+    def create_drawings(self, project: object, cad: object, scope: object, template: object) -> dict[str, Any]:
+        directory = self._choose_directory("Выберите папку экспорта с CAD-моделями")
+        return {"ok": False, "cancelled": True} if directory is None else ApplicationService().create_drawings(
+            project, cad, scope, directory, template
+        )
+
     def solidworks_export_settings(self) -> dict[str, Any]:
         """Load web CAD preferences independently of the temporary web origin."""
         return {"ok": True, "options": self._settings.solidworks_options()}
@@ -148,6 +171,10 @@ class WebApplicationApi:
                 if mode == "solidworks_assembly"
                 else ("SolidWorks material library (*.sldmat)",)
                 if mode == "solidworks_material"
+                else ("SolidWorks drawing template (*.drwdot)",)
+                if mode == "solidworks_drawing"
+                else ("КОМПАС-3D drawing template (*.cdt)",)
+                if mode == "kompas_drawing"
                 else ("PalletLab project (*.palletlab.json)",)
             ),
         )
@@ -213,6 +240,47 @@ class _WebSettings:
             except OSError:
                 return False
         return True
+
+    def drawing_templates(self) -> dict[str, str]:
+        with self._lock:
+            try:
+                payload = json.loads(self._path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}
+        templates = payload.get("drawingTemplates") if isinstance(payload, dict) else None
+        if not isinstance(templates, dict):
+            return {}
+        return {cad: value for cad, value in templates.items() if cad in {"solidworks", "kompas"} and isinstance(value, str)}
+
+    def save_drawing_template(self, cad: str, template: str) -> bool:
+        with self._lock:
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    payload = json.loads(self._path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                templates = payload.setdefault("drawingTemplates", {})
+                if not isinstance(templates, dict):
+                    templates = payload["drawingTemplates"] = {}
+                templates[cad] = template
+                self._write(payload)
+            except OSError:
+                return False
+        return True
+
+    def _write(self, payload: dict[str, object]) -> None:
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=self._path.parent, delete=False) as stream:
+            stream.write(serialized)
+            temporary = Path(stream.name)
+        try:
+            temporary.replace(self._path)
+        except OSError:
+            self._path.write_text(serialized, encoding="utf-8")
+            temporary.unlink(missing_ok=True)
 
 
 class _StepAssetServer:

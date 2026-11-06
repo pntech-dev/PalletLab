@@ -285,3 +285,33 @@ def test_solidworks_export_rejects_missing_web_resources(tmp_path) -> None:
         "ok": False,
         "error": "Выберите шаблоны и материал SolidWorks перед экспортом.",
     }
+
+
+def test_create_solidworks_drawings_uses_the_current_calculation(tmp_path, monkeypatch) -> None:
+    service = ApplicationService()
+    output = tmp_path / "Drawings"
+    captured = {}
+
+    def create(directory, scope, template, result):
+        captured.update(directory=directory, scope=scope, template=template, result=result)
+        return output
+
+    monkeypatch.setattr("palletlab.application.service.create_solidworks_drawings", create)
+
+    response = service.create_drawings(
+        service.default_project(), "solidworks", "parts_and_assembly", str(tmp_path), r"C:\templates\drawing.drwdot"
+    )
+
+    assert response == {"ok": True, "output": str(output)}
+    assert captured["directory"] == tmp_path
+    assert captured["scope"].value == "parts_and_assembly"
+    assert captured["template"] == r"C:\templates\drawing.drwdot"
+    assert captured["result"].beams_3d
+
+
+def test_create_drawings_rejects_invalid_web_options(tmp_path) -> None:
+    response = ApplicationService().create_drawings(
+        ApplicationService().default_project(), "unknown", "assembly", str(tmp_path), None
+    )
+
+    assert response == {"ok": False, "error": "Выберите CAD-систему для создания чертежей."}
