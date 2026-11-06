@@ -34,7 +34,9 @@ _VIEW_ORIGIN_Y = 245.0
 _VIEW_GAP = 25.0
 _MAX_VIEW_WIDTH = 260.0
 _STANDARD_SCALE_DENOMINATORS = (1, 2, 2.5, 4, 5, 10, 20, 25, 40, 50, 100, 200, 400, 500)
-_PALLET_VIEW_MASK = 0x01 | 0x04 | 0x10  # front, top, left
+# Front, top and left are the three orthogonal projections.  Including both
+# left and right produces duplicate opposing side views in KOMPAS.
+_PALLET_VIEW_MASK = 0x01 | 0x04 | 0x10
 _ASSEMBLY_TECHNICAL_REQUIREMENTS = (
     "*Размеры для справок.",
     "Сварные соединения по ГОСТ 14771-76.",
@@ -45,13 +47,13 @@ _ASSEMBLY_TECHNICAL_REQUIREMENTS = (
     "Все сварные швы зачистить Rz40.",
 )
 _KOMPAS_TEXT_ITEM_LIMIT = 100
-# The main title block of an A3 landscape sheet is 180×55 mm, aligned to the
+# The main title block of an A3 landscape sheet is 185×55 mm, aligned to the
 # bottom-right frame.  The specification is joined to its upper edge.
-_TITLE_BLOCK_LEFT = 235.0
+_TITLE_BLOCK_LEFT = 230.0
 _TITLE_BLOCK_TOP = 60.0
 _SPECIFICATION_LEFT = _TITLE_BLOCK_LEFT
 _SPECIFICATION_BOTTOM = _TITLE_BLOCK_TOP
-_SPECIFICATION_COLUMNS = (7.0, 7.0, 9.0, 70.0, 62.0, 10.0, 15.0)
+_SPECIFICATION_COLUMNS = (7.0, 7.0, 9.0, 64.0, 58.0, 10.0, 30.0)
 _SPECIFICATION_HEADER_HEIGHT = 12.0
 _SPECIFICATION_ROW_HEIGHT = 8.0
 _SPECIFICATION_LINE_STYLE = 1
@@ -102,7 +104,6 @@ def create_drawings(
                     if model.suffix.casefold() == ".a3d" and pallet_result
                     else _stored_specification_rows(directory) if model.suffix.casefold() == ".a3d" else ()
                 ),
-                overall_dimensions=_overall_dimensions(model, directory, pallet_result),
             )
         return drawings
     except (DrawingExportError, DrawingTemplateError):
@@ -122,7 +123,6 @@ def _create_drawing(
     template: Path | None,
     include_assembly_requirements: bool = False,
     specification_rows: tuple[SpecificationRow, ...] = (),
-    overall_dimensions: tuple[float, float, float] | None = None,
 ) -> None:
     """Create a drawing through the KOMPAS API5 ``ksDocument2D`` interface.
 
@@ -148,6 +148,10 @@ def _create_drawing(
     parameters = kompas.GetParamStruct(constants.ko_AssociationViewParam)
     parameters.Init()
     parameters.fileName = str(model)
+    # KOMPAS exposes saved standard model views with a ``#`` prefix.  The
+    # pallet's long elevation is the model's left view; using it as the source
+    # projection makes that elevation primary and builds the plan from it.
+    parameters.projectionName = "#Слева"
     # Init() clears every association option.  With projBodies left at zero,
     # KOMPAS creates the view nodes but deliberately projects no solid bodies,
     # yielding the "Вид не содержит изображения модели" diagnostic.  Include
@@ -169,8 +173,15 @@ def _create_drawing(
     # before this step leaves warning-marked, empty views in the drawing tree.
     if not document.ksRebuildDocument():
         raise DrawingExportError(f"КОМПАС-3D не перестроил ассоциативные виды для {model.name}.")
-    if overall_dimensions is not None:
-        _add_overall_dimensions(document, kompas, constants, model, overall_dimensions)
+    # ksCreateSheetStandartViews makes the last associative view current.  All
+    # annotations below use sheet coordinates, so they must be created in the
+    # system view (number 0), rather than in that view's local coordinate
+    # system.  Without this switch, TT and the specification grid are visibly
+    # displaced from their intended sheet positions.
+    # ``ksOpenView`` returns a view reference.  The system view itself has
+    # number 0 and some KOMPAS builds also return 0 for its reference, so the
+    # return value cannot be interpreted as a failure here.
+    document.ksOpenView(0)
     if include_assembly_requirements:
         _add_assembly_technical_requirements(document, kompas, constants)
         _add_assembly_specification(document, specification_rows)
@@ -178,80 +189,16 @@ def _create_drawing(
         raise DrawingExportError(f"КОМПАС-3D не сохранил {filename.name}.")
 
 
-def _add_overall_dimensions(
-    document, kompas, constants, model: Path, dimensions: tuple[float, float, float],
-) -> None:
-    """Create exactly three native linear reference dimensions with arrows."""
-    length, width, height = dimensions
-    scale = _drawing_scale(model)
-    side_width, side_height = length * scale, height * scale
-    end_width = width * scale
-    side_left, side_bottom = _VIEW_ORIGIN_X - side_width / 2.0, _VIEW_ORIGIN_Y - side_height / 2.0
-    end_left = _VIEW_ORIGIN_X + side_width / 2.0 + _VIEW_GAP
-
-    _add_reference_linear_dimension(
-        document, kompas, constants,
-        side_left, side_bottom, side_left + side_width, side_bottom,
-        length, 0, 0.0, -15.0,
-    )
-    _add_reference_linear_dimension(
-        document, kompas, constants,
-        end_left, side_bottom, end_left + end_width, side_bottom,
-        width, 0, 0.0, -15.0,
-    )
-    _add_reference_linear_dimension(
-        document, kompas, constants,
-        end_left + end_width, side_bottom, end_left + end_width, side_bottom + side_height,
-        height, 1, 15.0, 0.0,
-    )
-
-
-def _add_reference_linear_dimension(
-    document, kompas, constants, x1: float, y1: float, x2: float, y2: float,
-    value: float, orientation: int, dx: float, dy: float,
-) -> None:
-    """Create one native KOMPAS linear dimension with a ``*`` suffix."""
-    dimension = kompas.GetParamStruct(constants.ko_LDimParam)
-    drawing = dimension.GetDPar()
-    source = dimension.GetSPar()
-    text = dimension.GetTPar()
-    drawing.Init()
-    source.Init()
-    source.ps = orientation
-    source.x1, source.y1, source.x2, source.y2 = x1, y1, x2, y2
-    source.dx, source.dy, source.basePoint = dx, dy, 1
-    text.Init(False)
-    text.SetBitFlagValue(constants._SUFFIX, True)
-    text_array = text.GetTextArr()
-    for value_text in (_format_dimension(value), "*"):
-        item = kompas.GetParamStruct(constants.ko_Char255)
-        item.str = value_text
-        text_array.ksAddArrayItem(-1, item)
-    if not document.ksLinDimension(dimension):
-        raise DrawingExportError("КОМПАС-3D не добавил общий габаритный размер.")
-
-
 def _add_assembly_technical_requirements(document, kompas, constants) -> None:
-    """Place technical requirements 5 mm inside the A3 drawing frame.
-
-    KOMPAS's native technical-demand object is auto-positioned by the active
-    template.  That made the output depend on local CAD preferences, so use
-    ordinary editable drawing text for the fixed ESKD placement instead.
-    """
+    """Place requirements at the fixed lower-left ESKD sheet position."""
     lines = tuple(
-        f"{number}. {requirement}"
+        f"{number}. {requirement.replace('—', '-')}"
         for number, requirement in enumerate(_ASSEMBLY_TECHNICAL_REQUIREMENTS, start=1)
     )
     for line_index, text in enumerate(reversed(lines)):
         y = _TECHNICAL_REQUIREMENTS_BOTTOM + line_index * _TECHNICAL_REQUIREMENTS_LINE_HEIGHT
         if not document.ksText(
-            _TECHNICAL_REQUIREMENTS_LEFT,
-            y,
-            0.0,
-            _TECHNICAL_REQUIREMENTS_TEXT_HEIGHT,
-            1,
-            0,
-            text,
+            _TECHNICAL_REQUIREMENTS_LEFT, y, 0.0, _TECHNICAL_REQUIREMENTS_TEXT_HEIGHT, 1.0, 0, text
         ):
             raise DrawingExportError("КОМПАС-3D не создал текст технических требований.")
 
@@ -282,7 +229,7 @@ def _add_assembly_specification(document, rows: tuple[SpecificationRow, ...]) ->
         return
     width = sum(_SPECIFICATION_COLUMNS)
     table_rows: list[tuple[float, tuple[str, ...], bool]] = [
-        (_SPECIFICATION_HEADER_HEIGHT, ("Формат", "Зона", "Поз.", "ОБОЗНАЧЕНИЕ ДЕТАЛИ", "Наименование", "Кол.", "Приме-\nчание"), True),
+        (_SPECIFICATION_HEADER_HEIGHT, ("Формат", "Зона", "Поз.", "Обозначение детали", "Наименование", "Кол.", "Приме-\nчание"), True),
         (_SPECIFICATION_ROW_HEIGHT, ("", "", "", "", "", "", ""), False),
         (_SPECIFICATION_ROW_HEIGHT, ("", "", "", "", "Прочие изделия", "", ""), False),
         (_SPECIFICATION_ROW_HEIGHT, ("", "", "", "", "", "", ""), False),
@@ -293,42 +240,53 @@ def _add_assembly_specification(document, rows: tuple[SpecificationRow, ...]) ->
     ]
     height = sum(row_height for row_height, _, _ in table_rows)
     top = _SPECIFICATION_BOTTOM + height
-    if not document.ksTable():
-        raise DrawingExportError("КОМПАС-3D не начал создание таблицы спецификации.")
-    try:
-        y = top
+    # ksTable enters KOMPAS's table-editing mode.  API5 then rejects ordinary
+    # line segments, which caused the real export to stop at its first row.
+    # A specification grid consists of normal thin drawing lines, so create
+    # them directly in the system view instead.
+    y = top
+    if not document.ksLineSeg(_SPECIFICATION_LEFT, y, _SPECIFICATION_LEFT + width, y, _SPECIFICATION_LINE_STYLE):
+        raise DrawingExportError("КОМПАС-3D не создал строку таблицы спецификации.")
+    for row_height, _, _ in table_rows:
+        y -= row_height
         if not document.ksLineSeg(_SPECIFICATION_LEFT, y, _SPECIFICATION_LEFT + width, y, _SPECIFICATION_LINE_STYLE):
             raise DrawingExportError("КОМПАС-3D не создал строку таблицы спецификации.")
-        for row_height, _, _ in table_rows:
-            y -= row_height
-            if not document.ksLineSeg(_SPECIFICATION_LEFT, y, _SPECIFICATION_LEFT + width, y, _SPECIFICATION_LINE_STYLE):
-                raise DrawingExportError("КОМПАС-3D не создал строку таблицы спецификации.")
-        x = _SPECIFICATION_LEFT
-        for column_width in _SPECIFICATION_COLUMNS:
-            if not document.ksLineSeg(x, top, x, _SPECIFICATION_BOTTOM, _SPECIFICATION_LINE_STYLE):
-                raise DrawingExportError("КОМПАС-3D не создал столбец таблицы спецификации.")
-            x += column_width
+    x = _SPECIFICATION_LEFT
+    for column_width in _SPECIFICATION_COLUMNS:
         if not document.ksLineSeg(x, top, x, _SPECIFICATION_BOTTOM, _SPECIFICATION_LINE_STYLE):
-            raise DrawingExportError("КОМПАС-3D не завершил рамку таблицы спецификации.")
-    except Exception:
-        document.ksEndObj()
-        raise
-    if not document.ksEndObj():
-        raise DrawingExportError("КОМПАС-3D не завершил создание таблицы спецификации.")
-    # API5 permits the table grid to be built as a compound object, but on
-    # recent KOMPAS versions rejects text creation while that object is open.
-    # Add ordinary editable drawing texts immediately after closing the grid.
+            raise DrawingExportError("КОМПАС-3D не создал столбец таблицы спецификации.")
+        x += column_width
+    if not document.ksLineSeg(x, top, x, _SPECIFICATION_BOTTOM, _SPECIFICATION_LINE_STYLE):
+        raise DrawingExportError("КОМПАС-3D не завершил рамку таблицы спецификации.")
     y = top
     for row_height, values_in_row, is_header in table_rows:
-        baseline = y - row_height * 0.67
         x = _SPECIFICATION_LEFT
         for column_index, (column_width, value) in enumerate(zip(_SPECIFICATION_COLUMNS, values_in_row, strict=True)):
             if value:
-                angle = 90.0 if is_header and column_index < 3 else 0.0
-                size = 3.0 if is_header else 3.5
-                document.ksText(x + 1.5, baseline, angle, size, 1, 0, value)
+                _add_specification_cell_text(document, x, y, column_width, row_height, value, is_header, column_index)
             x += column_width
         y -= row_height
+
+
+def _add_specification_cell_text(
+    document, x: float, top: float, width: float, height: float, value: str, is_header: bool, column_index: int,
+) -> None:
+    """Draw a cell caption centred within its cell without text overflow."""
+    if is_header and column_index in {0, 1, 2, 5}:
+        reference = document.ksText(x + width / 2.0, top - height / 2.0, 90.0, 2.5, 1.0, 0, value)
+        if reference:
+            document.ksSetTextAlign(reference, 1)
+        return
+    if is_header and column_index == 6:
+        for line_index, line in enumerate(value.splitlines()):
+            reference = document.ksText(x + width / 2.0, top - height * (0.42 + line_index * 0.32), 0.0, 2.5, 1.0, 0, line)
+            if reference:
+                document.ksSetTextAlign(reference, 1)
+        return
+    size = 2.5 if is_header else 3.5
+    reference = document.ksText(x + width / 2.0, top - height * 0.67, 0.0, size, 1.0, 0, value)
+    if reference:
+        document.ksSetTextAlign(reference, 1)
 
 
 def _configure_standard_sheet(document_parameters, constants) -> None:
@@ -359,29 +317,6 @@ def _stored_specification_rows(directory: Path) -> tuple[SpecificationRow, ...]:
         )
     except (OSError, ValueError, KeyError, TypeError):
         return ()
-
-
-def _overall_dimensions(
-    model: Path, directory: Path, pallet_result: PalletResult | None,
-) -> tuple[float, float, float] | None:
-    """Return the length, width and height of the document's own envelope."""
-    model_dimensions = _dimensions_from_model_name(model)
-    if len(model_dimensions) == 3:
-        return (model_dimensions[0], model_dimensions[1], model_dimensions[2])
-    if model.suffix.casefold() != ".a3d" or len(model_dimensions) != 2:
-        return None
-    if pallet_result is not None:
-        return (pallet_result.pallet_length, pallet_result.pallet_width, pallet_result.pallet_height)
-    try:
-        payload = json.loads((directory / ".palletlab-drawing.json").read_text(encoding="utf-8"))
-        pallet = payload["pallet"]
-        return (float(pallet["length"]), float(pallet["width"]), float(pallet["height"]))
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-
-
-def _format_dimension(value: float) -> str:
-    return str(int(value)) if float(value).is_integer() else f"{value:g}"
 
 
 def _drawing_scale(model: Path) -> float:
@@ -594,7 +529,6 @@ def _placement(beam: Beam3D) -> tuple[float, float, float, bool]:
     """Return origin and rotation in KOMPAS's X=length, Y=width, Z=height axes."""
     bottom_z = beam.z - beam.size_z / 2.0
     if beam.orientation == "length":
-        # Part local X coincides with the pallet X axis.
         return 0.0, beam.y - beam.size_y / 2.0, bottom_z, False
     # After a 90° rotation local X runs along pallet Y and local Y along -X.
     return beam.x + beam.size_x / 2.0, 0.0, bottom_z, True
