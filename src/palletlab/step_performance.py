@@ -9,7 +9,6 @@ calculation decisions.
 from __future__ import annotations
 
 import ctypes
-import json
 import os
 from pathlib import Path
 import sys
@@ -86,12 +85,9 @@ def geometry_footprint(mesh: Any, edges: Any) -> dict[str, int]:
 
 
 def write_step_performance(event: str, trace: dict[str, Any]) -> None:
-    """Append a diagnostic record outside the project and ignore I/O failures."""
-    try:
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "PalletLab" / "diagnostics"
-        root.mkdir(parents=True, exist_ok=True)
-        with (root / "step-performance.jsonl").open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps({"event": event, **trace}, ensure_ascii=False, separators=(",", ":")) + "\n")
-    except (OSError, TypeError, ValueError):
-        # Diagnostics must never make a CAD import or a pallet calculation fail.
-        pass
+    """Retired compatibility hook for historic STEP diagnostics.
+
+    Kept so older callers and integrations remain compatible, but production
+    imports no longer create or append diagnostic files.
+    """
+    del event, trace

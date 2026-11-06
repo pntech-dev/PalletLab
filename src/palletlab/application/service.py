@@ -237,7 +237,7 @@ def _beam_section(section: object) -> tuple[BeamSection | None, str | None]:
         or height <= 0
         or width <= 0
     ):
-        return None, "Высота и ширина сечения должны быть положительными числами."
+        return None, "Высота и ширина сечения должны быть числами больше нуля."
     return BeamSection(float(height), float(width)), None
 
 

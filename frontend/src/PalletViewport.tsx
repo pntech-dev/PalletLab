@@ -27,6 +27,7 @@ export type ViewportBeam = {
   size: [number, number, number];
 };
 export type ViewportPoint = [number, number, number];
+export type ViewportFaceNormal = [number, number, number];
 export type CameraPreset = "isometric" | "top" | "front" | "side";
 export type ViewportDimension = {
   layerId: string;
@@ -53,6 +54,8 @@ export type ViewportInsertionMarker = {
   preview: { center: [number, number, number]; size: [number, number, number] };
 };
 type ManualBeamSection = { height: number; width: number };
+type BeamReferenceFace = "x_min" | "x_max" | "y_min" | "y_max";
+type ManualReference = { beam: ViewportBeam; face: BeamReferenceFace };
 
 function transformedStepBounds(model: StepModelSnapshot): [ViewportPoint, ViewportPoint] {
   const [xMin, xMax, yMin, yMax, zMin, zMax] = model.bounds;
@@ -84,9 +87,11 @@ type ViewportBounds = {
 
 function Camera({
   preset,
+  presetRequest,
   bounds,
 }: {
   preset: CameraPreset;
+  presetRequest: number;
   bounds: ViewportBounds;
 }) {
   const { camera } = useThree();
@@ -111,15 +116,16 @@ function Camera({
     // Recalculation changes pallet bounds after every editor command. Do not
     // treat that as a camera command: retain the user's current orbit until a
     // preset is explicitly selected.
-  }, [camera, preset]);
+  }, [camera, preset, presetRequest]);
   return null;
 }
 
 function FitCamera({ fitRequest, bounds }: { fitRequest: number; bounds: ViewportBounds }) {
   const { camera, size } = useThree();
-  const previousRequest = useRef(fitRequest);
+  const previousRequest = useRef<number | null>(null);
 
   useEffect(() => {
+    if (size.width <= 0 || size.height <= 0) return;
     if (fitRequest === previousRequest.current) return;
     previousRequest.current = fitRequest;
 
@@ -269,14 +275,12 @@ function StepModel({
   onSelectFace,
   selectionEnabled,
   pickerRef,
-  onMetrics,
 }: {
   model: StepModelSnapshot;
   selectedFace: number | null;
   onSelectFace: (faceId: number) => void;
   selectionEnabled: boolean;
   pickerRef: MutableRefObject<((clientX: number, clientY: number, bounds: DOMRect) => void) | null>;
-  onMetrics?: (metrics: Record<string, string | number | boolean>) => void;
 }) {
   const meshRef = useRef<Mesh>(null);
   const { camera } = useThree();
@@ -324,19 +328,6 @@ function StepModel({
       pickerRef.current = null;
     };
   }, [camera, model.selectableFaceIds, model.triangleFaceIds, onSelectFace, pickerRef, selectionEnabled]);
-  useEffect(() => {
-    const surfaceBytes = model.displayPositions.byteLength + model.indices.byteLength;
-    const normal = geometry.getAttribute("normal");
-    const normalBytes = normal ? normal.array.byteLength : 0;
-    const edgeBytes = model.displayEdgePositions.byteLength + model.edgeIndices.byteLength;
-    onMetrics?.({
-      stage: "three-geometry-ready",
-      surfaceBufferBytes: surfaceBytes,
-      normalBufferBytes: normalBytes,
-      edgeBufferBytes: edgeBytes,
-      gpuBufferEstimateBytes: surfaceBytes + normalBytes + edgeBytes,
-    });
-  }, [edgeGeometry, geometry, model, onMetrics]);
   return (
     <group matrix={transform} matrixAutoUpdate={false}>
       <mesh ref={meshRef} geometry={geometry}>
@@ -396,10 +387,31 @@ function StepFaceOverlay({
   );
 }
 
+function BeamFaceOverlay({ reference }: { reference: ManualReference }) {
+  const { beam, face } = reference;
+  const center: ViewportPoint = [beam.center[0] / 1000, beam.center[2] / 1000, beam.center[1] / 1000];
+  const sizeX = beam.size[0] / 1000;
+  const sizeY = beam.size[2] / 1000;
+  const sizeZ = beam.size[1] / 1000;
+  const thickness = 0.006;
+  const isX = face === "x_min" || face === "x_max";
+  const maximum = face === "x_max" || face === "y_max";
+  const position: ViewportPoint = isX
+    ? [center[0] + (maximum ? 1 : -1) * (sizeX / 2 + thickness / 2), center[1], center[2]]
+    : [center[0], center[1], center[2] + (maximum ? 1 : -1) * (sizeZ / 2 + thickness / 2)];
+  return (
+    <mesh position={position} renderOrder={20}>
+      <boxGeometry args={isX ? [thickness, sizeY, sizeZ] : [sizeX, sizeY, thickness]} />
+      <meshBasicMaterial color="#e07822" transparent opacity={0.82} depthTest={false} depthWrite={false} />
+    </mesh>
+  );
+}
+
 export default function PalletViewport({
   beams,
   dimensions,
   preset,
+  presetRequest,
   fitRequest,
   stepModel,
   selectedStepFace,
@@ -409,6 +421,7 @@ export default function PalletViewport({
   selectedBeams,
   dimensionEditing,
   hoveredDimension,
+  selectedDimension,
   onToggleBeam,
   onSelectDimension,
   onHoverDimension,
@@ -416,17 +429,22 @@ export default function PalletViewport({
   insertionMode,
   selectedSlot,
   onSelectInsertion,
-  manualMode = insertionMode,
   manualSupports = [],
     manualSection,
-  onSelectManualSupport = () => {},
+  manualReference,
+  manualDistance = 0,
   manualHud,
+  dimensionHud,
+  toolHint,
+  toolError,
+  toolErrorVersion = 0,
+  onUndoToolSelection,
   beamSelectionEnabled,
-  onStepViewportMetrics,
 }: {
   beams: ViewportBeam[];
   dimensions: ViewportDimension[];
   preset: CameraPreset;
+  presetRequest: number;
     fitRequest: number;
     stepModel?: StepModelSnapshot | null;
     selectedStepFace?: number | null;
@@ -436,20 +454,25 @@ export default function PalletViewport({
   selectedBeams: string[];
   dimensionEditing: boolean;
   hoveredDimension: string | null;
-  onToggleBeam: (beam: ViewportBeam, point?: ViewportPoint) => void;
+  selectedDimension?: { layerId: string; index: number } | null;
+  onToggleBeam: (beam: ViewportBeam, point?: ViewportPoint, normal?: ViewportFaceNormal) => void;
   onSelectDimension: (dimension: ViewportDimension) => void;
   onHoverDimension: (dimension: ViewportDimension | null) => void;
   insertionMarkers: ViewportInsertionMarker[];
   insertionMode: boolean;
   selectedSlot: { layerId: string; afterBeamIndex: number } | null;
   onSelectInsertion: (marker: ViewportInsertionMarker) => void;
-  manualMode?: boolean;
   manualSupports?: { beam: ViewportBeam; point: ViewportPoint }[];
     manualSection?: ManualBeamSection;
-  onSelectManualSupport?: (beam: ViewportBeam, point: ViewportPoint) => void;
+  manualReference?: ManualReference | null;
+  manualDistance?: number;
   manualHud?: ReactNode;
+  dimensionHud?: ReactNode;
+  toolHint?: string | null;
+  toolError?: string | null;
+  toolErrorVersion?: number;
+  onUndoToolSelection?: () => void;
   beamSelectionEnabled: boolean;
-  onStepViewportMetrics?: (metrics: Record<string, string | number | boolean>) => void;
 }) {
   const [cursor, setCursor] = useState<[number, number]>([16, 16]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
@@ -533,20 +556,40 @@ export default function PalletViewport({
       first.beam.center[2] + first.beam.size[2] / 2,
       second.beam.center[2] + second.beam.size[2] / 2,
     ) / 1000;
+    let lateral = alongX ? first.point[0] : first.point[2];
+    if (manualReference) {
+      const reference = manualReference.beam;
+      const referenceCentre = alongX ? reference.center[0] / 1000 : reference.center[1] / 1000;
+      const referenceHalfSize = alongX ? reference.size[0] / 2000 : reference.size[1] / 2000;
+      const gap = manualDistance / 1000;
+      const maximum = manualReference.face === "x_max" || manualReference.face === "y_max";
+      if (gap >= 0) lateral = referenceCentre + (maximum ? 1 : -1) * (referenceHalfSize + gap + thickness / 2);
+      else lateral = referenceCentre - (maximum ? 1 : -1) * (referenceHalfSize - gap + thickness / 2);
+    }
     return {
       position: (alongX
-        ? [first.point[0], bearing + height / 2, (start + end) / 2]
-        : [(start + end) / 2, bearing + height / 2, first.point[2]]) as ViewportPoint,
+        ? [lateral, bearing + height / 2, (start + end) / 2]
+        : [(start + end) / 2, bearing + height / 2, lateral]) as ViewportPoint,
       size: alongX ? [thickness, height, length] as [number, number, number] : [length, height, thickness] as [number, number, number],
     };
-  }, [manualSection, manualSupports]);
+  }, [manualDistance, manualReference, manualSection, manualSupports]);
   return (
     <div
       className="viewport"
       onPointerDown={stepFaceSelectionEnabled ? (event) => {
         pointerDown.current = [event.clientX, event.clientY];
       } : undefined}
-      onPointerMove={manualMode ? (event) => { const box = event.currentTarget.getBoundingClientRect(); setCursor([event.clientX - box.left + 14, event.clientY - box.top + 14]); } : undefined}
+      onPointerMove={toolHint ? (event) => {
+        const box = event.currentTarget.getBoundingClientRect();
+        setCursor([
+          Math.max(8, Math.min(event.clientX - box.left + 14, box.width - 328)),
+          Math.max(8, Math.min(event.clientY - box.top + 14, box.height - 54)),
+        ]);
+      } : undefined}
+      onContextMenu={onUndoToolSelection ? (event) => {
+        event.preventDefault();
+        onUndoToolSelection();
+      } : undefined}
       onClick={stepFaceSelectionEnabled ? (event) => {
         const down = pointerDown.current;
         pointerDown.current = null;
@@ -558,7 +601,7 @@ export default function PalletViewport({
         frameloop="demand"
         camera={{ position: [5, 4, 5], fov: 42 }}
       >
-          <Camera preset={preset} bounds={bounds} />
+          <Camera preset={preset} presetRequest={presetRequest} bounds={bounds} />
           <FitCamera fitRequest={fitRequest} bounds={bounds} />
         <color attach="background" args={["#edf1f3"]} />
         <ambientLight intensity={1.5} />
@@ -582,8 +625,12 @@ export default function PalletViewport({
                 event.point.y,
                 event.point.z,
               ];
-              if (manualMode) onToggleBeam(beam, point);
-              else onToggleBeam(beam, point);
+              const normal = event.face?.normal;
+              onToggleBeam(
+                beam,
+                point,
+                normal ? [normal.x, normal.y, normal.z] : undefined,
+              );
             }}
             onPointerOver={(event) => { if (beamSelectionEnabled) { event.stopPropagation(); setHoveredBeam(`${beam.layerId}:${beam.layerIndex}`); } }}
             onPointerOut={() => setHoveredBeam(null)}
@@ -617,6 +664,7 @@ export default function PalletViewport({
             <meshStandardMaterial color="#e07822" emissive="#7a3307" depthTest={false} />
           </mesh>
           )) : null}
+          {showPallet && manualReference ? <BeamFaceOverlay reference={manualReference} /> : null}
           {showPallet && manualPreview ? <mesh position={manualPreview.position}>
           <boxGeometry args={manualPreview.size} />
           <meshStandardMaterial color="#36b778" transparent opacity={0.42} depthWrite={false} />
@@ -677,6 +725,8 @@ export default function PalletViewport({
           const dimensionKey = `${dimension.layerId}:${dimension.index}`;
           const isHovered =
             dimensionEditing && hoveredDimension === dimensionKey;
+          const isSelected = selectedDimension?.layerId === dimension.layerId
+            && selectedDimension.index === dimension.index;
           const start = point(dimension.start);
           const end = point(dimension.end);
           const middle: [number, number, number] = [
@@ -752,14 +802,17 @@ export default function PalletViewport({
                   onHover={onHoverDimension}
                 />
               ) : null}
-              <DimensionLabel
-                value={dimension.value}
-                position={middle}
-                dimension={dimension}
-                canEdit={dimensionEditing}
-                onSelect={onSelectDimension}
-                onHover={onHoverDimension}
-              />
+              {!isSelected ? (
+                <DimensionLabel
+                  value={dimension.value}
+                  position={middle}
+                  dimension={dimension}
+                  canEdit={dimensionEditing}
+                  onSelect={onSelectDimension}
+                  onHover={onHoverDimension}
+                />
+              ) : null}
+              {isSelected && dimensionHud ? <Html position={middle} center>{dimensionHud}</Html> : null}
             </group>
           );
           }) : null}
@@ -778,11 +831,18 @@ export default function PalletViewport({
               onSelectFace={(faceId) => onSelectStepFace?.(faceId)}
               selectionEnabled={stepFaceSelectionEnabled}
               pickerRef={stepPicker}
-              onMetrics={onStepViewportMetrics}
             />
           ) : null}
       </Canvas>
-      {manualMode ? <div className="viewport-hint" style={{ left: cursor[0], top: cursor[1] }}>{manualSupports.length === 0 ? "Select the first support" : manualSupports.length === 1 ? "Select the second support" : "Configure the new beam"}</div> : null}
+      {toolError || toolHint ? (
+        <div
+          key={toolError ? `tool-error-${toolErrorVersion}` : "tool-hint"}
+          className={`viewport-hint${toolError ? " viewport-error" : ""}`}
+          style={{ left: cursor[0], top: cursor[1] }}
+        >
+          {toolError ?? toolHint}
+        </div>
+      ) : null}
     </div>
   );
 }

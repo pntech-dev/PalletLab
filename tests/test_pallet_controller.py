@@ -373,6 +373,20 @@ def test_three_layer_pallet_accepts_a_manual_beam_at_the_base_point_and_section_
     assert errors == []
 
 
+def test_three_layer_pallet_rejects_a_manual_beam_above_its_top_layer():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    layers = [
+        LayerInput("bottom", "length", LENGTH_INPUT),
+        LayerInput("middle", "width", WIDTH_INPUT),
+        LayerInput("top", "length", LENGTH_INPUT),
+    ]
+    assert controller.calculate_layers(layers) is not None
+
+    assert controller.add_manual_beam(("top", 0), ("top", 1), 0, BeamSection(70, 50)) is None
+    assert state.manual_beams == []
+    assert "выше верхнего слоя" in errors[-1][0]
+
+
 def test_identical_parallel_layers_share_one_dimension_chain():
     controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
     result = controller.calculate_layers([

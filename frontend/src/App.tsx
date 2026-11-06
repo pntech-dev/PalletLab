@@ -11,11 +11,12 @@ import type {
   CameraPreset,
   ViewportBeam,
   ViewportDimension,
+  ViewportFaceNormal,
   ViewportInsertionMarker,
   ViewportPoint,
   StepModelSnapshot,
 } from "./PalletViewport";
-import { browserHeapBytes, prepareStepModel, stepModelBufferBytes, type StepModelPayload } from "./stepModelGeometry";
+import { prepareStepModel, type StepModelPayload } from "./stepModelGeometry";
 
 const PalletViewport = lazy(() => import("./PalletViewport"));
 
@@ -165,7 +166,6 @@ declare global {
         cancel_step_import: (operationId: string) => Promise<StepImportOperation>;
         step_model_snapshot: (operationId: string) => Promise<StepModelResponse>;
         build_step_pallet: (operationId: string, project: Project, faceIndex: number) => Promise<StepPalletResponse>;
-        record_step_viewport_metrics: (metrics: Record<string, string | number | boolean>) => Promise<{ ok: boolean }>;
       };
     };
   }
@@ -183,6 +183,7 @@ export function App() {
     Record<"length" | "width", string>
   >({ length: "", width: "" });
   const [camera, setCamera] = useState<CameraPreset>("isometric");
+  const [cameraRequest, setCameraRequest] = useState(0);
   const [fitRequest, setFitRequest] = useState(0);
   const [stepImport, setStepImport] = useState<StepImportOperation | null>(null);
   const [stepModel, setStepModel] = useState<StepModelSnapshot | null>(null);
@@ -210,15 +211,30 @@ export function App() {
   const [manualReferenceMode, setManualReferenceMode] = useState<"base" | "face">("base");
   const [manualReference, setManualReference] = useState<ViewportBeam | null>(null);
   const [manualReferenceFace, setManualReferenceFace] = useState<"x_min" | "x_max" | "y_min" | "y_max">("x_min");
+  const [viewportToolError, setViewportToolError] = useState<string | null>(null);
+  const [viewportToolErrorVersion, setViewportToolErrorVersion] = useState(0);
   const [, setHistoryVersion] = useState(0);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const undoStack = useRef<Project[]>([]);
   const redoStack = useRef<Project[]>([]);
   const formEditStart = useRef<Project | null>(null);
+  const viewportToolErrorTimeout = useRef<number | null>(null);
 
-  const recordStepViewportMetrics = useCallback((metrics: Record<string, string | number | boolean>) => {
-    const api = window.pywebview?.api;
-    if (api) void api.record_step_viewport_metrics(metrics);
+  function showViewportToolError(message: string) {
+    if (viewportToolErrorTimeout.current !== null) {
+      window.clearTimeout(viewportToolErrorTimeout.current);
+    }
+    setCalculationError(null);
+    setViewportToolError(message);
+    setViewportToolErrorVersion((value) => value + 1);
+    viewportToolErrorTimeout.current = window.setTimeout(() => {
+      viewportToolErrorTimeout.current = null;
+      setViewportToolError(null);
+    }, 5_000);
+  }
+
+  useEffect(() => () => {
+    if (viewportToolErrorTimeout.current !== null) window.clearTimeout(viewportToolErrorTimeout.current);
   }, []);
 
   function applyProject(nextProject: Project) {
@@ -288,7 +304,12 @@ export function App() {
       setCalculation(response);
       setCalculationError(null);
     } else {
-      setCalculationError(response.error ?? "Не удалось рассчитать поддон.");
+      const message = response.error ?? "Не удалось рассчитать поддон.";
+      if (insertionMode || beamTool !== "none" || dimensionEditing) {
+        showViewportToolError(message);
+      } else {
+        setCalculationError(message);
+      }
     }
   }
 
@@ -412,15 +433,8 @@ export function App() {
       try {
         const response = await api.step_model_snapshot(stepImport.operationId);
         if (response.ok && response.assetUrl) {
-          const started = performance.now();
           const prepared = await prepareStepModel({ assetUrl: response.assetUrl } satisfies StepModelPayload);
           setStepModel(prepared);
-          void api.record_step_viewport_metrics({
-            stage: "decoded-render-buffers",
-            elapsedMs: Math.round((performance.now() - started) * 10) / 10,
-            renderBufferBytes: stepModelBufferBytes(prepared),
-            jsHeapBytes: browserHeapBytes() ?? -1,
-          });
           setFitRequest((value) => value + 1);
         } else {
           setCalculationError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
@@ -475,23 +489,41 @@ export function App() {
       pallet: { ...defaultProject.pallet, material_id: project.pallet.material_id },
     };
     updateProject(nextProject);
+    setStepImport(null);
+    setStepModel(null);
+    setSelectedStepFace(null);
+    setStepPalletBuilt(false);
+    setBuildingStepPallet(false);
     clearInteractionState();
     setCalculationError(null);
   }
 
-  function toggleBeam(beam: ViewportBeam, point?: ViewportPoint) {
+  function basePointDistance(support: { beam: ViewportBeam; point: ViewportPoint }) {
+    const alongX = support.beam.size[0] >= support.beam.size[1];
+    return (alongX ? support.point[0] : support.point[2]) * 1000 - section.width / 2;
+  }
+
+  function toggleBeam(beam: ViewportBeam, point?: ViewportPoint, normal?: ViewportFaceNormal) {
     if (insertionMode) {
       if (manualReferenceMode === "face" && manualSupports.length === 2) {
+        const support = manualSupports[0].beam;
+        const alongX = support.size[0] >= support.size[1];
+        const directionalNormal = alongX ? normal?.[0] : normal?.[2];
+        if (directionalNormal === undefined || Math.abs(directionalNormal) < 0.9) {
+          showViewportToolError("Выберите боковую грань бруса в направлении нового бруса.");
+          return;
+        }
         setManualReference(beam);
-        // A positive reference distance starts from the face directed toward
-        // the pallet's zero coordinate. Pick that face by default for the
-        // selected beam orientation; the HUD still lets the user choose the
-        // opposite face deliberately.
-        setManualReferenceFace(beam.orientation === "length" ? "x_min" : "y_min");
+        setManualReferenceFace(
+          alongX
+            ? directionalNormal > 0 ? "x_max" : "x_min"
+            : directionalNormal > 0 ? "y_max" : "y_min",
+        );
+        setManualDistance(0);
         return;
       }
       if (manualSupports.length === 1 && manualSupports[0].beam.layerId !== beam.layerId) {
-        setCalculationError("Вторую опору нужно выбрать на том же слое, что и первую.");
+        showViewportToolError("Вторую опору нужно выбрать на том же слое, что и первую.");
         return;
       }
       const support = {
@@ -505,16 +537,12 @@ export function App() {
           ] as ViewportPoint),
       };
       if (manualSupports.length === 0) {
-        const alongX = beam.size[0] >= beam.size[1];
-        const placement = (alongX ? support.point[0] : support.point[2]) * 1000;
-        // The base-point distance measures the near edge of the new beam.
-        // Set it from the first click so the centre line of the preview and
-        // the saved beam both pass through that click by default.
-        setManualDistance(placement - section.width / 2);
+        setManualDistance(basePointDistance(support));
       }
       setManualSupports((current) =>
         current.length === 2 ? [support] : [...current, support],
       );
+      return;
     } else if (beamTool === "none") {
       return;
     }
@@ -613,7 +641,30 @@ export function App() {
     setSelectedSlot(null);
     setManualSupports([]);
     setManualReference(null);
+    setManualReferenceFace("x_min");
+    setManualReferenceMode("base");
     setSelectedBeams([]);
+  }
+
+  function undoLastToolSelection() {
+    setViewportToolError(null);
+    if (!stepPalletBuilt && !buildingStepPallet && stepModel) {
+      setSelectedStepFace(null);
+      return;
+    }
+    if (insertionMode) {
+      if (manualReference) {
+        setManualReference(null);
+        return;
+      }
+      setManualSupports((current) => current.slice(0, -1));
+      return;
+    }
+    if (beamTool !== "none") {
+      setSelectedBeams((current) => current.slice(0, -1));
+      return;
+    }
+    if (dimensionEditing) setSelectedDimension(null);
   }
 
   function activateBeamTool(tool: "delete" | "section") {
@@ -654,15 +705,10 @@ export function App() {
     setInsertionGap(marker.slot.suggestedClearGap);
   }
 
-  function selectManualSupport(beam: ViewportBeam, point: ViewportPoint) {
-    setManualSupports((current) =>
-      current.length === 2 ? [{ beam, point }] : [...current, { beam, point }],
-    );
-  }
-
   async function addManualBeam() {
     const api = window.pywebview?.api;
-    if (!api || !project || manualSupports.length !== 2) return;
+    if (!api || !project || manualSupports.length !== 2
+        || (manualReferenceMode === "face" && !manualReference)) return;
     const response = await api.add_manual_beam(
       project,
       manualSupports.map(({ beam }) => ({
@@ -676,11 +722,16 @@ export function App() {
         referenceFace: manualReference ? manualReferenceFace : undefined,
       },
     );
+    if (!response.ok) {
+      showViewportToolError(response.error ?? "Не удалось добавить брус.");
+      return;
+    }
     applyCalculation(response);
-    if (response.ok && response.snapshot) {
+    if (response.snapshot) {
       updateHistory(project, response.snapshot.project);
       applyProject(response.snapshot.project);
       setManualSupports([]);
+      setManualReference(null);
       setSelectedBeams([]);
     }
   }
@@ -830,45 +881,25 @@ export function App() {
     <div className="manual-hud">
       <strong>Configure the new beam.</strong>
       <label>
-        Reference
+        Placement
         <select
           value={manualReferenceMode}
           onChange={(event) => {
-            setManualReferenceMode(event.target.value as "base" | "face");
-            if (event.target.value === "base") setManualReference(null);
+            const mode = event.target.value as "base" | "face";
+            setManualReferenceMode(mode);
+            setManualReference(null);
+            setManualDistance(mode === "base" ? basePointDistance(manualSupports[0]) : 0);
           }}
         >
-          <option value="base">Base point</option>
-          <option value="face">Selected beam face</option>
+          <option value="base">From zero</option>
+          <option value="face">From selected face</option>
         </select>
       </label>
       {manualReferenceMode === "face" ? (
         manualReference ? (
-          <label>
-            Face
-            <select
-              value={manualReferenceFace}
-              onChange={(event) =>
-                setManualReferenceFace(
-                  event.target.value as "x_min" | "x_max" | "y_min" | "y_max",
-                )
-              }
-            >
-              {manualReference.orientation === "length" ? (
-                <>
-                  <option value="x_min">Toward zero</option>
-                  <option value="x_max">Away from zero</option>
-                </>
-              ) : (
-                <>
-                  <option value="y_min">Toward zero</option>
-                  <option value="y_max">Away from zero</option>
-                </>
-              )}
-            </select>
-          </label>
+          <span>Reference: {manualReference.layerId} · beam {manualReference.layerIndex + 1}</span>
         ) : (
-          <span>Click a beam as reference.</span>
+          <span>Click the required side face in the 3D view.</span>
         )
       ) : null}
       <label>
@@ -883,8 +914,28 @@ export function App() {
           }}
         />
       </label>
-      <button type="button" onClick={addManualBeam}>Add beam</button>
+      <button type="button" onClick={addManualBeam} disabled={manualReferenceMode === "face" && !manualReference}>Add beam</button>
       <button type="button" onClick={stopInsertion}>Cancel</button>
+    </div>
+  ) : null;
+  const dimensionHud: ReactNode = dimensionEditing && selectedDimension ? (
+    <div className="manual-hud">
+      <strong>New distance</strong>
+      <label>
+        Value
+        <input
+          type="number"
+          autoFocus
+          value={distanceValue}
+          onChange={(event) => setDistanceValue(Number(event.target.value))}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void changeSelectedDistance();
+            if (event.key === "Escape") stopDimensionEditing();
+          }}
+        />
+      </label>
+      <button type="button" onClick={changeSelectedDistance}>Apply distance</button>
+      <button type="button" onClick={stopDimensionEditing}>Cancel</button>
     </div>
   ) : null;
 
@@ -1102,6 +1153,8 @@ export function App() {
                     key={preset}
                     onClick={() => {
                       if (!project) return;
+                      setCamera(preset);
+                      setCameraRequest((value) => value + 1);
                       updateProject({
                         ...project,
                         view: { ...project.view, camera: preset },
@@ -1184,52 +1237,12 @@ export function App() {
                 {insertionMode ? "Finish insertion" : "Add beam"}
               </button>
             </div>
-            {dimensionEditing && selectedDimension ? (
-              <div className="distance-editor">
-                <span>
-                  Selected dimension: {selectedDimension.value.toFixed(0)} mm
-                </span>
-                <label>
-                  New face distance
-                  <input
-                    type="number"
-                    value={distanceValue}
-                    onChange={(event) =>
-                      setDistanceValue(Number(event.target.value))
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void changeSelectedDistance();
-                      if (event.key === "Escape") stopDimensionEditing();
-                    }}
-                  />
-                </label>
-                <button type="button" onClick={changeSelectedDistance}>
-                  Apply distance
-                </button>
-                <button type="button" onClick={stopDimensionEditing}>
-                  Cancel
-                </button>
-              </div>
-            ) : dimensionEditing ? (
-              <p className="dimension-hint">
-                Hover a dimension line, then click it to edit. Esc closes this
-                mode.
-              </p>
-            ) : null}
-            {insertionMode ? (
-              <p className="dimension-hint">
-                {manualSupports.length === 0
-                  ? "Click the first support beam at the desired insertion point."
-                  : manualSupports.length === 1
-                    ? "Click a second parallel support beam."
-                    : "Set the position below, then confirm with Enter or Add beam."}
-              </p>
-            ) : null}
             <Suspense fallback={<p>Loading 3D view…</p>}>
               <PalletViewport
                 beams={calculation.snapshot.pallet.beams}
                 dimensions={calculation.snapshot.pallet.dimensions}
                 preset={camera}
+                presetRequest={cameraRequest}
                 fitRequest={fitRequest}
                 stepModel={stepModel}
                 selectedStepFace={selectedStepFace}
@@ -1241,6 +1254,10 @@ export function App() {
                 )}
                 dimensionEditing={dimensionEditing}
                 hoveredDimension={hoveredDimension}
+                selectedDimension={selectedDimension ? {
+                  layerId: selectedDimension.layerId,
+                  index: selectedDimension.index,
+                } : null}
                 onToggleBeam={toggleBeam}
                 onSelectDimension={selectDimension}
                 onHoverDimension={(dimension) =>
@@ -1254,54 +1271,44 @@ export function App() {
                 insertionMode={insertionMode}
                 selectedSlot={selectedSlot}
                 onSelectInsertion={selectInsertion}
-                manualMode={insertionMode}
                 manualSupports={manualSupports}
                 manualSection={section}
-                onSelectManualSupport={selectManualSupport}
+                manualReference={manualReference ? { beam: manualReference, face: manualReferenceFace } : null}
+                manualDistance={manualDistance}
                 manualHud={manualHud}
+                dimensionHud={dimensionHud}
+                toolHint={
+                  !stepPalletBuilt && !buildingStepPallet && stepModel !== null
+                    ? selectedStepFace === null
+                      ? "Select the lower support face\nПКМ — отменить последний выбор"
+                      : "Support face selected\nПКМ — отменить последний выбор"
+                    : insertionMode
+                    ? manualSupports.length === 0
+                      ? "Select the first support beam\nПКМ — отменить последний выбор"
+                      : manualSupports.length === 1
+                        ? "Select the second parallel support beam\nПКМ — отменить последний выбор"
+                        : manualReferenceMode === "face" && !manualReference
+                          ? "Select the reference side face\nПКМ — отменить последний выбор"
+                          : "Enter the distance in the panel\nПКМ — отменить последний выбор"
+                    : beamTool === "delete"
+                      ? "Select beams to delete\nПКМ — отменить последний выбор"
+                      : beamTool === "section"
+                        ? "Select beams to change their section\nПКМ — отменить последний выбор"
+                        : dimensionEditing
+                          ? "Select a dimension line to edit\nПКМ — отменить последний выбор"
+                          : null
+                }
+                toolError={viewportToolError}
+                toolErrorVersion={viewportToolErrorVersion}
+                onUndoToolSelection={
+                  (!stepPalletBuilt && !buildingStepPallet && stepModel !== null) || insertionMode || beamTool !== "none" || dimensionEditing
+                    ? undoLastToolSelection
+                    : undefined
+                }
                 beamSelectionEnabled={insertionMode || beamTool !== "none"}
-                onStepViewportMetrics={recordStepViewportMetrics}
               />
             </Suspense>
           </>
-        ) : null}
-        {false && insertionMode && manualSupports.length === 2 ? (
-          <div className="distance-editor">
-            <span>
-              Two supports selected. Set the offset from the base point.
-            </span>
-            <fieldset>
-              <legend>Reference</legend>
-              <label><input type="radio" checked={manualReferenceMode === "base"} onChange={() => { setManualReferenceMode("base"); setManualReference(null); }} />Base point</label>
-              <label><input type="radio" checked={manualReferenceMode === "face"} onChange={() => setManualReferenceMode("face")} />Selected beam face</label>
-            </fieldset>
-            {manualReferenceMode === "face" ? <><p>{manualReference ? `Reference: ${manualReference?.layerId} · beam ${(manualReference?.layerIndex ?? 0) + 1}` : "Click a beam to choose the reference."}</p><label>Face<select value={manualReferenceFace} onChange={(event) => setManualReferenceFace(event.target.value as "x_min" | "x_max" | "y_min" | "y_max")}><option value="x_min">X minimum</option><option value="x_max">X maximum</option><option value="y_min">Y minimum</option><option value="y_max">Y maximum</option></select></label></> : null}
-            <label>
-              Distance
-              <input
-                type="number"
-                value={manualDistance}
-                onChange={(event) =>
-                  setManualDistance(Number(event.target.value))
-                }
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void addManualBeam();
-                  if (event.key === "Escape") stopInsertion();
-                }}
-              />
-            </label>
-            <button type="button" onClick={addManualBeam}>
-              Add beam
-            </button>
-            <button type="button" onClick={stopInsertion}>
-              Cancel
-            </button>
-          </div>
-        ) : insertionMode ? (
-          <p className="dimension-hint">
-            Click two parallel support beams. The first click marks the
-            insertion layer; Esc cancels.
-          </p>
         ) : null}
         {calculationError ? <p className="error">{calculationError}</p> : null}
       </section>

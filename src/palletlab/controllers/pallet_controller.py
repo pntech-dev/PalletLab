@@ -664,6 +664,16 @@ class PalletController:
             if reference_face not in allowed_faces:
                 self._on_error(CalculationError("Для ручного бруса выбрана грань неподходящего направления."), False)
                 return None
+        if self.state.multi_layer_mode:
+            layer_index = next(
+                (index for index, layer in enumerate(self.state.layers) if layer.layer_id == first.layer_id),
+                None,
+            )
+            if layer_index is None or layer_index + 1 >= len(self.state.layers):
+                self._on_error(CalculationError(
+                    "Нельзя добавить брус выше верхнего слоя поддона. Выберите опоры слоя ниже."
+                ), False)
+                return None
         number = 1
         known = {beam.beam_id for beam in self.state.manual_beams}
         while f"manual-{number}" in known:

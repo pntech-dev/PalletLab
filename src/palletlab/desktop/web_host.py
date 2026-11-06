@@ -12,7 +12,6 @@ from typing import Any
 from palletlab.application.service import ApplicationService
 from palletlab.application.step_import_service import StepImportService
 from palletlab.application.snapshots import SNAPSHOT_VERSION
-from palletlab.step_performance import write_step_performance
 from palletlab.version import __version__
 
 
@@ -93,17 +92,6 @@ class WebApplicationApi:
     def build_step_pallet(self, operation_id: object, project: object, face_index: object) -> dict[str, Any]:
         return self._step_imports.build_pallet(operation_id, project, face_index)
 
-    def record_step_viewport_metrics(self, metrics: object) -> dict[str, bool]:
-        """Persist best-effort WebView/GPU estimates beside STEP backend metrics."""
-        if not isinstance(metrics, dict):
-            return {"ok": False}
-        safe = {
-            key: value for key, value in metrics.items()
-            if isinstance(key, str) and isinstance(value, (str, int, float, bool))
-        }
-        write_step_performance("web-viewport", {"points": [safe]})
-        return {"ok": True}
-
     def _choose_file(self, mode: str) -> str | None:
         if self._window is None:
             raise RuntimeError("Web window is not ready.")
@@ -144,7 +132,6 @@ class _StepAssetServer:
                     self.send_error(404)
                     return
                 size = path.stat().st_size
-                write_step_performance("web-asset", {"points": [{"stage": "request-start", "assetBytes": size}]})
                 self.send_response(200)
                 self.send_header("Content-Type", "application/octet-stream")
                 self.send_header("Content-Length", str(size))
@@ -153,7 +140,6 @@ class _StepAssetServer:
                 with path.open("rb") as stream:
                     while chunk := stream.read(1024 * 1024):
                         self.wfile.write(chunk)
-                write_step_performance("web-asset", {"points": [{"stage": "request-complete", "assetBytes": size}]})
 
             def _serve_frontend(self) -> None:
                 with owner._lock:
