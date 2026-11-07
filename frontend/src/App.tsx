@@ -52,6 +52,25 @@ type Direction = {
   rounding_step: 5 | 50;
 };
 type Layer = { id: string; axis: "length" | "width"; direction: Direction };
+const DIRECTION_FIELDS = [
+  "beam_height",
+  "beam_width",
+  "support_distances",
+  "first_edge_to_support",
+  "last_support_to_edge",
+  "margin_start",
+  "margin_end",
+] as const;
+type DirectionField = (typeof DIRECTION_FIELDS)[number];
+const DIRECTION_FIELD_LABELS: Record<DirectionField, string> = {
+  beam_height: "Высота бруса, мм",
+  beam_width: "Ширина бруса, мм",
+  support_distances: "Расстояния между опорами, мм",
+  first_edge_to_support: "До первой опоры, мм",
+  last_support_to_edge: "После последней опоры, мм",
+  margin_start: "Отступ с начала, мм",
+  margin_end: "Отступ с конца, мм",
+};
 type Project = {
   pallet: {
     length: Direction;
@@ -223,10 +242,8 @@ export function App() {
   );
   const [calculationError, setCalculationError] = useState<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
-  const [materials, setMaterials] = useState<Material[]>([]);
-  const [distanceText, setDistanceText] = useState<
-    Record<"length" | "width", string>
-  >({ length: "", width: "" });
+  const [distanceText, setDistanceText] = useState<Record<string, string>>({});
+  const [expandedLayerId, setExpandedLayerId] = useState<string | null>(null);
   const [camera, setCamera] = useState<CameraPreset>("isometric");
   const [cameraRequest, setCameraRequest] = useState(0);
   const [fitRequest, setFitRequest] = useState(0);
@@ -298,10 +315,19 @@ export function App() {
   function applyProject(nextProject: Project) {
     setProject(nextProject);
     setCamera(nextProject.view.camera);
-    setDistanceText({
-      length: nextProject.pallet.length.support_distances.join(" "),
-      width: nextProject.pallet.width.support_distances.join(" "),
-    });
+    setDistanceText(
+      Object.fromEntries(
+        nextProject.pallet.layers.map((layer) => [
+          layer.id,
+          layer.direction.support_distances.join(" "),
+        ]),
+      ),
+    );
+    setExpandedLayerId((current) =>
+      nextProject.pallet.layers.some((layer) => layer.id === current)
+        ? current
+        : nextProject.pallet.layers[0]?.id ?? null,
+    );
   }
 
   function updateHistory(previous: Project, next: Project) {
@@ -376,10 +402,9 @@ export function App() {
       const api = window.pywebview?.api;
       if (!api) return;
       try {
-        const [nextStatus, defaultProject, nextMaterials, savedSolidWorksSettings, savedDrawingSettings] = await Promise.all([
+        const [nextStatus, defaultProject, savedSolidWorksSettings, savedDrawingSettings] = await Promise.all([
           api.status(),
           api.default_project(),
-          api.materials(),
           api.solidworks_export_settings(),
           api.drawing_settings(),
         ]);
@@ -398,7 +423,6 @@ export function App() {
           applyProject(defaultProject as Project);
         }
         setStatus(nextStatus);
-        setMaterials(nextMaterials);
         if (savedSolidWorksSettings.ok && savedSolidWorksSettings.options) {
           setSolidWorksOptions(savedSolidWorksSettings.options);
         }
@@ -1011,36 +1035,40 @@ export function App() {
       window.removeEventListener("keydown", handleKeyboardShortcut, true);
   });
 
-  function updateDirection(
-    axis: "length" | "width",
-    field: keyof Direction,
+  function updateLayerDirection(
+    index: number,
+    field: DirectionField,
     value: string,
   ) {
     if (!project) return;
+    const layer = project.pallet.layers[index];
+    if (!layer) return;
     if (field === "support_distances") {
-      setDistanceText({ ...distanceText, [axis]: value });
+      setDistanceText({ ...distanceText, [layer.id]: value });
       const distances = value.split(/\s+/).filter(Boolean).map(Number);
       if (distances.some(Number.isNaN)) return;
-      updateDirectionValue(axis, field, distances);
+      updateLayerDirectionValue(index, field, distances);
       return;
     }
-    updateDirectionValue(axis, field, Number(value));
+    updateLayerDirectionValue(index, field, Number(value));
   }
 
-  function updateDirectionValue(
-    axis: "length" | "width",
-    field: keyof Direction,
+  function updateLayerDirectionValue(
+    index: number,
+    field: DirectionField,
     parsed: number | number[],
   ) {
     if (!project) return;
-    const direction = { ...project.pallet[axis], [field]: parsed } as Direction;
+    const layer = project.pallet.layers[index];
+    if (!layer) return;
     setProject({
       ...project,
       pallet: {
         ...project.pallet,
-        [axis]: direction,
-        layers: project.pallet.layers.map((layer) =>
-          layer.axis === axis ? { ...layer, direction } : layer,
+        layers: project.pallet.layers.map((item, layerIndex) =>
+          layerIndex === index
+            ? { ...item, direction: { ...layer.direction, [field]: parsed } as Direction }
+            : item,
         ),
       },
     });
@@ -1073,7 +1101,7 @@ export function App() {
     if (!project) return;
     const layers = project.pallet.layers.map((layer, layerIndex) =>
       layerIndex === index
-        ? { ...layer, axis, direction: project.pallet[axis] }
+        ? { ...layer, axis, direction: { ...project.pallet[axis] } }
         : layer,
     );
     updateProject({ ...project, pallet: { ...project.pallet, layers } });
@@ -1088,10 +1116,11 @@ export function App() {
         ...project.pallet,
         layers: [
           ...project.pallet.layers,
-          { id: layerId, axis: "length", direction: project.pallet.length },
+          { id: layerId, axis: "length", direction: { ...project.pallet.length } },
         ],
       },
     });
+    setExpandedLayerId(layerId);
   }
 
   function removeLayer(index: number) {
@@ -1338,8 +1367,8 @@ export function App() {
         {project ? (
           <div className="directions">
             <fieldset className="rounding">
-              <legend>Pallet rounding</legend>
-              {(["none", "5", "50"] as const).map((value) => (
+              <legend>Округление поддона</legend>
+              {(["50", "5", "none"] as const).map((value) => (
                 <label key={value}>
                   <input
                     type="radio"
@@ -1348,118 +1377,86 @@ export function App() {
                     checked={rounding === value}
                     onChange={() => setRounding(value)}
                   />
-                  {value === "none" ? "No rounding" : `Round ${value} mm`}
+                  {value === "none" ? "Без округления" : `${value} мм`}
                 </label>
               ))}
             </fieldset>
-            <fieldset className="project-options">
-              <legend>Project options</legend>
-              <label>
-                Upper layer
-                <select
-                  value={project.pallet.upper_layer}
-                  onChange={(event) =>
-                    updateProject({
-                      ...project,
-                      pallet: {
-                        ...project.pallet,
-                        upper_layer: event.target.value as "length" | "width",
-                      },
-                    })
-                  }
-                >
-                  <option value="length">Length</option>
-                  <option value="width">Width</option>
-                </select>
-              </label>
-              <label>
-                Material
-                <select
-                  value={project.pallet.material_id}
-                  onChange={(event) =>
-                    updateProject({
-                      ...project,
-                      pallet: {
-                        ...project.pallet,
-                        material_id: event.target.value,
-                      },
-                    })
-                  }
-                >
-                  {materials.map((material) => (
-                    <option key={material.id} value={material.id}>
-                      {material.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </fieldset>
-            <fieldset className="layers">
-              <legend>Layers</legend>
-              {project.pallet.layers.map((layer, index) => (
-                <div className="layer-row" key={layer.id}>
-                  <span>
-                    {index + 1}. {layer.id}
-                  </span>
-                  <select
-                    value={layer.axis}
-                    onChange={(event) =>
-                      updateLayerAxis(
-                        index,
-                        event.target.value as "length" | "width",
-                      )
-                    }
-                  >
-                    <option value="length">Length</option>
-                    <option value="width">Width</option>
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => removeLayer(index)}
-                    disabled={project.pallet.layers.length <= 2}
-                  >
-                    Remove
-                  </button>
+            <section className="layer-stack" aria-label="Слои поддона">
+              <div className="layer-stack-heading">
+                <div>
+                  <p className="eyebrow">Конструкция</p>
+                  <h2>Слои поддона</h2>
                 </div>
+                <button type="button" className="secondary" onClick={addLayer}>
+                  Добавить слой
+                </button>
+              </div>
+              {project.pallet.layers.map((layer, index) => (
+                <section
+                  className={expandedLayerId === layer.id ? "layer-card is-expanded" : "layer-card"}
+                  key={layer.id}
+                >
+                  <div className="layer-card-header">
+                    <button
+                      type="button"
+                      className="layer-toggle"
+                      aria-expanded={expandedLayerId === layer.id}
+                      onClick={() =>
+                        setExpandedLayerId((current) => current === layer.id ? null : layer.id)
+                      }
+                    >
+                      <span>Слой {index + 1}</span>
+                      <small>{layer.axis === "length" ? "Вдоль длины" : "Вдоль ширины"}</small>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button secondary"
+                      aria-label={`Удалить слой ${index + 1}`}
+                      onClick={() => removeLayer(index)}
+                      disabled={project.pallet.layers.length <= 2}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  {expandedLayerId === layer.id ? (
+                    <div className="layer-card-content">
+                      <label>
+                        Направление брусьев
+                        <select
+                          value={layer.axis}
+                          onChange={(event) =>
+                            updateLayerAxis(index, event.target.value as "length" | "width")
+                          }
+                        >
+                          <option value="length">Вдоль длины</option>
+                          <option value="width">Вдоль ширины</option>
+                        </select>
+                      </label>
+                      {DIRECTION_FIELDS.map((field) => (
+                        <label key={field} className={field === "support_distances" ? "layer-field-wide" : undefined}>
+                          {DIRECTION_FIELD_LABELS[field]}
+                          <input
+                            value={
+                              field === "support_distances"
+                                ? distanceText[layer.id] ?? layer.direction.support_distances.join(" ")
+                                : layer.direction[field]
+                            }
+                            onFocus={beginFormEdit}
+                            onBlur={finishFormEdit}
+                            onChange={(event) => updateLayerDirection(index, field, event.target.value)}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
               ))}
-              <button type="button" onClick={addLayer}>
-                Add layer
-              </button>
-            </fieldset>
-            {(["length", "width"] as const).map((axis) => (
-              <fieldset key={axis}>
-                <legend>
-                  {axis === "length" ? "Length direction" : "Width direction"}
-                </legend>
-                {(
-                  [
-                    "beam_height",
-                    "beam_width",
-                    "support_distances",
-                    "first_edge_to_support",
-                    "last_support_to_edge",
-                    "margin_start",
-                    "margin_end",
-                  ] as const
-                ).map((field) => (
-                  <label key={field}>
-                    {field.replaceAll("_", " ")}
-                    <input
-                      value={
-                        field === "support_distances"
-                          ? distanceText[axis]
-                          : project.pallet[axis][field]
-                      }
-                      onFocus={beginFormEdit}
-                      onBlur={finishFormEdit}
-                      onChange={(event) =>
-                        updateDirection(axis, field, event.target.value)
-                      }
-                    />
-                  </label>
-                ))}
-              </fieldset>
-            ))}
+              <div className="layer-stack-footer">
+                <button type="button" className="secondary" onClick={() => void resetProject()}>
+                  Сбросить проект
+                </button>
+              </div>
+            </section>
           </div>
         ) : null}
         </aside>
@@ -1470,7 +1467,6 @@ export function App() {
               <h1>Конструкция поддона</h1>
             </div>
             <div className="history-actions">
-              <button type="button" className="secondary" onClick={() => void resetProject()} disabled={!project}>Сбросить</button>
               <button type="button" className="secondary" onClick={undo} disabled={!project || undoStack.current.length === 0}>Назад</button>
               <button type="button" className="secondary" onClick={redo} disabled={!project || redoStack.current.length === 0}>Вперёд</button>
             </div>
