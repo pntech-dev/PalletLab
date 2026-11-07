@@ -435,6 +435,9 @@ export default function PalletViewport({
   manualDistance = 0,
   manualHud,
   dimensionHud,
+  sectionHud,
+  toolbar,
+  fitViewControl,
   toolHint,
   toolError,
   toolErrorVersion = 0,
@@ -468,6 +471,9 @@ export default function PalletViewport({
   manualDistance?: number;
   manualHud?: ReactNode;
   dimensionHud?: ReactNode;
+  sectionHud?: ReactNode;
+  toolbar?: ReactNode;
+  fitViewControl?: ReactNode;
   toolHint?: string | null;
   toolError?: string | null;
   toolErrorVersion?: number;
@@ -573,6 +579,26 @@ export default function PalletViewport({
       size: alongX ? [thickness, height, length] as [number, number, number] : [length, height, thickness] as [number, number, number],
     };
   }, [manualDistance, manualReference, manualSection, manualSupports]);
+  const sectionHudAnchor = useMemo<ViewportPoint | null>(() => {
+    if (selectedBeams.length === 0) return null;
+    const selected = beams.filter((beam) =>
+      selectedBeams.includes(`${beam.layerId}:${beam.layerIndex}`),
+    );
+    if (selected.length === 0) return null;
+    const center = selected.reduce(
+      (sum, beam) => [
+        sum[0] + beam.center[0] / 1000,
+        sum[1] + beam.center[2] / 1000 + beam.size[2] / 2000,
+        sum[2] + beam.center[1] / 1000,
+      ] as ViewportPoint,
+      [0, 0, 0] as ViewportPoint,
+    );
+    return [
+      center[0] / selected.length,
+      center[1] / selected.length + 0.16,
+      center[2] / selected.length,
+    ];
+  }, [beams, selectedBeams]);
   return (
     <div
       className="viewport"
@@ -817,6 +843,7 @@ export default function PalletViewport({
           );
           }) : null}
         {manualHud && manualSupports[0] ? <Html position={[manualSupports[0].point[0], manualSupports[0].point[1] + 0.24, manualSupports[0].point[2]]} center>{manualHud}</Html> : null}
+          {sectionHud && sectionHudAnchor ? <Html position={sectionHudAnchor} center>{sectionHud}</Html> : null}
           <OrbitControls
             key={preset}
             makeDefault
@@ -834,6 +861,8 @@ export default function PalletViewport({
             />
           ) : null}
       </Canvas>
+      {toolbar ? <div className="viewport-floating-toolbar">{toolbar}</div> : null}
+      {fitViewControl ? <div className="viewport-fit-control">{fitViewControl}</div> : null}
       {toolError || toolHint ? (
         <div
           key={toolError ? `tool-error-${toolErrorVersion}` : "tool-hint"}

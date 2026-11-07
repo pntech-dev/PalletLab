@@ -10,12 +10,7 @@ button, input, select { font: inherit; }
 .app-header button { padding: 8px 12px; font-size: 0.875rem; }
 .export-settings { margin-left: auto; }
 .workspace { min-height: 0; overflow: hidden; display: grid; grid-template: "viewport editor" minmax(0, 1fr) / minmax(0, 1fr) minmax(380px, 440px); }
-.viewport-panel { grid-area: viewport; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 8px; padding: 16px; background: #263940; }
-.viewport-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: #f3f7f6; }
-.viewport-toolbar .eyebrow { color: #b8c8c8; }
-.viewport-toolbar h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
-.history-actions { display: flex; gap: 8px; }
-.history-actions .secondary { border-color: #789299; background: transparent; color: #f3f7f6; }
+.viewport-panel { grid-area: viewport; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; padding: 16px; background: #263940; }
 .editor-panel { grid-area: editor; min-width: 0; min-height: 0; overflow: hidden; padding: 16px; border-left: 1px solid #cbd4d8; background: #f8faf9; }
 .editor-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .editor-heading .eyebrow { margin: 0; }
@@ -28,7 +23,9 @@ button, input, select { font: inherit; }
 .manual-hud { min-width: 220px; max-width: 280px; padding: 12px; border: 1px solid rgb(255 255 255 / 24%); border-radius: 10px; background: rgb(18 44 56 / 88%); color: #fff; font: 13px/1.35 system-ui, sans-serif; box-shadow: 0 8px 24px rgb(0 0 0 / 30%); display: grid; gap: 8px; }
 .manual-hud label { display: grid; gap: 4px; color: #d8ebf2; }
 .manual-hud input, .manual-hud select { box-sizing: border-box; width: 100%; padding: 6px; border: 0; border-radius: 4px; background: #fff; color: #183f52; }
+.manual-hud input:disabled { cursor: default; background: #dce4e7; color: #60747b; }
 .manual-hud button { padding: 7px 9px; border: 0; border-radius: 4px; background: #2d6277; color: #fff; }
+.section-hud-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .viewport-hint { position: absolute; z-index: 6; max-width: min(320px, calc(100% - 16px)); padding: 5px 8px; border-radius: 5px; background: rgb(18 44 56 / 58%); color: #fff; font-size: 12px; pointer-events: none; white-space: pre-line; overflow: hidden; text-overflow: ellipsis; }
 .viewport-hint.viewport-error { background: rgb(150 45 37 / 88%); white-space: normal; overflow: visible; text-overflow: clip; animation: viewport-error-shake 420ms ease-in-out; }
 @keyframes viewport-error-shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
@@ -75,7 +72,6 @@ button.secondary { border: 1px solid #78909b; background: #fff; color: #315b6c; 
 .step-import progress { width: min(420px, 100%); }
 .error { color: #a12f2f; }
 .viewport { height: min(58vh, 680px); margin-top: 16px; overflow: hidden; border: 1px solid #d6dde1; border-radius: 8px; }
-.camera-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .dimension-label { display: block; padding: 2px 4px; border-radius: 3px; background: rgb(255 255 255 / 82%); color: #173f51; font: 600 11px/1 "Segoe UI", sans-serif; white-space: nowrap; }
 .directions { display: grid; gap: 10px; min-height: 0; }
 fieldset { display: grid; gap: 8px; border: 1px solid #d6dde1; border-radius: 8px; padding: 12px; }
@@ -88,12 +84,17 @@ legend { padding: 0 4px; font-weight: 700; }
 label { display: grid; gap: 4px; color: #4a5a63; font-size: 0.8rem; }
 input { border: 1px solid #bdc8cd; border-radius: 4px; padding: 7px; font: inherit; }
 select { border: 1px solid #bdc8cd; border-radius: 4px; padding: 7px; font: inherit; }
-.viewport-panel .result { margin: 0; color: #c8e0d0; }
-.viewport-panel .selection-status { margin: -8px 0 0; color: #c8d4d6; }
-.viewport-panel .camera-actions { padding: 12px; border: 1px solid rgb(255 255 255 / 16%); border-radius: 8px; background: rgb(16 29 34 / 28%); }
-.viewport-panel .camera-actions label { color: #d2dfe0; }
-.viewport-panel .camera-actions input { width: 84px; }
 .viewport-panel .viewport { flex: 1; height: auto; min-height: 0; margin-top: 0; border-color: rgb(255 255 255 / 18%); border-radius: 10px; background: #dfe7e6; }
+.viewport-floating-toolbar { position: absolute; z-index: 8; top: 16px; left: 16px; right: 16px; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 8px; border: 1px solid rgb(255 255 255 / 30%); border-radius: 10px; background: rgb(18 44 56 / 86%); box-shadow: 0 8px 24px rgb(0 0 0 / 22%); }
+.viewport-tool-group { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.viewport-tool-spacer { flex: 1 1 auto; min-width: 12px; }
+.viewport-floating-toolbar button { padding: 7px 9px; font-size: 0.8rem; white-space: nowrap; }
+.viewport-floating-toolbar .secondary { border-color: #789299; background: transparent; color: #f3f7f6; }
+.viewport-floating-toolbar .active-tool { background: #e07822; color: #172d36; }
+.viewport-view-select { display: flex; align-items: center; gap: 6px; color: #d8ebf2; white-space: nowrap; }
+.viewport-view-select select { min-width: 112px; padding: 6px 8px; border: 0; background: #fff; color: #183f52; }
+.viewport-fit-control { position: absolute; z-index: 8; right: 16px; bottom: 16px; }
+.viewport-fit-control button { padding: 8px 10px; border-color: #789299; background: rgb(18 44 56 / 88%); color: #f3f7f6; box-shadow: 0 5px 14px rgb(0 0 0 / 18%); }
 .editor-panel .directions { grid-template-columns: 1fr; gap: 10px; margin-top: 0; }
 .editor-panel fieldset { border-color: #d2dade; background: #fff; }
 .editor-panel .rounding { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -131,5 +132,5 @@ select { border: 1px solid #bdc8cd; border-radius: 4px; padding: 7px; font: inhe
   .workspace { grid-template: "viewport" auto "editor" auto / 1fr; }
   .viewport-panel { min-height: 620px; padding: 16px; }
   .editor-panel { border-top: 1px solid #cbd4d8; border-left: 0; padding: 16px; }
-  .viewport-toolbar { align-items: flex-start; flex-direction: column; }
+  .viewport-floating-toolbar { left: 10px; right: 10px; overflow-x: auto; }
 }

@@ -87,6 +87,14 @@ type Project = {
 };
 type Material = { id: string; name: string };
 type BeamSection = { height: number; width: number };
+const SECTION_PRESETS = [
+  { id: "70x50", label: "70 × 50 мм", height: 70, width: 50 },
+  { id: "25x100", label: "25 × 100 мм", height: 25, width: 100 },
+  { id: "100x100", label: "100 × 100 мм", height: 100, width: 100 },
+  { id: "100x200", label: "100 × 200 мм", height: 100, width: 200 },
+  { id: "custom", label: "Свой размер" },
+] as const;
+type SectionPresetId = (typeof SECTION_PRESETS)[number]["id"];
 type DimensionTarget = { layerId: string; beamIndex: number };
 type InsertionSlot = {
   axis: "length" | "width";
@@ -271,6 +279,7 @@ export function App() {
     height: 70,
     width: 50,
   });
+  const [sectionPreset, setSectionPreset] = useState<SectionPresetId>("70x50");
   const [selectedDimension, setSelectedDimension] =
     useState<ViewportDimension | null>(null);
   const [distanceValue, setDistanceValue] = useState(0);
@@ -999,6 +1008,8 @@ export function App() {
         event.preventDefault();
         stopDimensionEditing();
         stopInsertion();
+        setBeamTool("none");
+        setSelectedBeams([]);
         return;
       }
       if (
@@ -1200,6 +1211,86 @@ export function App() {
       <button type="button" onClick={stopDimensionEditing}>Cancel</button>
     </div>
   ) : null;
+  const sectionHud: ReactNode = beamTool === "section" && selectedBeams.length > 0 ? (
+    <div className="manual-hud section-hud">
+      <strong>Сечение бруса{selectedBeams.length > 1 ? ` · ${selectedBeams.length}` : ""}</strong>
+      <label>
+        Стандартное сечение
+        <select
+          value={sectionPreset}
+          onChange={(event) => {
+            const presetId = event.target.value as SectionPresetId;
+            setSectionPreset(presetId);
+            const preset = SECTION_PRESETS.find((item) => item.id === presetId);
+            if (preset && "height" in preset && "width" in preset) {
+              setSection({ height: preset.height, width: preset.width });
+            }
+          }}
+        >
+          {SECTION_PRESETS.map((preset) => (
+            <option key={preset.id} value={preset.id}>{preset.label}</option>
+          ))}
+        </select>
+      </label>
+      <div className="section-hud-dimensions">
+        <label>
+          Высота, мм
+          <input
+            type="number"
+            min="1"
+            value={section.height}
+            disabled={sectionPreset !== "custom"}
+            onChange={(event) => setSection({ ...section, height: Number(event.target.value) })}
+          />
+        </label>
+        <label>
+          Ширина, мм
+          <input
+            type="number"
+            min="1"
+            value={section.width}
+            disabled={sectionPreset !== "custom"}
+            onChange={(event) => setSection({ ...section, width: Number(event.target.value) })}
+          />
+        </label>
+      </div>
+      <button type="button" onClick={() => void changeSelectedBeamSections()}>Применить</button>
+      <button type="button" onClick={() => { setBeamTool("none"); setSelectedBeams([]); }}>Отмена</button>
+    </div>
+  ) : null;
+  const viewportToolbar: ReactNode = (
+    <>
+      <div className="viewport-tool-group viewport-history-actions">
+        <button type="button" className="secondary" onClick={undo} disabled={!project || undoStack.current.length === 0}>Назад</button>
+        <button type="button" className="secondary" onClick={redo} disabled={!project || redoStack.current.length === 0}>Вперёд</button>
+      </div>
+      <div className="viewport-tool-spacer" />
+      <div className="viewport-tool-group viewport-mode-actions">
+        <button type="button" className={beamTool === "section" ? "active-tool" : ""} onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}>Сечение</button>
+        <button type="button" className={beamTool === "delete" ? "active-tool" : ""} onClick={() => beamTool === "delete" ? void deleteSelectedBeams() : activateBeamTool("delete")}>{beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить"}</button>
+        <button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}>Размеры</button>
+        <button type="button" className={insertionMode ? "active-tool" : ""} onClick={() => insertionMode ? stopInsertion() : activateInsertion()}>Добавить брус</button>
+      </div>
+      <label className="viewport-view-select">
+        <span>Вид</span>
+        <select
+          value={camera}
+          onChange={(event) => {
+            if (!project) return;
+            const preset = event.target.value as CameraPreset;
+            setCamera(preset);
+            setCameraRequest((value) => value + 1);
+            updateProject({ ...project, view: { ...project.view, camera: preset } });
+          }}
+        >
+          <option value="isometric">Изометрия</option>
+          <option value="top">Сверху</option>
+          <option value="front">Спереди</option>
+          <option value="side">Сбоку</option>
+        </select>
+      </label>
+    </>
+  );
 
   return (
     <main className="app-shell">
@@ -1461,121 +1552,8 @@ export function App() {
         ) : null}
         </aside>
         <section className="viewport-panel" aria-label="3D просмотр">
-          <div className="viewport-toolbar">
-            <div>
-              <p className="eyebrow">3D вид</p>
-              <h1>Конструкция поддона</h1>
-            </div>
-            <div className="history-actions">
-              <button type="button" className="secondary" onClick={undo} disabled={!project || undoStack.current.length === 0}>Назад</button>
-              <button type="button" className="secondary" onClick={redo} disabled={!project || redoStack.current.length === 0}>Вперёд</button>
-            </div>
-          </div>
         {calculation?.ok && calculation.snapshot?.pallet ? (
           <>
-            <p className="result">
-              {calculation.snapshot.pallet.size.length} ×{" "}
-              {calculation.snapshot.pallet.size.width} ×{" "}
-              {calculation.snapshot.pallet.size.height} mm ·{" "}
-              {calculation.snapshot.pallet.beams.length} beams
-            </p>
-            <p className="selection-status">
-              {selectedBeams.length
-                ? `Selected beams: ${selectedBeams.length}`
-                : "Select beams in the 3D view"}
-            </p>
-            <div className="camera-actions">
-              {(["isometric", "top", "front", "side"] as CameraPreset[]).map(
-                (preset) => (
-                  <button
-                    type="button"
-                    key={preset}
-                    onClick={() => {
-                      if (!project) return;
-                      setCamera(preset);
-                      setCameraRequest((value) => value + 1);
-                      updateProject({
-                        ...project,
-                        view: { ...project.view, camera: preset },
-                      });
-                    }}
-                  >
-                    {preset}
-                  </button>
-                ),
-              )}
-              <button type="button" onClick={() => setFitRequest((value) => value + 1)}>
-                Fit view
-              </button>
-              <label>
-                Section height
-                <input
-                  type="number"
-                  min="1"
-                  value={section.height}
-                  onChange={(event) =>
-                    setSection({
-                      ...section,
-                      height: Number(event.target.value),
-                    })
-                  }
-                />
-              </label>
-              <label>
-                Section width
-                <input
-                  type="number"
-                  min="1"
-                  value={section.width}
-                  onChange={(event) =>
-                    setSection({
-                      ...section,
-                      width: Number(event.target.value),
-                    })
-                  }
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() =>
-                  beamTool === "section"
-                    ? void changeSelectedBeamSections()
-                    : activateBeamTool("section")
-                }
-              >
-                {beamTool === "section" ? `Apply section (${selectedBeams.length})` : "Change section"}
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  beamTool === "delete"
-                    ? void deleteSelectedBeams()
-                    : activateBeamTool("delete")
-                }
-              >
-                {beamTool === "delete" ? `Delete selected (${selectedBeams.length})` : "Delete beams"}
-              </button>
-              <button
-                type="button"
-                className={dimensionEditing ? "active-tool" : ""}
-                onClick={() =>
-                  dimensionEditing
-                    ? stopDimensionEditing()
-                    : activateDimensionEditing()
-                }
-              >
-                {dimensionEditing ? "Finish dimension edit" : "Edit dimensions"}
-              </button>
-              <button
-                type="button"
-                className={insertionMode ? "active-tool" : ""}
-                onClick={() =>
-                  insertionMode ? stopInsertion() : activateInsertion()
-                }
-              >
-                {insertionMode ? "Finish insertion" : "Add beam"}
-              </button>
-            </div>
             <Suspense fallback={<p>Loading 3D view…</p>}>
               <PalletViewport
                 beams={calculation.snapshot.pallet.beams}
@@ -1616,6 +1594,9 @@ export function App() {
                 manualDistance={manualDistance}
                 manualHud={manualHud}
                 dimensionHud={dimensionHud}
+                sectionHud={sectionHud}
+                toolbar={viewportToolbar}
+                fitViewControl={<button type="button" className="secondary" onClick={() => setFitRequest((value) => value + 1)}>Fit view</button>}
                 toolHint={
                   !stepPalletBuilt && !buildingStepPallet && stepModel !== null
                     ? selectedStepFace === null
