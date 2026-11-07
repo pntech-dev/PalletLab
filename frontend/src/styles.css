@@ -111,12 +111,14 @@ select { border: 1px solid #bdc8cd; border-radius: 4px; padding: 7px; font: inhe
 .layer-card.is-drop-before { box-shadow: inset 0 3px #315b6c; }
 .layer-card.is-drop-after { box-shadow: inset 0 -3px #315b6c; }
 .layer-card:has(.layer-drag-handle:hover) { border-color: #9db8c2; }
-.layer-card-header { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: stretch; }
+.layer-card-header { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto; align-items: stretch; }
 .layer-drag-handle { display: grid; place-items: center; color: #71858c; cursor: grab; font-size: 1rem; line-height: 1; user-select: none; }
 .layer-drag-handle:active { cursor: grabbing; }
 .layer-toggle { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-radius: 0; background: #fff; color: #263940; padding: 9px 10px; text-align: left; }
 .layer-toggle:hover { background: #edf3f2; }
 .layer-toggle small { color: #62757b; font-size: 0.72rem; }
+.layer-visibility { align-self: center; margin-right: 4px; padding: 5px 7px; font-size: 0.72rem; }
+.layer-visibility[aria-pressed="true"] { border-color: #9aa8ad; color: #718087; }
 .icon-button { width: 34px; min-width: 34px; padding: 0; border-radius: 0; font-size: 1.25rem; line-height: 1; }
 .layer-card-content { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 8px; padding: 0 10px 10px; border-top: 1px solid #e1e7e7; }
 .layer-card-content label { min-width: 0; }

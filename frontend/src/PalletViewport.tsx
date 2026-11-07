@@ -418,6 +418,7 @@ export default function PalletViewport({
   onSelectStepFace,
   stepFaceSelectionEnabled = false,
   showPallet = true,
+  hiddenLayerIds = [],
   selectedBeams,
   dimensionEditing,
   hoveredDimension,
@@ -454,6 +455,7 @@ export default function PalletViewport({
     onSelectStepFace?: (faceId: number) => void;
     stepFaceSelectionEnabled?: boolean;
     showPallet?: boolean;
+  hiddenLayerIds?: string[];
   selectedBeams: string[];
   dimensionEditing: boolean;
   hoveredDimension: string | null;
@@ -636,7 +638,7 @@ export default function PalletViewport({
           args={[grid.size, grid.divisions, "#aab9c1", "#d9e1e5"]}
           position={grid.position}
         />
-          {showPallet ? beams.map((beam) => (
+          {showPallet ? beams.filter((beam) => !hiddenLayerIds.includes(beam.layerId)).map((beam) => (
           <mesh
             key={`${beam.layerId}:${beam.index}`}
             position={[

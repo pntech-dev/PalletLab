@@ -255,6 +255,7 @@ export function App() {
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [dropLayerId, setDropLayerId] = useState<string | null>(null);
   const [dropAfterLayer, setDropAfterLayer] = useState(false);
+  const [hiddenLayerIds, setHiddenLayerIds] = useState<string[]>([]);
   const [camera, setCamera] = useState<CameraPreset>("isometric");
   const [cameraRequest, setCameraRequest] = useState(0);
   const [fitRequest, setFitRequest] = useState(0);
@@ -1123,11 +1124,11 @@ export function App() {
 
   function addLayer() {
     if (!project) return;
-    const existingNumbers = project.pallet.layers
-      .map((layer) => /^layer-(\d+)$/.exec(layer.id)?.[1])
-      .filter((value): value is string => value !== undefined)
-      .map(Number);
-    const layerId = `layer-${Math.max(project.pallet.layers.length, ...existingNumbers.map((value) => value + 1), 1)}`;
+    const nextNumber = Math.max(
+      ...project.pallet.layers.map((layer, index) => layerNumber(layer, index)),
+      0,
+    ) + 1;
+    const layerId = `layer-${nextNumber === 3 ? 1 : nextNumber - 1}`;
     updateProject({
       ...project,
       pallet: {
@@ -1145,7 +1146,19 @@ export function App() {
     if (layer.id === "length") return 1;
     if (layer.id === "width") return 2;
     const suffix = /^layer-(\d+)$/.exec(layer.id)?.[1];
-    return suffix === undefined ? fallbackIndex + 1 : Number(suffix) + 1;
+    if (suffix === undefined) return fallbackIndex + 1;
+    return suffix === "1" ? 3 : Number(suffix) + 1;
+  }
+
+  function toggleLayerVisibility(layerId: string) {
+    setHiddenLayerIds((current) =>
+      current.includes(layerId)
+        ? current.filter((id) => id !== layerId)
+        : [...current, layerId],
+    );
+    setSelectedBeams((current) => current.filter((beam) => beam.layerId !== layerId));
+    setManualSupports((current) => current.filter(({ beam }) => beam.layerId !== layerId));
+    if (manualReference?.layerId === layerId) setManualReference(null);
   }
 
   function moveLayer(sourceId: string, targetId: string, insertAfter: boolean) {
@@ -1289,10 +1302,10 @@ export function App() {
         <button type="button" className="secondary" onClick={redo} disabled={!project || redoStack.current.length === 0}>Вперёд</button>
       </div>
       <div className="viewport-tool-group viewport-mode-actions">
-        <button type="button" className={beamTool === "section" ? "active-tool" : ""} onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}>Сечение</button>
-        <button type="button" className={beamTool === "delete" ? "active-tool" : ""} onClick={() => beamTool === "delete" ? void deleteSelectedBeams() : activateBeamTool("delete")}>{beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить"}</button>
-        <button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}>Размеры</button>
         <button type="button" className={insertionMode ? "active-tool" : ""} onClick={() => insertionMode ? stopInsertion() : activateInsertion()}>Добавить брус</button>
+        <button type="button" className={beamTool === "delete" ? "active-tool" : ""} onClick={() => beamTool === "delete" ? void deleteSelectedBeams() : activateBeamTool("delete")}>{beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить брус"}</button>
+        <button type="button" className={beamTool === "section" ? "active-tool" : ""} onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}>Изменить сечение</button>
+        <button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}>Изменить расстояние</button>
       </div>
       <div className="viewport-tool-spacer" />
       <label className="viewport-view-select">
@@ -1557,6 +1570,14 @@ export function App() {
                     </button>
                     <button
                       type="button"
+                      className="layer-visibility secondary"
+                      onClick={() => toggleLayerVisibility(layer.id)}
+                      aria-pressed={hiddenLayerIds.includes(layer.id)}
+                    >
+                      {hiddenLayerIds.includes(layer.id) ? "Показать" : "Скрыть"}
+                    </button>
+                    <button
+                      type="button"
                       className="icon-button secondary"
                       aria-label={`Удалить слой ${layerNumber(layer, index)}`}
                       onClick={() => removeLayer(index)}
@@ -1622,6 +1643,7 @@ export function App() {
                 onSelectStepFace={selectStepSupport}
                 stepFaceSelectionEnabled={!stepPalletBuilt && !buildingStepPallet}
                 showPallet={stepModel === null || stepPalletBuilt}
+                hiddenLayerIds={hiddenLayerIds}
                 selectedBeams={selectedBeams.map(
                   (beam) => `${beam.layerId}:${beam.layerIndex}`,
                 )}
