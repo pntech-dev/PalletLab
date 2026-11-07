@@ -145,7 +145,18 @@ class PalletController:
                     for index in range(len(direction.beam_centers))
                 )
                 definitions.append(LayerDefinition(layer.layer_id, layer.axis, direction, sections))
-            result = build_multilayer_pallet(definitions)
+            fallback_directions = {
+                axis: calculate_direction(data)
+                for axis, data in (
+                    ("length", self.state.length_input),
+                    ("width", self.state.width_input),
+                )
+                if data is not None
+            }
+            result = build_multilayer_pallet(
+                definitions,
+                fallback_directions=fallback_directions,
+            )
         except CalculationError as exc:
             self._on_stale_changed(True)
             self._on_error(exc, show_error)
@@ -154,11 +165,18 @@ class PalletController:
         self.state.layer_sections = candidate_sections
         # Keep representative legacy values populated until the two-panel UI
         # is replaced.  Persistence and existing exporters still read them.
-        self.state.length_input = next(layer.direction for layer in layers if layer.axis == "length")
-        self.state.width_input = next(layer.direction for layer in layers if layer.axis == "width")
+        self.state.length_input = next(
+            (layer.direction for layer in layers if layer.axis == "length"),
+            self.state.length_input,
+        )
+        self.state.width_input = next(
+            (layer.direction for layer in layers if layer.axis == "width"),
+            self.state.width_input,
+        )
         self.state.upper_layer = layers[-1].axis
+        rounding_input = self.state.length_input or self.state.width_input
         self.state.rounding_step = (
-            self.state.length_input.rounding_step if self.state.length_input.round_pallet_size else 0
+            rounding_input.rounding_step if rounding_input and rounding_input.round_pallet_size else 0
         )
         self.state.multi_layer_mode = True
         result = self._with_manual_beams(result)

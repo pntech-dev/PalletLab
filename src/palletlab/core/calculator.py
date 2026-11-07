@@ -294,14 +294,18 @@ def _validate_sections(
             )
 
 
-def build_multilayer_pallet(layers: Sequence[LayerDefinition]) -> PalletResult:
+def build_multilayer_pallet(
+    layers: Sequence[LayerDefinition],
+    *,
+    fallback_directions: Mapping[PalletAxis, DirectionResult] | None = None,
+) -> PalletResult:
     """Build any number of layers supplied from bottom to top.
 
     Every layer has its own beam grid and section set.  The first layer is
     top-aligned so a shorter selected beam cannot leave the second layer
     hanging; every later layer starts at the bearing plane of the layer below.
-    A pallet must contain at least one X-grid and one Y-grid layer in order to
-    define both external dimensions.
+    A layer stack may contain any mix of axes.  When an axis is absent, its
+    remembered direction supplies the corresponding external dimension.
     """
     if not layers:
         raise CalculationError("Поддон должен содержать хотя бы один слой.")
@@ -312,16 +316,19 @@ def build_multilayer_pallet(layers: Sequence[LayerDefinition]) -> PalletResult:
         if layer.axis not in by_axis:
             raise CalculationError("Направление слоя должно быть «длина» или «ширина».")
         by_axis[layer.axis].append(layer)
-    if not by_axis["length"] or not by_axis["width"]:
-        raise CalculationError("Для габаритов поддона нужны слои по длине и ширине.")
-
-    def axis_size(axis: PalletAxis) -> float:
-        sizes = [layer.direction.pallet_size for layer in by_axis[axis]]
+    def axis_result(axis: PalletAxis) -> DirectionResult:
+        axis_layers = by_axis[axis]
+        if not axis_layers:
+            if fallback_directions and axis in fallback_directions:
+                return fallback_directions[axis]
+            return layers[0].direction
+        sizes = [layer.direction.pallet_size for layer in axis_layers]
         if any(not math.isclose(size, sizes[0], abs_tol=EPSILON) for size in sizes[1:]):
             raise CalculationError(f"Слои по оси {axis} должны иметь одинаковый габарит поддона.")
-        return sizes[0]
+        return axis_layers[0].direction
 
-    pallet_length, pallet_width = axis_size("length"), axis_size("width")
+    length_result, width_result = axis_result("length"), axis_result("width")
+    pallet_length, pallet_width = length_result.pallet_size, width_result.pallet_size
     beams: list[Beam3D] = []
     calculated_layers: list[LayerResult] = []
     base_z = 0.0
@@ -359,8 +366,6 @@ def build_multilayer_pallet(layers: Sequence[LayerDefinition]) -> PalletResult:
         ))
         base_z = top_z
 
-    length_result = by_axis["length"][0].direction
-    width_result = by_axis["width"][0].direction
     result = PalletResult(
         length_result, width_result, pallet_length, pallet_width, base_z,
         layers[-1].axis, tuple(beams), tuple(calculated_layers),

@@ -162,6 +162,21 @@ def test_multilayer_calculator_places_arbitrary_layers_in_bottom_to_top_order():
     assert {beam.layer_id for beam in result.beams_3d} == {"bottom", "middle", "top"}
 
 
+def test_multilayer_calculator_allows_a_single_axis_layer_stack():
+    length = calculate_direction(LENGTH_EXAMPLE)
+    width = calculate_direction(WIDTH_EXAMPLE)
+
+    result = build_multilayer_pallet(
+        (LayerDefinition("only", "length", length),),
+        fallback_directions={"width": width},
+    )
+
+    assert result.pallet_length == pytest.approx(length.pallet_size)
+    assert result.pallet_width == pytest.approx(width.pallet_size)
+    assert [layer.layer_id for layer in result.layers] == ["only"]
+    assert {beam.layer_id for beam in result.beams_3d} == {"only"}
+
+
 def test_multilayer_first_layer_aligns_shorter_beams_to_its_bearing_plane():
     length = calculate_direction(LENGTH_EXAMPLE)
     width = calculate_direction(WIDTH_EXAMPLE)

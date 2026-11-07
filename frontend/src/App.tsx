@@ -1583,7 +1583,7 @@ export function App() {
                       className="icon-button secondary"
                       aria-label={`Удалить слой ${layerNumber(layer, index)}`}
                       onClick={() => removeLayer(index)}
-                      disabled={project.pallet.layers.length <= 2}
+                      disabled={project.pallet.layers.length <= 1}
                     >
                       ×
                     </button>
