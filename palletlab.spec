@@ -1,21 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Lean, fast-starting Windows build configuration for PalletLab.
+"""Windows build configuration for the React/pywebview PalletLab desktop app.
 
 Build manually with ``pyinstaller palletlab.spec``. The ``onedir`` layout is
-intentional: VTK's native libraries stay beside the executable instead of
-being unpacked into a temporary directory at every application start.
+intentional: the React bundle and desktop integration resources stay beside
+the executable instead of being unpacked into a temporary directory at every
+application start.
 """
 
 APP_NAME = "PalletLab"
 
-# These modules are imported dynamically by PyVista/VTK's Qt integration and
-# cannot always be discovered from the application's direct imports.
+# The web host imports pywebview lazily so that command and bridge tests can
+# run without creating a desktop window.  PyInstaller cannot see that import
+# through the entry point and therefore needs the Windows backend explicitly.
 HIDDEN_IMPORTS = [
-    "palletlab.importers.step_model",
-    "palletlab.importers.step_import_worker",
-    "pyvista.plotting._vtk",
-    "pyvista.plotting._vtk_gl",
-    "vtkmodules.qt.QVTKRenderWindowInteractor",
+    "webview",
+    "webview.platforms.winforms",
     "pythoncom",
     "pywintypes",
     "win32com",
@@ -24,9 +23,8 @@ HIDDEN_IMPORTS = [
     "Python.Runtime",
 ]
 
-# PalletLab does not use example data, test helpers, or alternative GUI
-# backends. PyVista's base package imports ``pyvista.jupyter`` and Matplotlib
-# even in desktop mode, so those must remain available.
+# The legacy PyQt/PyVista client remains in the repository while migration is
+# in progress, but the released executable starts the React/pywebview client.
 EXCLUDES = [
     "IPython",
     "PIL.ImageQt",
@@ -37,27 +35,20 @@ EXCLUDES = [
     "mypy",
     "mypyc",
     "mypy_extensions",
-    "pyvista.examples",
-    "pyvista.trame",
-    "tkinter",
-    "trame",
-    "trame_client",
-    "trame_server",
-    "trame_vtk",
-    "vtkmodules.gtk",
-    "vtkmodules.test",
-    "vtkmodules.tk",
+    "PyQt5",
+    "pyvista",
+    "pyvistaqt",
+    "vtkmodules",
 ]
 
 a = Analysis(
-    ["src/main.py"],
+    ["src/web_main.py"],
     pathex=["src"],
     binaries=[],
     datas=[
         ("VERSION", "."),
         ("icon.ico", "."),
-        ("src/palletlab/ui/assets/brand", "palletlab/ui/assets/brand"),
-        ("src/palletlab/ui/assets/icons", "palletlab/ui/assets/icons"),
+        ("frontend/dist", "frontend/dist"),
     ],
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
