@@ -252,6 +252,9 @@ export function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [distanceText, setDistanceText] = useState<Record<string, string>>({});
   const [expandedLayerId, setExpandedLayerId] = useState<string | null>(null);
+  const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
+  const [dropLayerId, setDropLayerId] = useState<string | null>(null);
+  const [dropAfterLayer, setDropAfterLayer] = useState(false);
   const [camera, setCamera] = useState<CameraPreset>("isometric");
   const [cameraRequest, setCameraRequest] = useState(0);
   const [fitRequest, setFitRequest] = useState(0);
@@ -1120,18 +1123,39 @@ export function App() {
 
   function addLayer() {
     if (!project) return;
-    const layerId = `layer-${project.pallet.layers.length}`;
+    const existingNumbers = project.pallet.layers
+      .map((layer) => /^layer-(\d+)$/.exec(layer.id)?.[1])
+      .filter((value): value is string => value !== undefined)
+      .map(Number);
+    const layerId = `layer-${Math.max(project.pallet.layers.length, ...existingNumbers.map((value) => value + 1), 1)}`;
     updateProject({
       ...project,
       pallet: {
         ...project.pallet,
         layers: [
-          ...project.pallet.layers,
           { id: layerId, axis: "length", direction: { ...project.pallet.length } },
+          ...project.pallet.layers,
         ],
       },
     });
     setExpandedLayerId(layerId);
+  }
+
+  function layerNumber(layer: Layer, fallbackIndex: number) {
+    if (layer.id === "length") return 1;
+    if (layer.id === "width") return 2;
+    const suffix = /^layer-(\d+)$/.exec(layer.id)?.[1];
+    return suffix === undefined ? fallbackIndex + 1 : Number(suffix) + 1;
+  }
+
+  function moveLayer(sourceId: string, targetId: string, insertAfter: boolean) {
+    if (!project || sourceId === targetId) return;
+    const source = project.pallet.layers.find((layer) => layer.id === sourceId);
+    const layers = project.pallet.layers.filter((layer) => layer.id !== sourceId);
+    const targetIndex = layers.findIndex((layer) => layer.id === targetId);
+    if (!source || targetIndex < 0) return;
+    layers.splice(targetIndex + (insertAfter ? 1 : 0), 0, source);
+    updateProject({ ...project, pallet: { ...project.pallet, layers } });
   }
 
   function removeLayer(index: number) {
@@ -1264,13 +1288,13 @@ export function App() {
         <button type="button" className="secondary" onClick={undo} disabled={!project || undoStack.current.length === 0}>Назад</button>
         <button type="button" className="secondary" onClick={redo} disabled={!project || redoStack.current.length === 0}>Вперёд</button>
       </div>
-      <div className="viewport-tool-spacer" />
       <div className="viewport-tool-group viewport-mode-actions">
         <button type="button" className={beamTool === "section" ? "active-tool" : ""} onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}>Сечение</button>
         <button type="button" className={beamTool === "delete" ? "active-tool" : ""} onClick={() => beamTool === "delete" ? void deleteSelectedBeams() : activateBeamTool("delete")}>{beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить"}</button>
         <button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}>Размеры</button>
         <button type="button" className={insertionMode ? "active-tool" : ""} onClick={() => insertionMode ? stopInsertion() : activateInsertion()}>Добавить брус</button>
       </div>
+      <div className="viewport-tool-spacer" />
       <label className="viewport-view-select">
         <span>Вид</span>
         <select
@@ -1484,10 +1508,42 @@ export function App() {
               </div>
               {project.pallet.layers.map((layer, index) => (
                 <section
-                  className={expandedLayerId === layer.id ? "layer-card is-expanded" : "layer-card"}
+                  className={`layer-card${expandedLayerId === layer.id ? " is-expanded" : ""}${draggedLayerId === layer.id ? " is-dragging" : ""}${dropLayerId === layer.id ? (dropAfterLayer ? " is-drop-after" : " is-drop-before") : ""}`}
                   key={layer.id}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    setDropLayerId(layer.id);
+                    setDropAfterLayer(event.clientY > bounds.top + bounds.height / 2);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const sourceId = event.dataTransfer.getData("text/plain") || draggedLayerId;
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    if (sourceId) moveLayer(sourceId, layer.id, event.clientY > bounds.top + bounds.height / 2);
+                    setDraggedLayerId(null);
+                    setDropLayerId(null);
+                  }}
                 >
                   <div className="layer-card-header">
+                    <span
+                      className="layer-drag-handle"
+                      draggable
+                      role="img"
+                      aria-label={`Перетащить слой ${layerNumber(layer, index)}`}
+                      title="Перетащить слой"
+                      onDragStart={(event) => {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", layer.id);
+                        setDraggedLayerId(layer.id);
+                      }}
+                      onDragEnd={() => {
+                        setDraggedLayerId(null);
+                        setDropLayerId(null);
+                      }}
+                    >
+                      ⠿
+                    </span>
                     <button
                       type="button"
                       className="layer-toggle"
@@ -1496,13 +1552,13 @@ export function App() {
                         setExpandedLayerId((current) => current === layer.id ? null : layer.id)
                       }
                     >
-                      <span>Слой {index + 1}</span>
+                      <span>Слой {layerNumber(layer, index)}</span>
                       <small>{layer.axis === "length" ? "Вдоль длины" : "Вдоль ширины"}</small>
                     </button>
                     <button
                       type="button"
                       className="icon-button secondary"
-                      aria-label={`Удалить слой ${index + 1}`}
+                      aria-label={`Удалить слой ${layerNumber(layer, index)}`}
                       onClick={() => removeLayer(index)}
                       disabled={project.pallet.layers.length <= 2}
                     >
