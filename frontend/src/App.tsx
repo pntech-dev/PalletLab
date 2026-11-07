@@ -1189,9 +1189,9 @@ export function App() {
     : "none";
   const manualHud: ReactNode = insertionMode && manualSupports.length === 2 ? (
     <div className="manual-hud">
-      <strong>Configure the new beam.</strong>
+      <strong>Новый брус</strong>
       <label>
-        Placement
+        Отсчёт расстояния
         <select
           value={manualReferenceMode}
           onChange={(event) => {
@@ -1201,19 +1201,19 @@ export function App() {
             setManualDistance(mode === "base" ? basePointDistance(manualSupports[0]) : 0);
           }}
         >
-          <option value="base">From zero</option>
-          <option value="face">From selected face</option>
+          <option value="base">От нулевой точки</option>
+          <option value="face">От выбранной грани</option>
         </select>
       </label>
       {manualReferenceMode === "face" ? (
         manualReference ? (
-          <span>Reference: {manualReference.layerId} · beam {manualReference.layerIndex + 1}</span>
+          <span>Опора: {manualReference.layerId} · брус {manualReference.layerIndex + 1}</span>
         ) : (
-          <span>Click the required side face in the 3D view.</span>
+          <span>Выберите боковую грань в 3D-виде</span>
         )
       ) : null}
       <label>
-        Distance
+        Расстояние, мм
         <input
           type="number"
           value={manualDistance}
@@ -1224,15 +1224,15 @@ export function App() {
           }}
         />
       </label>
-      <button type="button" onClick={addManualBeam} disabled={manualReferenceMode === "face" && !manualReference}>Add beam</button>
-      <button type="button" onClick={stopInsertion}>Cancel</button>
+      <button type="button" onClick={addManualBeam} disabled={manualReferenceMode === "face" && !manualReference}>Добавить брус</button>
+      <button type="button" onClick={stopInsertion}>Отмена</button>
     </div>
   ) : null;
   const dimensionHud: ReactNode = dimensionEditing && selectedDimension ? (
     <div className="manual-hud">
-      <strong>New distance</strong>
+      <strong>Изменить расстояние</strong>
       <label>
-        Value
+        Значение, мм
         <input
           type="number"
           autoFocus
@@ -1244,8 +1244,8 @@ export function App() {
           }}
         />
       </label>
-      <button type="button" onClick={changeSelectedDistance}>Apply distance</button>
-      <button type="button" onClick={stopDimensionEditing}>Cancel</button>
+      <button type="button" onClick={changeSelectedDistance}>Применить</button>
+      <button type="button" onClick={stopDimensionEditing}>Отмена</button>
     </div>
   ) : null;
   const sectionHud: ReactNode = beamTool === "section" && selectedBeams.length > 0 ? (
@@ -1476,7 +1476,7 @@ export function App() {
               <progress max="100" value={stepImport.progress ?? 0} />
             ) : null}
             {stepImport.state === "running" ? (
-              <button type="button" onClick={() => void cancelStepImport()}>Cancel import</button>
+              <button type="button" onClick={() => void cancelStepImport()}>Отменить импорт</button>
             ) : null}
             {stepImport.state === "completed" ? (
               <>
@@ -1634,7 +1634,7 @@ export function App() {
         <section className="viewport-panel" aria-label="3D просмотр">
         {calculation?.ok && calculation.snapshot?.pallet ? (
           <>
-            <Suspense fallback={<p>Loading 3D view…</p>}>
+            <Suspense fallback={<p>Загрузка 3D-вида…</p>}>
               <PalletViewport
                 beams={calculation.snapshot.pallet.beams}
                 dimensions={calculation.snapshot.pallet.dimensions}
@@ -1677,7 +1677,7 @@ export function App() {
                 dimensionHud={dimensionHud}
                 sectionHud={sectionHud}
                 toolbar={viewportToolbar}
-                fitViewControl={<button type="button" className="secondary" onClick={() => setFitRequest((value) => value + 1)}>Fit view</button>}
+                fitViewControl={<button type="button" className="secondary" onClick={() => setFitRequest((value) => value + 1)}>Вписать</button>}
                 toolHint={
                   !stepPalletBuilt && !buildingStepPallet && stepModel !== null
                     ? selectedStepFace === null
