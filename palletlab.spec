@@ -13,6 +13,7 @@ APP_NAME = "PalletLab"
 # run without creating a desktop window.  PyInstaller cannot see that import
 # through the entry point and therefore needs the Windows backend explicitly.
 HIDDEN_IMPORTS = [
+    "palletlab.importers.step_import_worker",
     "webview",
     "webview.platforms.winforms",
     "pythoncom",

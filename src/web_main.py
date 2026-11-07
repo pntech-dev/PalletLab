@@ -24,6 +24,10 @@ def _smoke_test() -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--step-import":
+        from palletlab.importers.step_import_worker import main
+
+        raise SystemExit(main(sys.argv[2]))
     if len(sys.argv) == 2 and sys.argv[1] == "--smoke-test":
         raise SystemExit(_smoke_test())
     run_web_application()
