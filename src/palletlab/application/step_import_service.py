@@ -223,7 +223,7 @@ class StepImportService:
                 if getattr(sys, "frozen", False)
                 else [sys.executable, "-m", "palletlab.importers.step_import_worker", str(path)]
             )
-            process = subprocess.Popen(
+            process = subprocess.Popen(  # noqa: S603 - arguments are an executable plus a worker path; shell is never invoked.
                 arguments,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -238,8 +238,10 @@ class StepImportService:
             buffer = ""
             worker_error: str | None = None
             worker_done = False
-            assert process.stdout is not None
-            for chunk in process.stdout:
+            stdout = process.stdout
+            if stdout is None:
+                raise RuntimeError("STEP-worker stdout is unavailable.")
+            for chunk in stdout:
                 messages, buffer = consume_messages(buffer, chunk)
                 for message in messages:
                     if message["kind"] == "progress":
