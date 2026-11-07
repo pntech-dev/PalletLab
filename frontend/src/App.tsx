@@ -1134,8 +1134,8 @@ export function App() {
       pallet: {
         ...project.pallet,
         layers: [
-          { id: layerId, axis: "length", direction: { ...project.pallet.length } },
           ...project.pallet.layers,
+          { id: layerId, axis: "length", direction: { ...project.pallet.length } },
         ],
       },
     });
@@ -1519,7 +1519,9 @@ export function App() {
                   Добавить слой
                 </button>
               </div>
-              {project.pallet.layers.map((layer, index) => (
+              {[...project.pallet.layers].reverse().map((layer) => {
+                const index = project.pallet.layers.findIndex((item) => item.id === layer.id);
+                return (
                 <section
                   className={`layer-card${expandedLayerId === layer.id ? " is-expanded" : ""}${draggedLayerId === layer.id ? " is-dragging" : ""}${dropLayerId === layer.id ? (dropAfterLayer ? " is-drop-after" : " is-drop-before") : ""}`}
                   key={layer.id}
@@ -1533,7 +1535,7 @@ export function App() {
                     event.preventDefault();
                     const sourceId = event.dataTransfer.getData("text/plain") || draggedLayerId;
                     const bounds = event.currentTarget.getBoundingClientRect();
-                    if (sourceId) moveLayer(sourceId, layer.id, event.clientY > bounds.top + bounds.height / 2);
+                    if (sourceId) moveLayer(sourceId, layer.id, event.clientY <= bounds.top + bounds.height / 2);
                     setDraggedLayerId(null);
                     setDropLayerId(null);
                   }}
@@ -1618,7 +1620,8 @@ export function App() {
                     </div>
                   ) : null}
                 </section>
-              ))}
+                );
+              })}
               <div className="layer-stack-footer">
                 <button type="button" className="secondary" onClick={() => void resetProject()}>
                   Сбросить проект
