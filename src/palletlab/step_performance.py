@@ -31,10 +31,17 @@ def process_rss_bytes() -> int | None:
 
         counters = _Counters()
         counters.cb = ctypes.sizeof(counters)
-        success = ctypes.windll.psapi.GetProcessMemoryInfo(
-            ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb,
-        )
-        return int(counters.WorkingSetSize) if success else None
+        try:
+            get_process = ctypes.windll.kernel32.GetCurrentProcess
+            get_process.restype = ctypes.c_void_p
+            get_memory = ctypes.windll.psapi.GetProcessMemoryInfo
+            get_memory.argtypes = (ctypes.c_void_p, ctypes.POINTER(_Counters), ctypes.c_ulong)
+            get_memory.restype = ctypes.c_int
+            success = get_memory(get_process(), ctypes.byref(counters), counters.cb)
+            return int(counters.WorkingSetSize) if success else None
+        except OSError:
+            # Diagnostics must never prevent an import if the OS denies access.
+            return None
     try:
         with Path("/proc/self/statm").open(encoding="ascii") as stream:
             resident_pages = int(stream.read().split()[1])

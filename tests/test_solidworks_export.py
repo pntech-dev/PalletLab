@@ -39,6 +39,46 @@ def test_export_directory_is_created_inside_chosen_parent_and_does_not_overwrite
     assert second.name == f"{first.name}_2"
 
 
+def test_drawing_preserves_exported_assembly_metadata(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from palletlab.exporters import solidworks
+    from palletlab.exporters.drawings import DrawingScope
+
+    (tmp_path / "Pallet.SLDASM").touch()
+    metadata = tmp_path / ".palletlab-drawing.json"
+    metadata.write_text('{"pallet": {"length": 1234}}', encoding="utf-8")
+    captured = []
+    pythoncom = SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)
+    monkeypatch.setattr(solidworks, "_load_solidworks_api", lambda: {
+        "pythoncom": pythoncom, "SldWorks": lambda: SimpleNamespace(Visible=False),
+    })
+    monkeypatch.setattr(solidworks, "_resolve_drawing_template", lambda *_args: tmp_path / "drawing.drwdot")
+    monkeypatch.setattr(solidworks, "_create_drawing_with_helper", lambda *args: captured.append(args))
+
+    solidworks.create_drawings(tmp_path, DrawingScope.ASSEMBLY_ONLY, None, _result())
+
+    assert captured[0][3] == metadata
+    assert metadata.read_text(encoding="utf-8") == '{"pallet": {"length": 1234}}'
+
+
+def test_drawing_helper_runs_without_opening_a_console(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from palletlab.exporters import solidworks
+
+    helper = tmp_path / "SolidWorksDrawingHelper.exe"
+    helper.touch()
+    calls = []
+    monkeypatch.setattr(solidworks, "DRAWING_HELPER", helper)
+    monkeypatch.setattr(solidworks.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(solidworks.subprocess, "run", lambda args, **kwargs: (
+        calls.append((args, kwargs)) or SimpleNamespace(returncode=0)
+    ))
+
+    solidworks._create_drawing_with_helper(tmp_path / "drawing.drwdot", tmp_path / "pallet.SLDASM", tmp_path / "drawing.SLDDRW")
+
+    assert calls[0][1]["creationflags"] == 0x08000000
+
+
 def test_new_document_uses_the_active_solidworks_document():
     document = object()
 

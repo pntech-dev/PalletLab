@@ -83,6 +83,7 @@ def create_drawings(
     template = Path(configured_template) if configured_template else None
     if template is not None and not template.is_file():
         raise DrawingTemplateError("Указанный шаблон чертежа КОМПАС-3D (.cdt) не найден.")
+    stored_rows = _stored_specification_rows(directory)
     api = None
     try:
         api = _load_kompas_api()
@@ -100,9 +101,8 @@ def create_drawings(
                 template,
                 include_assembly_requirements=model.suffix.casefold() == ".a3d",
                 specification_rows=(
-                    assembly_specification_rows(pallet_result)
-                    if model.suffix.casefold() == ".a3d" and pallet_result
-                    else _stored_specification_rows(directory) if model.suffix.casefold() == ".a3d" else ()
+                    stored_rows or (assembly_specification_rows(pallet_result) if pallet_result else ())
+                    if model.suffix.casefold() == ".a3d" else ()
                 ),
             )
         return drawings
@@ -234,7 +234,10 @@ def _add_assembly_specification(document, rows: tuple[SpecificationRow, ...]) ->
         (_SPECIFICATION_ROW_HEIGHT, ("", "", "", "", "Прочие изделия", "", ""), False),
         (_SPECIFICATION_ROW_HEIGHT, ("", "", "", "", "", "", ""), False),
         *(
-            (_SPECIFICATION_ROW_HEIGHT, ("", "", str(row.position), row.designation, "", str(row.quantity), ""), False)
+            (_SPECIFICATION_ROW_HEIGHT, (
+                "", "", str(row.position), row.designation,
+                " ".join(part for part in (row.name, row.dimensions.replace("×", "x")) if part), str(row.quantity), "",
+            ), False)
             for row in rows
         ),
     ]
@@ -306,15 +309,32 @@ def _stored_specification_rows(directory: Path) -> tuple[SpecificationRow, ...]:
     metadata = directory / ".palletlab-drawing.json"
     try:
         payload = json.loads(metadata.read_text(encoding="utf-8"))
-        return tuple(
+        rows = tuple(
             SpecificationRow(
                 position=int(row["position"]),
                 name=str(row["name"]),
                 dimensions=str(row["dimensions"]),
                 quantity=int(row["quantity"]),
+                designation=str(row.get("designation", "")),
             )
             for row in payload.get("specification", ())
         )
+        # Older exports did not persist the designation. Recover it from the
+        # actual part filenames, never from a synthetic row number: export order
+        # can differ from the dimension-sorted specification order.
+        parts = sorted(directory.glob("*.m3d"))
+        resolved = []
+        for row in rows:
+            if row.designation:
+                resolved.append(row)
+                continue
+            try:
+                dimensions = tuple(float(value.strip()) for value in row.dimensions.replace("×", "x").split("x"))
+            except ValueError:
+                dimensions = ()
+            matches = [part.stem for part in parts if tuple(_dimensions_from_model_name(part)) == dimensions]
+            resolved.append(SpecificationRow(row.position, row.name, row.dimensions, row.quantity, ", ".join(matches)))
+        return tuple(resolved)
     except (OSError, ValueError, KeyError, TypeError):
         return ()
 
@@ -420,11 +440,15 @@ def _export(api: dict[str, object], result: PalletResult, output: Path, material
 
     assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.a3d"
     _create_assembly(kompas, constants3d, result, parts, assembly_file)
-    _write_drawing_metadata(output, result)
+    _write_drawing_metadata(output, result, parts, groups)
     return output
 
 
-def _write_drawing_metadata(directory: Path, result: PalletResult) -> None:
+def _write_drawing_metadata(
+    directory: Path, result: PalletResult,
+    parts: dict[tuple[str, float, float, float], Path],
+    groups: dict[tuple[str, float, float, float], list[Beam3D]],
+) -> None:
     """Persist assembly composition so drawings can be generated after restart."""
     payload = {
         "schema": 2,
@@ -435,12 +459,20 @@ def _write_drawing_metadata(directory: Path, result: PalletResult) -> None:
         },
         "specification": [
             {
-                "position": row.position,
-                "name": row.name,
-                "dimensions": row.dimensions,
-                "quantity": row.quantity,
+                "position": index,
+                "name": "Брус",
+                "dimensions": "×".join(
+                    f"{value:g}" for value in (
+                        size_x if orientation == "length" else size_y,
+                        size_y if orientation == "length" else size_x,
+                        size_z,
+                    )
+                ),
+                "quantity": len(groups[key]),
+                "designation": path.stem,
             }
-            for row in assembly_specification_rows(result)
+            for index, (key, path) in enumerate(parts.items(), start=1)
+            for orientation, size_x, size_y, size_z in (key,)
         ],
     }
     (directory / ".palletlab-drawing.json").write_text(

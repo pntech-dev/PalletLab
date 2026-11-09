@@ -5,16 +5,23 @@ import sys
 import traceback
 from pathlib import Path
 
-from palletlab.desktop.web_host import run_web_application
-
-
 def _smoke_test() -> int:
     """Validate the frozen web entrypoint without opening a native window."""
     try:
         importlib.import_module("webview")
+        from palletlab.application.service import ApplicationService
         from palletlab.desktop.web_host import frontend_entrypoint
+        from palletlab.importers.step_model import load_cached_step_model  # noqa: F401
 
         frontend_entrypoint()
+        result = ApplicationService().calculate(ApplicationService().default_project())
+        if not result.get("ok"):
+            raise RuntimeError(f"Default project calculation failed: {result.get('error')}")
+        if getattr(sys, "frozen", False):
+            from palletlab.exporters.solidworks import DRAWING_HELPER
+
+            if not DRAWING_HELPER.is_file():
+                raise RuntimeError(f"SolidWorks drawing helper is missing: {DRAWING_HELPER}")
     except BaseException:
         Path("palletlab-smoke-test-error.log").write_text(
             traceback.format_exc(), encoding="utf-8"
@@ -30,4 +37,6 @@ if __name__ == "__main__":
         raise SystemExit(main(sys.argv[2]))
     if len(sys.argv) == 2 and sys.argv[1] == "--smoke-test":
         raise SystemExit(_smoke_test())
+    from palletlab.desktop.web_host import run_web_application
+
     run_web_application()

@@ -9,6 +9,12 @@ application start.
 
 APP_NAME = "PalletLab"
 
+from pathlib import Path
+
+HELPER_DIR = Path("build/SolidWorksDrawingHelper")
+if not (HELPER_DIR / "SolidWorksDrawingHelper.exe").is_file():
+    raise SystemExit("Build SolidWorksDrawingHelper before packaging; see docs/migration/CAD_ACCEPTANCE.md")
+
 # The web host imports pywebview lazily so that command and bridge tests can
 # run without creating a desktop window.  PyInstaller cannot see that import
 # through the entry point and therefore needs the Windows backend explicitly.
@@ -37,9 +43,7 @@ EXCLUDES = [
     "mypyc",
     "mypy_extensions",
     "PyQt5",
-    "pyvista",
     "pyvistaqt",
-    "vtkmodules",
 ]
 
 a = Analysis(
@@ -50,6 +54,7 @@ a = Analysis(
         ("VERSION", "."),
         ("icon.ico", "."),
         ("frontend/dist", "frontend/dist"),
+        (str(HELPER_DIR), "tools/SolidWorksDrawingHelper"),
     ],
     hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],

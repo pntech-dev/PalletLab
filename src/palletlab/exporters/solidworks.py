@@ -41,15 +41,19 @@ GOST_REDUCTION_SCALES: tuple[tuple[int, int], ...] = (
 
 BASE_PLANE_NAME = "Спереди"
 SOLIDWORKS_API_DIR = Path(r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist")
-_HELPER_RELATIVE_PATH = Path("tools") / "SolidWorksDrawingHelper" / "bin" / "Debug" / "net10.0-windows" / "SolidWorksDrawingHelper.exe"
+_HELPER_NAME = "SolidWorksDrawingHelper.exe"
 
 
 def _drawing_helper_path() -> Path:
     """Locate the helper both in a source checkout and a PyInstaller build."""
     bundled_root = getattr(sys, "_MEIPASS", None)
     if bundled_root:
-        return Path(bundled_root) / _HELPER_RELATIVE_PATH
-    return Path(__file__).resolve().parents[3] / _HELPER_RELATIVE_PATH
+        return Path(bundled_root) / "tools" / "SolidWorksDrawingHelper" / _HELPER_NAME
+    root = Path(__file__).resolve().parents[3]
+    release = root / "build" / "SolidWorksDrawingHelper" / _HELPER_NAME
+    if release.is_file():
+        return release
+    return root / "tools" / "SolidWorksDrawingHelper" / "bin" / "Debug" / "net10.0-windows" / _HELPER_NAME
 
 
 DRAWING_HELPER = _drawing_helper_path()
@@ -90,7 +94,9 @@ def create_drawings(
     ESKD/GOST styles remain intact.
     """
     directory = Path(model_directory)
-    metadata = _write_drawing_metadata(directory, pallet_result) if pallet_result else _drawing_metadata_path(directory)
+    metadata = _drawing_metadata_path(directory)
+    if pallet_result and not metadata.is_file():
+        metadata = _write_drawing_metadata(directory, pallet_result)
     models = sorted(directory.glob("*.SLDPRT"))
     assembly = next(iter(directory.glob("*.SLDASM")), None)
     if scope is DrawingScope.PARTS_AND_ASSEMBLY:
@@ -130,11 +136,12 @@ def _create_drawing_with_helper(template: Path, model_path: Path, filename: Path
     """Use strongly typed .NET interop, avoiding pywin32's COM dispatch bugs."""
     if not DRAWING_HELPER.is_file():
         raise DrawingExportError(
-            "Не найден модуль создания чертежей SolidWorks. Соберите tools/SolidWorksDrawingHelper."
+            "Не найден модуль создания чертежей SolidWorks. Переустановите приложение или соберите SolidWorksDrawingHelper."
         )
     completed = subprocess.run(  # noqa: S603 - fixed local helper; arguments are passed without a shell.
         [str(DRAWING_HELPER), str(template), str(model_path), str(filename), *([str(metadata)] if metadata else [])],
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if completed.returncode:
         detail = completed.stderr.strip() or completed.stdout.strip() or f"код {completed.returncode}"

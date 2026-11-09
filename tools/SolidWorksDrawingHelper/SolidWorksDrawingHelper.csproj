@@ -5,13 +5,21 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <SolidWorksInteropDir Condition="'$(SolidWorksInteropDir)' == ''">C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist</SolidWorksInteropDir>
+    <UseInstalledInterop Condition="'$(UseInstalledInterop)' == '' and Exists('$(SolidWorksInteropDir)\SolidWorks.Interop.sldworks.dll')">true</UseInstalledInterop>
   </PropertyGroup>
-  <ItemGroup>
+  <ItemGroup Condition="'$(UseInstalledInterop)' == 'true'">
     <Reference Include="SolidWorks.Interop.sldworks">
-      <HintPath>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.sldworks.dll</HintPath>
+      <HintPath>$(SolidWorksInteropDir)\SolidWorks.Interop.sldworks.dll</HintPath>
     </Reference>
     <Reference Include="SolidWorks.Interop.swconst">
-      <HintPath>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\redist\SolidWorks.Interop.swconst.dll</HintPath>
+      <HintPath>$(SolidWorksInteropDir)\SolidWorks.Interop.swconst.dll</HintPath>
     </Reference>
+  </ItemGroup>
+  <!-- CI runners lack SOLIDWORKS. These community-published interop packages
+       are pinned; local builds prefer the installed vendor redistributables. -->
+  <ItemGroup Condition="'$(UseInstalledInterop)' != 'true'">
+    <PackageReference Include="SolidWorks.Interop.sldworks" Version="32.1.0" />
+    <PackageReference Include="SolidWorks.Interop.swconst" Version="32.1.0" />
   </ItemGroup>
 </Project>

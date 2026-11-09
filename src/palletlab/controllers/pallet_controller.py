@@ -6,8 +6,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from math import copysign, isfinite
 
-from PyQt5.QtCore import QTimer
-
 from palletlab.core.calculator import (
     build_pallet,
     build_multilayer_pallet,
@@ -59,7 +57,11 @@ class PalletController:
         # already queued timeout harmless after a newer edit or project load.
         self._rebuild_revision = 0
         self._scheduled_revision: int | None = None
-        self._rebuild_timer = timer or QTimer(parent)
+        if timer is None:
+            from PyQt5.QtCore import QTimer
+
+            timer = QTimer(parent)
+        self._rebuild_timer = timer
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(300)
         self._rebuild_timer.timeout.connect(self._run_automatic_rebuild)

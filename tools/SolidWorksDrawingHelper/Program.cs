@@ -275,11 +275,11 @@ static void RemoveSurfaceFinishSymbols(DrawingDoc drawing, ModelDoc2 drawingMode
 {
     for (var view = (SolidWorks.Interop.sldworks.View)drawing.GetFirstView(); view is not null; view = (SolidWorks.Interop.sldworks.View)view.GetNextView())
     {
-        if (view.GetAnnotationsByType((int)swAnnotationType_e.swSFSymbol) is not Array symbols)
+        if (view.GetAnnotations() is not Array symbols)
             continue;
         foreach (var item in symbols)
         {
-            if (item is not Annotation symbol)
+            if (item is not Annotation symbol || symbol.GetType() != (int)swAnnotationType_e.swSFSymbol)
                 continue;
             drawingModel.ClearSelection2(true);
             symbol.Select3(false, null);
@@ -405,6 +405,7 @@ static void AddAssemblySpecification(DrawingDoc drawing, ModelDoc2 drawingModel,
         var tableRow = rowIndex + 4;
         table.Text[tableRow, 2] = row.Position.ToString();
         table.Text[tableRow, 3] = row.Designation;
+        table.Text[tableRow, 4] = string.Join(" ", new[] { row.Name, row.Dimensions }.Where(value => !string.IsNullOrWhiteSpace(value)));
         table.Text[tableRow, 5] = row.Quantity.ToString();
     }
     // 185 mm total: exactly the standard A3 main-title-block width.

@@ -32,6 +32,11 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
       - name: Install dependencies
         shell: pwsh
         run: |
@@ -93,6 +98,8 @@ jobs:
         if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'
         shell: pwsh
         run: |
+          dotnet publish tools/SolidWorksDrawingHelper/SolidWorksDrawingHelper.csproj -c Release -r win-x64 --self-contained true -p:UseInstalledInterop=false -o build/SolidWorksDrawingHelper
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller --noconfirm palletlab.spec
           python -m PyInstaller --noconfirm updater.spec
 
@@ -111,6 +118,8 @@ jobs:
             }
             throw "The packaged PalletLab executable failed its import smoke test."
           }
+          python tests/frozen_step_smoke.py dist/PalletLab/PalletLab.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install Inno Setup
         if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'

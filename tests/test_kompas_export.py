@@ -36,6 +36,56 @@ def test_kompas_export_directory_is_created_inside_chosen_parent_without_overwri
     assert second.name == f"{first.name}_2"
 
 
+def test_drawing_uses_specification_saved_with_export(tmp_path, monkeypatch):
+    import json
+    from palletlab.exporters import kompas
+    from palletlab.exporters.drawings import DrawingScope
+
+    (tmp_path / "Pallet.a3d").touch()
+    (tmp_path / ".palletlab-drawing.json").write_text(json.dumps({"specification": [
+        {"position": 1, "name": "Stored part", "dimensions": "1 × 2 × 3", "quantity": 42},
+    ]}), encoding="utf-8")
+    captured = []
+    pythoncom = SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)
+    monkeypatch.setattr(kompas, "_load_kompas_api", lambda: {
+        "pythoncom": pythoncom, "Dispatch": lambda _name: SimpleNamespace(Visible=False), "constants": object(),
+    })
+    monkeypatch.setattr(kompas, "_create_drawing", lambda *_args, **kwargs: captured.append(kwargs))
+
+    kompas.create_drawings(tmp_path, DrawingScope.ASSEMBLY_ONLY, None, _result())
+
+    assert captured[0]["specification_rows"][0].name == "Stored part"
+    assert captured[0]["specification_rows"][0].quantity == 42
+
+
+def test_legacy_specification_finds_actual_part_names_by_dimensions(tmp_path):
+    import json
+    from palletlab.exporters.kompas import _stored_specification_rows
+
+    (tmp_path / "Beam_1_4200x50x70.m3d").touch()
+    (tmp_path / "Beam_2_1950x50x70.m3d").touch()
+    (tmp_path / ".palletlab-drawing.json").write_text(json.dumps({"specification": [
+        {"position": 1, "name": "Брус", "dimensions": "1950×50×70", "quantity": 14},
+        {"position": 2, "name": "Брус", "dimensions": "4200×50×70", "quantity": 5},
+    ]}), encoding="utf-8")
+
+    rows = _stored_specification_rows(tmp_path)
+
+    assert [row.designation for row in rows] == ["Beam_2_1950x50x70", "Beam_1_4200x50x70"]
+
+
+def test_exported_specification_records_actual_part_and_quantity(tmp_path):
+    from palletlab.exporters.kompas import _stored_specification_rows, _write_drawing_metadata
+
+    beam = Beam3D(0, 0, 0, 4200, 50, 70, "length")
+    key = ("length", 4200, 50, 70)
+    _write_drawing_metadata(tmp_path, _result(), {key: tmp_path / "Beam_7_4200x50x70.m3d"}, {key: [beam, beam]})
+    rows = _stored_specification_rows(tmp_path)
+    assert [(row.designation, row.dimensions, row.quantity) for row in rows] == [
+        ("Beam_7_4200x50x70", "4200×50×70", 2),
+    ]
+
+
 def test_kompas_placements_share_the_pallet_origin():
     lengthwise = Beam3D(1500, 2000, 105, 3000, 50, 70, "length")
     widthwise = Beam3D(1500, 2000, 35, 50, 3000, 70, "width")
@@ -279,7 +329,7 @@ def test_kompas_assembly_specification_is_drawn_in_the_system_view():
             return True
 
     document = _Document()
-    _add_assembly_specification(document, (SpecificationRow(1, "Брус", "2000×100×70", 4),))
+    _add_assembly_specification(document, (SpecificationRow(1, "Брус", "2000×100×70", 4, "Beam_2_2000x100x70"),))
 
     assert document.calls[0][0] == "line"
     lines = [call for call in document.calls if call[0] == "line"]
@@ -287,7 +337,7 @@ def test_kompas_assembly_specification_is_drawn_in_the_system_view():
     assert all(call[-1] == 1 for call in lines)
     assert [call[-1] for call in document.calls if call[0] == "text"] == [
         "Формат", "Зона", "Поз.", "Обозначение детали", "Наименование", "Кол.", "Приме-", "чание",
-        "Прочие изделия", "1", "4",
+        "Прочие изделия", "1", "Beam_2_2000x100x70", "Брус 2000x100x70", "4",
     ]
 
 
