@@ -14,6 +14,7 @@ from typing import Any
 
 from palletlab.application.service import ApplicationService
 from palletlab.application.step_import_service import StepImportService
+from palletlab.application.update_manager import UpdateManager
 from palletlab.application.snapshots import SNAPSHOT_VERSION
 from palletlab.exporters.solidworks import SolidWorksMaterialLibraryError, available_materials
 from palletlab.version import __version__
@@ -25,6 +26,7 @@ class WebApplicationApi:
     def __init__(self) -> None:
         self._window: Any | None = None
         self._step_imports = StepImportService()
+        self._updates = UpdateManager()
         self._assets = _StepAssetServer()
         self._settings = _WebSettings()
         self._project_path: str | None = None
@@ -39,6 +41,23 @@ class WebApplicationApi:
     def status(self) -> dict[str, Any]:
         """Return a dependency-free handshake for the frontend shell."""
         return {"application": "PalletLab", "version": __version__, "snapshotVersion": SNAPSHOT_VERSION}
+
+    def check_update(self) -> dict[str, object]:
+        return self._updates.check()
+
+    def update_status(self) -> dict[str, object]:
+        return self._updates.status()
+
+    def download_update(self) -> dict[str, object]:
+        return self._updates.download()
+
+    def install_update(self) -> dict[str, object]:
+        if self._window is None:
+            return {"state": "failed", "error": "Окно приложения недоступно."}
+        result = self._updates.install()
+        if result.get("state") == "installing":
+            self._window.destroy()
+        return result
 
     def calculate(self, project: object) -> dict[str, Any]:
         """Calculate a persisted project payload for the React frontend."""

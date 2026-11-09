@@ -18,6 +18,7 @@ UninstallDisplayName={#AppName}
 
 [Files]
 Source: "{#AppDist}\*"; DestDir: "{app}\App"; Flags: recursesubdirs ignoreversion
+Source: "installed.marker"; DestDir: "{app}\App"; DestName: ".palletlab-installed"; Flags: ignoreversion
 Source: "{#UpdaterDist}\*"; DestDir: "{app}\Updater"; Flags: recursesubdirs ignoreversion
 
 [Icons]

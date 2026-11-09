@@ -173,6 +173,13 @@ type StepPalletResponse = CalculationResponse & {
   referenceFace?: number;
 };
 type CommandResponse = { ok: boolean; cancelled?: boolean; error?: string; output?: string };
+type UpdateStatus = {
+  state: "idle" | "unavailable" | "checking" | "current" | "check_failed" | "available" | "downloading" | "ready" | "installing" | "failed";
+  version?: string;
+  received?: number;
+  total?: number;
+  error?: string;
+};
 type SolidWorksTemplateResponse = CommandResponse & { path?: string };
 type SolidWorksMaterialsResponse = CommandResponse & { materialLibrary?: string; materials?: string[] };
 type SolidWorksOptions = {
@@ -244,6 +251,10 @@ declare global {
         default_project: () => Promise<object>;
         calculate: (project: object) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;
+        check_update: () => Promise<UpdateStatus>;
+        update_status: () => Promise<UpdateStatus>;
+        download_update: () => Promise<UpdateStatus>;
+        install_update: () => Promise<UpdateStatus>;
         delete_beams: (
           project: object,
           selection: Record<string, number[]>,
@@ -307,6 +318,8 @@ export function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [savedProject, setSavedProject] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [update, setUpdate] = useState<UpdateStatus>({ state: "idle" });
+  const [updateDismissed, setUpdateDismissed] = useState(false);
   const [distanceText, setDistanceText] = useState<Record<string, string>>({});
   const [marginDrafts, setMarginDrafts] = useState<Partial<Record<MarginIndex, string>>>({});
   const [expandedLayerId, setExpandedLayerId] = useState<string | null>(null);
@@ -572,6 +585,22 @@ export function App() {
     }, 300);
     return () => window.clearTimeout(timeout);
   }, [project, status]);
+
+  useEffect(() => {
+    if (!status) return undefined;
+    const timeout = window.setTimeout(() => {
+      void window.pywebview?.api?.check_update().then(setUpdate).catch(() => undefined);
+    }, 1500);
+    return () => window.clearTimeout(timeout);
+  }, [status]);
+
+  useEffect(() => {
+    if (update.state !== "checking" && update.state !== "downloading") return undefined;
+    const timer = window.setInterval(() => {
+      void window.pywebview?.api?.update_status().then(setUpdate).catch(() => undefined);
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [update.state]);
 
   useEffect(() => {
     if (!project) return;
@@ -1544,6 +1573,9 @@ export function App() {
             Создать чертёж
           </button>
         </nav>
+        {updateDismissed && ["available", "ready", "failed"].includes(update.state) ? (
+          <button type="button" className="secondary" onClick={() => setUpdateDismissed(false)}>Доступно обновление</button>
+        ) : null}
         <button type="button" className="secondary export-settings" onClick={openSolidWorksSetup} disabled={!project || exporting !== null}>
           Настройки экспорта
         </button>
@@ -1556,6 +1588,30 @@ export function App() {
               {status ? `${status.application} ${status.version}` : "Подключение…"}
             </p>
           </div>
+        {!updateDismissed && ["available", "downloading", "ready", "failed", "installing"].includes(update.state) ? (
+          <div className="modal-backdrop">
+            <section className="modal progress-modal" role="dialog" aria-modal="true" aria-labelledby="update-title" aria-live="polite">
+              <h2 id="update-title">Обновление PalletLab</h2>
+              {update.state === "available" ? <p>Доступна версия {update.version}.</p> : null}
+              {update.state === "downloading" ? <>
+                <p>Скачивание и проверка обновления…</p>
+                {update.total ? <progress max={update.total} value={update.received ?? 0} /> : <progress />}
+              </> : null}
+              {update.state === "ready" ? <>
+                <p>Версия {update.version} готова к установке. Приложение закроется.</p>
+                {project && JSON.stringify(project) !== savedProject ? <p>Перед установкой сохраните проект.</p> : null}
+              </> : null}
+              {update.state === "installing" ? <p>Запускается установка обновления…</p> : null}
+              {update.error ? <p className="error">{update.error}</p> : null}
+              <footer className="modal-actions">
+                {update.state !== "downloading" && update.state !== "installing" ? <button type="button" className="secondary" onClick={() => setUpdateDismissed(true)}>Позже</button> : null}
+                {update.state === "available" || update.state === "failed" ? <button type="button" onClick={() => void window.pywebview?.api?.download_update().then(setUpdate)}>Скачать</button> : null}
+                {update.state === "ready" && project && JSON.stringify(project) !== savedProject ? <button type="button" disabled={saving} onClick={() => void saveProject()}>Сохранить проект</button> : null}
+                {update.state === "ready" ? <button type="button" disabled={!project || JSON.stringify(project) !== savedProject || saving} onClick={() => void window.pywebview?.api?.install_update().then(setUpdate)}>Установить</button> : null}
+              </footer>
+            </section>
+          </div>
+        ) : null}
         {exportChoiceOpen ? (
           <div className="modal-backdrop" role="presentation">
             <section className="modal export-choice-modal" role="dialog" aria-modal="true" aria-labelledby="export-choice-title">

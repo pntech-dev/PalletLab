@@ -59,3 +59,21 @@ def test_install_restores_replaced_files_if_a_later_copy_fails(tmp_path, monkeyp
 
     assert (current / "old.txt").read_text(encoding="utf-8") == "old"
     assert not (current / "later.txt").exists()
+
+
+def test_install_restores_file_after_partial_failed_replacement(tmp_path, monkeypatch):
+    current = tmp_path / "App"
+    incoming = tmp_path / "PalletLab"
+    current.mkdir()
+    incoming.mkdir()
+    (current / "app.exe").write_text("original", encoding="utf-8")
+    (incoming / "app.exe").write_text("new", encoding="utf-8")
+
+    def fail_after_partial_write(_source, destination):
+        destination.write_text("partial", encoding="utf-8")
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(updater_main, "_replace_file", fail_after_partial_write)
+    with pytest.raises(OSError, match="copy failed"):
+        _install_application_files(current, incoming)
+    assert (current / "app.exe").read_text(encoding="utf-8") == "original"

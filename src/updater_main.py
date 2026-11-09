@@ -119,8 +119,8 @@ def _install_application_files(app_dir: Path, extracted: Path) -> None:
                 previous.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(destination, previous)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            _replace_file(source, destination)
             replaced.append((destination, previous))
+            _replace_file(source, destination)
     except Exception:
         for destination, previous in reversed(replaced):
             if previous is None:
