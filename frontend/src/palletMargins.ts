@@ -3,6 +3,13 @@ import type { Direction, Project } from "./App";
 export type Margins = [number, number, number, number];
 export type MarginIndex = 0 | 1 | 2 | 3;
 
+// Persisted values are in X-/X+/Y-/Y+ order. The controls use the
+// viewport's convention: left/right are X-/X+, top/bottom are Y-/Y+.
+export const MARGIN_PAIRS = [
+  { first: 0, second: 1, link: 0, labels: ["Слева, мм", "Справа, мм"], description: "слева и справа" },
+  { first: 2, second: 3, link: 1, labels: ["Сверху, мм", "Снизу, мм"], description: "сверху и снизу" },
+] as const;
+
 export function palletMargins(project: Project): Margins {
   const saved = project.pallet.pallet_margins;
   if (saved?.length === 4) return [...saved];

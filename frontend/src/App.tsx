@@ -17,7 +17,7 @@ import type {
   StepModelSnapshot,
 } from "./PalletViewport";
 import type { StepModelPayload } from "./stepModelGeometry";
-import { changePalletMargin, marginLinks, palletMargins, toggleMarginLink, type MarginIndex } from "./palletMargins";
+import { changePalletMargin, marginLinks, MARGIN_PAIRS, palletMargins, toggleMarginLink, type MarginIndex } from "./palletMargins";
 
 const startupStartedAt = performance.now();
 
@@ -1868,20 +1868,17 @@ export function App() {
             </section>
               {project ? <section className="pallet-margins">
                 <h2>Отступы поддона</h2>
-                {([0, 1] as const).map((pair) => {
-                  const first: MarginIndex = pair === 0 ? 0 : 2;
-                  const second: MarginIndex = pair === 0 ? 1 : 3;
-                  const linked = marginLinks(project)[pair];
-                  const names = pair === 0 ? ["Слева, мм", "Справа, мм"] : ["Сверху, мм", "Снизу, мм"];
-                  return <div className="pallet-margins-fields" key={pair}>
+                {MARGIN_PAIRS.map(({ first, second, link, labels: names, description }) => {
+                  const linked = marginLinks(project)[link];
+                  return <div className="pallet-margins-fields" key={link}>
                     <label>{names[0]}<input type="number" min="0" value={marginDrafts[first] ?? palletMargins(project)[first]}
                       onFocus={() => { beginFormEdit(); setMarginDrafts((drafts) => ({ ...drafts, [first]: String(palletMargins(project)[first]) })); }}
                       onBlur={() => { setMarginDrafts((drafts) => { const next = { ...drafts }; delete next[first]; return next; }); finishFormEdit(); }}
                       onChange={(event) => { setMarginDrafts((drafts) => ({ ...drafts, [first]: event.target.value })); updatePalletMargin(first, event.target.value); }} /></label>
                     <button type="button" className={`margin-link secondary${linked ? " is-linked" : ""}`}
-                      aria-pressed={linked} aria-label={`${linked ? "Разъединить" : "Связать"} отступы ${pair === 0 ? "слева и справа" : "сверху и снизу"}`}
+                      aria-pressed={linked} aria-label={`${linked ? "Разъединить" : "Связать"} отступы ${description}`}
                       title={linked ? "Разъединить отступы" : "Связать отступы"}
-                      onClick={() => updateProject(toggleMarginLink(project, pair))}>
+                      onClick={() => updateProject(toggleMarginLink(project, link))}>
                       <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M10 13a5 5 0 0 0 7.1 0l2.1-2.1a5 5 0 0 0-7.1-7.1L11 4.9" />
                         <path d="M14 11a5 5 0 0 0-7.1 0l-2.1 2.1a5 5 0 0 0 7.1 7.1l1.1-1.1" />
