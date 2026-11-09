@@ -17,7 +17,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .is-viewport-expanded .editor-panel { visibility: hidden; transition: visibility 0s 360ms; }
 .is-viewport-expanded .editor-panel .modal-backdrop { visibility: visible; }
 .viewport-panel { grid-area: viewport; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; padding: 16px; background: #1e2d31; }
-.editor-panel { grid-area: editor; min-width: 0; min-height: 0; overflow: hidden; padding: 16px; border-left: 1px solid #d8d7d0; background: #f8f7f3; }
+.editor-panel { grid-area: editor; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; padding: 16px; border-left: 1px solid #d8d7d0; background: #f8f7f3; }
 .editor-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .editor-heading .eyebrow { margin: 0; }
 .editor-heading .status { margin: 0; font-size: 12px; text-align: right; }
@@ -133,7 +133,7 @@ legend { padding: 0 4px; color: #3e4c4b; font-size: 13px; font-weight: 600; }
 .project-options { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
 .layers { grid-column: 1 / -1; gap: 10px; }
 .layer-row { display: grid; grid-template-columns: minmax(100px, 1fr) 160px auto; align-items: center; gap: 8px; }
-.editor-panel .directions { grid-template-columns: 1fr; gap: 12px; margin-top: 0; }
+.editor-panel .directions { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 12px; margin-top: 0; }
 .editor-panel fieldset { border-color: #deddd7; }
 .editor-panel .rounding { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .editor-panel .step-import { margin-top: 0; }
@@ -145,7 +145,9 @@ legend { padding: 0 4px; color: #3e4c4b; font-size: 13px; font-weight: 600; }
 .cad-export-actions label { min-width: 220px; }
 .file-actions { display: flex; gap: 8px; margin-top: 12px; }
 
-.layer-stack { display: grid; gap: 8px; min-height: 0; }
+.layer-stack { display: flex; flex-direction: column; flex: 1; gap: 8px; min-height: 0; }
+.layer-stack-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding-right: 3px; }
+.layer-stack-list > .layer-card { flex: 0 0 auto; }
 .layer-stack-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; padding-top: 4px; }
 .layer-stack-heading .eyebrow { margin-bottom: 2px; }
 .layer-stack-heading h2 { margin: 0; font-size: 16px; }

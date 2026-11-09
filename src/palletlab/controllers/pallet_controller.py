@@ -18,7 +18,7 @@ from palletlab.core.calculator import (
 )
 from palletlab.core.models import Beam3D, BeamSection, DirectionInput, DirectionResult, InsertionSlot, LayerBeamKey, LayerDefinition, LayerDirection, LayerInput, ManualBeamInput, PalletAxis, PalletResult
 from palletlab.core.persistence import ProjectPersistenceError, load_project, save_project
-from palletlab.core.project_state import ProjectState, ToolMode
+from palletlab.core.project_state import ProjectState, ToolMode, beam_layer_ids
 from palletlab.core.validation import CalculationError
 from palletlab.controllers.viewport_geometry import editable_dimensions, insertion_markers, insertion_preview
 
@@ -662,11 +662,12 @@ class PalletController:
         supports = {(beam.layer_id, beam.layer_index): beam for beam in current.beams_3d} if current else {}
         first, second = supports.get(first_support), supports.get(second_support)
         reference = supports.get(reference_support) if reference_support is not None else None
-        project_layer_ids = {layer.layer_id for layer in self.state.layers}
+        physical_layers = beam_layer_ids(self.state.layers, self.state.manual_beams)
+        first_layer = physical_layers.get(first.layer_id) if first else None
+        second_layer = physical_layers.get(second.layer_id) if second else None
         valid_faces = {"top", "bottom"}
         if (first is None or second is None or first is second
-                or first.layer_id != second.layer_id
-                or first.layer_id not in project_layer_ids
+                or first_layer is None or first_layer != second_layer
                 or first.orientation != second.orientation
                 or first_face not in valid_faces or second_face not in valid_faces
                 or first_face != second_face
@@ -684,7 +685,7 @@ class PalletController:
                 return None
         if self.state.multi_layer_mode:
             layer_index = next(
-                (index for index, layer in enumerate(self.state.layers) if layer.layer_id == first.layer_id),
+                (index for index, layer in enumerate(self.state.layers) if layer.layer_id == first_layer),
                 None,
             )
             if layer_index is None or layer_index + 1 >= len(self.state.layers):

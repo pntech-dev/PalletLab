@@ -14,7 +14,7 @@ from palletlab.controllers.viewport_geometry import InsertionMarker, editable_di
 from palletlab.core.calculator import calculate_direction, insertion_slots, insertion_slots_for_direction
 from palletlab.core.models import Beam3D, InsertionSlot, LayerInput, ManualBeamInput, PalletResult
 from palletlab.core.persistence import project_to_dict
-from palletlab.core.project_state import ProjectState
+from palletlab.core.project_state import ProjectState, beam_layer_ids
 
 SNAPSHOT_VERSION = 1
 
@@ -47,6 +47,7 @@ def pallet_snapshot(
 ) -> dict[str, Any]:
     """Return viewport data without coupling the caller to PyVista or Qt."""
     slots = _insertion_slots(result, layers)
+    physical_layers = beam_layer_ids(layers, manual_beams)
     return {
         "size": {
             "length": result.pallet_length,
@@ -65,7 +66,10 @@ def pallet_snapshot(
             }
             for layer in result.layers
         ],
-        "beams": [_beam_payload(index, beam) for index, beam in enumerate(result.beams_3d)],
+        "beams": [
+            {**_beam_payload(index, beam), "physicalLayerId": physical_layers.get(beam.layer_id, beam.layer_id)}
+            for index, beam in enumerate(result.beams_3d)
+        ],
         "dimensions": [
             {
                 "layerId": dimension.layer_id,

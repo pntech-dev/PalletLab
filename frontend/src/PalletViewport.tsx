@@ -20,6 +20,7 @@ const StepModelViewport = lazy(() => import("./StepModelViewport"));
 export type ViewportBeam = {
   index: number;
   layerId: string;
+  physicalLayerId: string;
   layerIndex: number;
   orientation: string;
   center: [number, number, number];

@@ -911,7 +911,7 @@ export function App() {
         setManualDistance(0);
         return;
       }
-      if (manualSupports.length === 1 && manualSupports[0].beam.layerId !== beam.layerId) {
+      if (manualSupports.length === 1 && manualSupports[0].beam.physicalLayerId !== beam.physicalLayerId) {
         showViewportToolError("Вторую опору нужно выбрать на том же слое, что и первую.");
         return;
       }
@@ -1683,6 +1683,7 @@ export function App() {
                   Добавить слой
                 </button>
               </div>
+              <div className="layer-stack-list">
               {[...project.pallet.layers].reverse().map((layer) => {
                 const index = project.pallet.layers.findIndex((item) => item.id === layer.id);
                 return (
@@ -1843,12 +1844,13 @@ export function App() {
                 </section>
                 );
               })}
+              </div>
+            </section>
               <div className="layer-stack-footer">
                 <button type="button" className="secondary" onClick={() => void resetProject()}>
                   Сбросить проект
                 </button>
               </div>
-            </section>
           </div>
         ) : null}
         </aside>

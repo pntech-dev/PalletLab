@@ -240,8 +240,9 @@ def project_from_dict(raw: object) -> ProjectState:
             )
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise ProjectPersistenceError("Пользовательский брус содержит некорректные параметры.") from exc
-        if (not beam_id or first_key[0] not in layer_ids or second_key[0] not in layer_ids
-                or (reference_key is not None and reference_key[0] not in layer_ids)
+        available_ids = layer_ids | manual_ids
+        if (not beam_id or first_key[0] not in available_ids or second_key[0] not in available_ids
+                or (reference_key is not None and reference_key[0] not in available_ids)
                 or first_face not in ("top", "bottom") or second_face not in ("top", "bottom")
                 or reference_face not in (None, "top", "bottom", "x_min", "x_max", "y_min", "y_max")
                 or (start_point is not None and (len(start_point) != 3 or not all(math.isfinite(value) for value in start_point)))

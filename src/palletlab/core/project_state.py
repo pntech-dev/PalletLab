@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from typing import Literal
+from collections.abc import Sequence
 
 from .models import BeamKey, BeamSection, DirectionInput, InsertionSlot, LayerBeamKey, LayerInput, ManualBeamInput, PalletAxis, PalletResult
 from .materials import DEFAULT_MATERIAL_ID
@@ -16,6 +17,20 @@ from .materials import DEFAULT_MATERIAL_ID
 
 CameraMode = Literal["isometric", "top", "front", "side"]
 ToolMode = Literal["none", "insertion", "deletion", "distance_editing", "section_editing"]
+
+
+def beam_layer_ids(layers: Sequence[LayerInput], manual_beams: Sequence[ManualBeamInput]) -> dict[str, str]:
+    """Map persistent beam identities to the layer they physically occupy."""
+    ids = [layer.layer_id for layer in layers]
+    result = {layer_id: layer_id for layer_id in ids}
+    for beam in manual_beams:
+        support_layer = result.get(beam.first_support[0])
+        if support_layer is None:
+            continue
+        index = ids.index(support_layer) + (1 if beam.first_face == "top" else -1)
+        if 0 <= index < len(ids):
+            result[beam.beam_id] = ids[index]
+    return result
 
 
 @dataclass

@@ -174,6 +174,27 @@ def test_add_manual_beam_rejects_supports_from_different_layers() -> None:
     assert response["ok"] is False
 
 
+def test_manual_beam_can_support_beam_in_next_layer_after_reload() -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    options = {"distance": 100, "section": {"height": 70, "width": 50}}
+    first = service.add_manual_beam(project, [
+        {"layerId": "length", "layerIndex": 1},
+        {"layerId": "length", "layerIndex": 2},
+    ], options)
+    assert first["ok"] is True
+    manual = next(beam for beam in first["snapshot"]["pallet"]["beams"] if beam["layerId"] == "manual-1")
+    assert manual["physicalLayerId"] == "width"
+    second = service.add_manual_beam(first["snapshot"]["project"], [
+        {"layerId": "manual-1", "layerIndex": 0},
+        {"layerId": "width", "layerIndex": 1},
+    ], options)
+    assert second["ok"] is True
+    restored = service.calculate(second["snapshot"]["project"])
+    assert restored["ok"] is True
+    assert next(beam for beam in restored["snapshot"]["pallet"]["beams"] if beam["layerId"] == "manual-2")["physicalLayerId"] == "layer-1"
+
+
 def test_add_manual_beam_rejects_a_manual_beam_as_its_layer() -> None:
     service = ApplicationService()
     calculated = service.calculate(service.default_project())
