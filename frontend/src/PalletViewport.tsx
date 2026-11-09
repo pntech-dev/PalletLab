@@ -127,7 +127,7 @@ function FitCamera({ fitRequest, bounds }: { fitRequest: number; bounds: Viewpor
 
   useEffect(() => {
     if (size.width <= 0 || size.height <= 0) return;
-    if (fitRequest === previousRequest.current) return;
+    const requestedExplicitly = fitRequest !== previousRequest.current;
     previousRequest.current = fitRequest;
 
     const perspective = camera as PerspectiveCamera;
@@ -158,6 +158,10 @@ function FitCamera({ fitRequest, bounds }: { fitRequest: number; bounds: Viewpor
     }
     // Keep only a small edge margin; the fit should fill the available view.
     distance = Math.max(0.3, distance * 1.04);
+    // An explicit command always recentres the viewport. During ordinary
+    // recalculation, however, retain the user's direction and only pull back
+    // when the new model no longer fits in the current frame.
+    if (!requestedExplicitly && camera.position.distanceTo(target) >= distance) return;
     camera.position.copy(target.addScaledVector(direction, -distance));
     camera.lookAt(...bounds.center);
   }, [bounds, camera, fitRequest, size.height, size.width]);
