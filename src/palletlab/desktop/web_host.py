@@ -27,6 +27,7 @@ class WebApplicationApi:
         self._step_imports = StepImportService()
         self._assets = _StepAssetServer()
         self._settings = _WebSettings()
+        self._project_path: str | None = None
 
     def attach_window(self, window: Any) -> None:
         self._window = window
@@ -68,13 +69,23 @@ class WebApplicationApi:
     def materials(self) -> list[dict[str, str]]:
         return ApplicationService().materials()
 
-    def save_project(self, project: object) -> dict[str, Any]:
-        path = self._choose_file("save")
-        return {"ok": False, "cancelled": True} if path is None else ApplicationService().save(project, path)
+    def save_project(self, project: object, save_as: bool = False) -> dict[str, Any]:
+        path = self._choose_file("save") if save_as or self._project_path is None else self._project_path
+        if path is None:
+            return {"ok": False, "cancelled": True}
+        response = ApplicationService().save(project, path)
+        if response.get("ok"):
+            self._project_path = path
+        return response
 
     def open_project(self) -> dict[str, Any]:
         path = self._choose_file("open")
-        return {"ok": False, "cancelled": True} if path is None else ApplicationService().load(path)
+        if path is None:
+            return {"ok": False, "cancelled": True}
+        response = ApplicationService().load(path)
+        if response.get("ok"):
+            self._project_path = path
+        return response
 
     def export_kompas(self, project: object) -> dict[str, Any]:
         directory = self._choose_directory("Выберите папку для экспорта КОМПАС-3D")

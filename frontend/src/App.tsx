@@ -249,6 +249,7 @@ declare global {
         ) => Promise<CalculationResponse>;
         save_project: (
           project: object,
+          saveAs: boolean,
         ) => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
         open_project: () => Promise<{
           ok: boolean;
@@ -283,6 +284,8 @@ export function App() {
   );
   const [calculationError, setCalculationError] = useState<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
+  const [savedProject, setSavedProject] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [distanceText, setDistanceText] = useState<Record<string, string>>({});
   const [expandedLayerId, setExpandedLayerId] = useState<string | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
@@ -558,10 +561,21 @@ export function App() {
     return () => window.clearTimeout(timeout);
   }, [project]);
 
-  async function saveProject() {
-    if (!project) return;
-    const response = await window.pywebview!.api!.save_project(project);
+  async function saveProject(saveAs = false) {
+    if (!project || saving) return;
+    const savedVersion = JSON.stringify(project);
+    setSaving(true);
+    let response: { ok: boolean; cancelled?: boolean; error?: string };
+    try {
+      response = await window.pywebview!.api!.save_project(project, saveAs);
+    } catch {
+      setCalculationError("Не удалось сохранить проект.");
+      return;
+    } finally {
+      setSaving(false);
+    }
     if (response.ok) {
+      setSavedProject(savedVersion);
       discardRecoveredProject();
       setRecoveryNotice(null);
     } else if (!response.cancelled)
@@ -571,6 +585,7 @@ export function App() {
     const response = await window.pywebview!.api!.open_project();
     if (response.project) {
       applyProject(response.project);
+      setSavedProject(JSON.stringify(response.project));
       setCalculationError(null);
       undoStack.current = [];
       redoStack.current = [];
@@ -1464,7 +1479,8 @@ export function App() {
         <strong className="app-brand">PalletLab</strong>
         <nav className="app-actions" aria-label="Действия с проектом">
           <button type="button" className="secondary" onClick={openProject} disabled={!status}>Открыть</button>
-          <button type="button" className="secondary" onClick={saveProject} disabled={!project}>Сохранить</button>
+          <button type="button" className="secondary" onClick={() => void saveProject()} disabled={!project || saving || JSON.stringify(project) === savedProject}>Сохранить</button>
+          <button type="button" className="secondary" onClick={() => void saveProject(true)} disabled={!project || saving}>Сохранить как</button>
           <button
             type="button"
             className="secondary"
