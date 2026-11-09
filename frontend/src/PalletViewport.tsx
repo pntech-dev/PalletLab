@@ -100,7 +100,9 @@ function Camera({
     const [x, y, z] = bounds.center;
     const distance = Math.max(3, bounds.span * 1.45);
     const positions: Record<CameraPreset, [number, number, number]> = {
-      isometric: [x + distance, y + distance * 0.75, z + distance],
+      // A slightly closer default makes the pallet easier to inspect without
+      // sacrificing the breathing room needed for dimensions.
+      isometric: [x + distance * 0.9, y + distance * 0.675, z + distance * 0.9],
       // Do not place the camera exactly at the orbit pole. At the pole an
       // orbit has no horizontal direction, so a left-drag can appear locked to
       // one axis. This remains visually a top view while preserving full orbit.
@@ -229,19 +231,19 @@ function DimensionLabel({
 }) {
   const texture = useMemo(() => {
     const canvas = document.createElement("canvas");
-    canvas.width = 144;
-    canvas.height = 56;
+    canvas.width = 112;
+    canvas.height = 42;
     const context = canvas.getContext("2d");
     if (!context)
-      throw new Error("Canvas 2D is unavailable for dimension labels.");
+      throw new Error("Невозможно создать подписи размеров.");
     context.fillStyle = "rgba(255, 255, 255, 0.76)";
-    context.roundRect(2, 2, 140, 52, 7);
+    context.roundRect(2, 2, 108, 38, 6);
     context.fill();
     context.fillStyle = "#183f52";
-    context.font = "600 27px system-ui, sans-serif";
+    context.font = "600 21px system-ui, sans-serif";
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillText(value.toFixed(0), 72, 29);
+    context.fillText(value.toFixed(0), 56, 22);
     const result = new CanvasTexture(canvas);
     result.minFilter = LinearFilter;
     return result;
@@ -250,7 +252,7 @@ function DimensionLabel({
   return (
     <sprite
       position={position}
-      scale={[0.3, 0.12, 1]}
+      scale={[0.235, 0.09, 1]}
       renderOrder={10}
       onClick={(event) => {
         event.stopPropagation();
@@ -500,8 +502,24 @@ export default function PalletViewport({
 }) {
   const [cursor, setCursor] = useState<[number, number]>([16, 16]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
+  const [errorPresentation, setErrorPresentation] = useState<{
+    message: string;
+    version: number;
+    leaving: boolean;
+  } | null>(null);
   const stepPicker = useRef<((clientX: number, clientY: number, bounds: DOMRect) => void) | null>(null);
   const pointerDown = useRef<[number, number] | null>(null);
+  useEffect(() => {
+    if (toolError) {
+      setErrorPresentation({ message: toolError, version: toolErrorVersion, leaving: false });
+      return undefined;
+    }
+    setErrorPresentation((current) => current ? { ...current, leaving: true } : null);
+    const timeout = window.setTimeout(() => {
+      setErrorPresentation((current) => current?.leaving ? null : current);
+    }, 220);
+    return () => window.clearTimeout(timeout);
+  }, [toolError, toolErrorVersion]);
   const bounds = useMemo(() => {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -881,13 +899,21 @@ export default function PalletViewport({
       </Canvas>
       {toolbar ? <div className="viewport-floating-toolbar">{toolbar}</div> : null}
       {fitViewControl ? <div className="viewport-fit-control">{fitViewControl}</div> : null}
-      {toolError || toolHint ? (
+      {toolHint ? (
         <div
-          key={toolError ? `tool-error-${toolErrorVersion}` : "tool-hint"}
-          className={`viewport-hint${toolError ? " viewport-error" : ""}`}
+          className="viewport-hint"
           style={{ left: cursor[0], top: cursor[1] }}
         >
-          {toolError ?? toolHint}
+          {toolHint}
+        </div>
+      ) : null}
+      {errorPresentation ? (
+        <div
+          key={`tool-error-${errorPresentation.version}`}
+          className={`viewport-error-toast${errorPresentation.leaving ? " is-leaving" : ""}`}
+          role="alert"
+        >
+          {errorPresentation.message}
         </div>
       ) : null}
     </div>

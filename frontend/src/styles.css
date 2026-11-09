@@ -49,6 +49,7 @@ input:disabled { cursor: default; background: #ecece8; color: #7d8583; }
 .modal label { min-width: 0; }
 .material-field, .drawing-modal > label:not(.file-field) { display: flex; flex-direction: column; width: calc(100% - 24px); max-width: calc(100% - 24px); gap: 4px; }
 .material-field select, .drawing-modal > label:not(.file-field) select { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
+.material-field { width: 100%; max-width: 100%; }
 .modal-hint, .cad-export-note, .export-status { color: #65706f; font-size: 13px; line-height: 1.45; }
 .modal-hint code { word-break: break-all; }
 .file-field { min-width: 0; }
@@ -75,8 +76,10 @@ input:disabled { cursor: default; background: #ecece8; color: #7d8583; }
 .manual-hud button:hover:not(:disabled) { background: #3b6367; }
 .section-hud-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .viewport-hint { position: absolute; z-index: 6; max-width: min(320px, calc(100% - 16px)); padding: 6px 8px; border-radius: 6px; background: rgb(24 43 47 / 72%); color: #fff; font-size: 12px; pointer-events: none; white-space: pre-line; overflow: hidden; text-overflow: ellipsis; }
-.viewport-hint.viewport-error { background: rgb(152 57 49 / 92%); white-space: normal; overflow: visible; text-overflow: clip; animation: viewport-error-shake 420ms ease-in-out; }
-@keyframes viewport-error-shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
+.viewport-error-toast { position: absolute; z-index: 9; top: 72px; left: 50%; max-width: min(520px, calc(100% - 32px)); padding: 9px 12px; border: 1px solid rgb(255 212 205 / 42%); border-radius: 8px; background: rgb(152 57 49 / 94%); box-shadow: 0 10px 24px rgb(0 0 0 / 22%); color: #fff; font-size: 13px; line-height: 1.35; pointer-events: none; text-align: center; transform: translateX(-50%); animation: viewport-error-enter 420ms ease-out both; }
+.viewport-error-toast.is-leaving { animation: viewport-error-leave 220ms ease-in both; }
+@keyframes viewport-error-enter { 0% { opacity: 0; transform: translate(-50%, -10px) scale(.96); } 45% { opacity: 1; transform: translate(-50%, 0) scale(1); } 62%, 86% { transform: translateX(calc(-50% - 4px)); } 74% { transform: translateX(calc(-50% + 4px)); } 100% { opacity: 1; transform: translateX(-50%); } }
+@keyframes viewport-error-leave { from { opacity: 1; transform: translateX(-50%) scale(1); } to { opacity: 0; transform: translate(-50%, -8px) scale(.96); } }
 .viewport-hud label { display: grid; gap: 3px; }
 .viewport-hud input, .viewport-hud select { min-width: 140px; }
 .viewport-hud button { padding: 5px 8px; }
@@ -137,6 +140,7 @@ legend { padding: 0 4px; color: #3e4c4b; font-size: 13px; font-weight: 600; }
 .layer-card-content label { min-width: 0; }
 .layer-card-content input, .layer-card-content select { min-width: 0; width: 100%; min-height: 30px; padding: 5px 6px; }
 .layer-field-wide { grid-column: 1 / -1; }
+.layer-section-dimensions { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .layer-stack-footer { display: flex; justify-content: end; padding-top: 4px; }
 .layer-stack-footer button { min-height: 32px; padding: 6px 9px; }
 

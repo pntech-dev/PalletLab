@@ -105,6 +105,15 @@ const SECTION_PRESETS = [
   { id: "custom", label: "Свой размер" },
 ] as const;
 type SectionPresetId = (typeof SECTION_PRESETS)[number]["id"];
+
+function sectionPresetFor(direction: Direction): SectionPresetId {
+  return SECTION_PRESETS.find(
+    (preset) => "height" in preset
+      && preset.height === direction.beam_height
+      && preset.width === direction.beam_width,
+  )?.id ?? "custom";
+}
+
 type DimensionTarget = { layerId: string; beamIndex: number };
 type InsertionSlot = {
   axis: "length" | "width";
@@ -294,6 +303,7 @@ export function App() {
     width: 50,
   });
   const [sectionPreset, setSectionPreset] = useState<SectionPresetId>("70x50");
+  const [customLayerSectionIds, setCustomLayerSectionIds] = useState<string[]>([]);
   const [selectedDimension, setSelectedDimension] =
     useState<ViewportDimension | null>(null);
   const [distanceValue, setDistanceValue] = useState(0);
@@ -317,12 +327,12 @@ export function App() {
   const redoStack = useRef<Project[]>([]);
   const formEditStart = useRef<Project | null>(null);
   const viewportToolErrorTimeout = useRef<number | null>(null);
+  const lastNotifiedCalculationError = useRef<string | null>(null);
 
   function showViewportToolError(message: string) {
     if (viewportToolErrorTimeout.current !== null) {
       window.clearTimeout(viewportToolErrorTimeout.current);
     }
-    setCalculationError(null);
     setViewportToolError(message);
     setViewportToolErrorVersion((value) => value + 1);
     viewportToolErrorTimeout.current = window.setTimeout(() => {
@@ -335,10 +345,25 @@ export function App() {
     if (viewportToolErrorTimeout.current !== null) window.clearTimeout(viewportToolErrorTimeout.current);
   }, []);
 
+  useEffect(() => {
+    if (!calculationError) {
+      lastNotifiedCalculationError.current = null;
+      return;
+    }
+    if (lastNotifiedCalculationError.current === calculationError) return;
+    lastNotifiedCalculationError.current = calculationError;
+    showViewportToolError(calculationError);
+  }, [calculationError]);
+
   function applyProject(nextProject: Project) {
     setProject(nextProject);
     setCamera(nextProject.view.camera);
     setHiddenLayerIds(nextProject.view.hidden_layer_ids);
+    setCustomLayerSectionIds(
+      nextProject.pallet.layers
+        .filter((layer) => sectionPresetFor(layer.direction) === "custom")
+        .map((layer) => layer.id),
+    );
     setDistanceText(
       Object.fromEntries(
         nextProject.pallet.layers.map((layer) => [
@@ -438,7 +463,7 @@ export function App() {
           if (recovery.ok && recovery.snapshot) {
             applyProject(recovery.snapshot.project);
             applyCalculation(recovery);
-            setRecoveryNotice("Recovered the last autosaved project.");
+            setRecoveryNotice("Восстановлен последний автосохранённый проект.");
           } else {
             discardRecoveredProject();
             applyProject(defaultProject as Project);
@@ -708,6 +733,12 @@ export function App() {
   }, [stepImport]);
 
   useEffect(() => {
+    if (stepImport?.state === "failed") {
+      setCalculationError(stepImport.error ?? "Не удалось импортировать STEP-модель.");
+    }
+  }, [stepImport?.error, stepImport?.state]);
+
+  useEffect(() => {
     async function loadPreparedModel() {
       const api = window.pywebview?.api;
       if (!api || !stepImport?.operationId || stepImport.state !== "completed") return;
@@ -858,7 +889,6 @@ export function App() {
       updateHistory(project, response.snapshot.project);
       applyProject(response.snapshot.project);
       setSelectedBeams([]);
-      setBeamTool("none");
     }
   }
 
@@ -882,7 +912,6 @@ export function App() {
       updateHistory(project, response.snapshot.project);
       applyProject(response.snapshot.project);
       setSelectedBeams([]);
-      setBeamTool("none");
     }
   }
 
@@ -1084,10 +1113,14 @@ export function App() {
     field: DirectionField,
     parsed: number | number[],
   ) {
+    updateLayerDirectionPatch(index, { [field]: parsed } as Partial<Direction>);
+  }
+
+  function updateLayerDirectionPatch(index: number, patch: Partial<Direction>) {
     if (!project) return;
     const layer = project.pallet.layers[index];
     if (!layer) return;
-    const updatedDirection = { ...layer.direction, [field]: parsed } as Direction;
+    const updatedDirection = { ...layer.direction, ...patch } as Direction;
     const targetRawSize = rawPalletSize(updatedDirection);
     const layers = project.pallet.layers.map((item, layerIndex) => {
       if (layerIndex === index) {
@@ -1108,6 +1141,12 @@ export function App() {
         layers,
       },
     });
+  }
+
+  function layerSectionPreset(layer: Layer): SectionPresetId {
+    return customLayerSectionIds.includes(layer.id)
+      ? "custom"
+      : sectionPresetFor(layer.direction);
   }
 
   function setRounding(value: "none" | "5" | "50") {
@@ -1199,6 +1238,7 @@ export function App() {
   function removeLayer(index: number) {
     if (!project || project.pallet.layers.length <= 2) return;
     const removedLayerId = project.pallet.layers[index]?.id;
+    setCustomLayerSectionIds((current) => current.filter((id) => id !== removedLayerId));
     updateProject({
       ...project,
       pallet: {
@@ -1333,7 +1373,21 @@ export function App() {
       </div>
       <div className="viewport-tool-group viewport-mode-actions">
         <button type="button" className={insertionMode ? "active-tool" : ""} onClick={() => insertionMode ? stopInsertion() : activateInsertion()}>Добавить брус</button>
-        <button type="button" className={beamTool === "delete" ? "active-tool" : ""} onClick={() => beamTool === "delete" ? void deleteSelectedBeams() : activateBeamTool("delete")}>{beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить брус"}</button>
+        <button
+          type="button"
+          className={beamTool === "delete" ? "active-tool" : ""}
+          onClick={() => {
+            if (beamTool !== "delete") {
+              activateBeamTool("delete");
+            } else if (selectedBeams.length > 0) {
+              void deleteSelectedBeams();
+            } else {
+              setBeamTool("none");
+            }
+          }}
+        >
+          {beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить брус"}
+        </button>
         <button type="button" className={beamTool === "section" ? "active-tool" : ""} onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}>Изменить сечение</button>
         <button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}>Изменить расстояние</button>
       </div>
@@ -1498,28 +1552,19 @@ export function App() {
           </div>
         ) : null}
         {recoveryNotice ? <p className="recovery-notice">{recoveryNotice}</p> : null}
-        {stepImport ? (
-          <div className={stepImport.state === "failed" ? "step-import error" : "step-import"}>
-            <strong>STEP import</strong>
-            <span>{stepImport.label ?? stepImport.error ?? "Preparing STEP model…"}</span>
-            {stepImport.state === "running" || stepImport.state === "cancelling" ? (
-              <progress max="100" value={stepImport.progress ?? 0} />
-            ) : null}
-            {stepImport.state === "running" ? (
-              <button type="button" onClick={() => void cancelStepImport()}>Отменить импорт</button>
-            ) : null}
-            {stepImport.state === "completed" ? (
-              <>
-                <span>
-                  {stepPalletBuilt
-                    ? "The pallet was built from the selected support plane."
-                    : stepModel
-                      ? "Choose a planar support face in the 3D view."
-                      : "Preparing the model for 3D view…"}
-                </span>
-                {buildingStepPallet ? <span>Building pallet from the selected support…</span> : null}
-              </>
-            ) : null}
+        {stepImport && ["running", "cancelling"].includes(stepImport.state ?? "") ? (
+          <div className="modal-backdrop" role="presentation">
+            <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="step-import-title">
+              <h2 id="step-import-title">Импорт STEP-модели</h2>
+              <p>{stepImport.label ?? "Подготавливаем STEP-модель…"}</p>
+              <progress max="100" value={stepImport.progress ?? 0} aria-label="Прогресс импорта STEP-модели" />
+              <p className="modal-hint">Не изменяйте проект до окончания импорта.</p>
+              {stepImport.state === "running" ? (
+                <footer className="modal-actions">
+                  <button type="button" className="secondary" onClick={() => void cancelStepImport()}>Отменить импорт</button>
+                </footer>
+              ) : null}
+            </section>
           </div>
         ) : null}
         {project ? (
@@ -1632,7 +1677,64 @@ export function App() {
                           <option value="width">Вдоль ширины</option>
                         </select>
                       </label>
-                      {DIRECTION_FIELDS.map((field) => (
+                      <label>
+                        Стандартное сечение
+                        <select
+                          value={layerSectionPreset(layer)}
+                          onChange={(event) => {
+                            const presetId = event.target.value as SectionPresetId;
+                            if (presetId === "custom") {
+                              setCustomLayerSectionIds((current) => current.includes(layer.id) ? current : [...current, layer.id]);
+                              return;
+                            }
+                            setCustomLayerSectionIds((current) => current.filter((id) => id !== layer.id));
+                            const preset = SECTION_PRESETS.find((item) => item.id === presetId);
+                            if (preset && "height" in preset && "width" in preset) {
+                              updateLayerDirectionPatch(index, {
+                                beam_height: preset.height,
+                                beam_width: preset.width,
+                              });
+                            }
+                          }}
+                        >
+                          {SECTION_PRESETS.map((preset) => (
+                            <option key={preset.id} value={preset.id}>{preset.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="layer-section-dimensions">
+                        <label>
+                          Высота, мм
+                          <input
+                            type="number"
+                            min="1"
+                            value={layer.direction.beam_height}
+                            disabled={layerSectionPreset(layer) !== "custom"}
+                            onFocus={beginFormEdit}
+                            onBlur={finishFormEdit}
+                            onChange={(event) => {
+                              setCustomLayerSectionIds((current) => current.includes(layer.id) ? current : [...current, layer.id]);
+                              updateLayerDirection(index, "beam_height", event.target.value);
+                            }}
+                          />
+                        </label>
+                        <label>
+                          Ширина, мм
+                          <input
+                            type="number"
+                            min="1"
+                            value={layer.direction.beam_width}
+                            disabled={layerSectionPreset(layer) !== "custom"}
+                            onFocus={beginFormEdit}
+                            onBlur={finishFormEdit}
+                            onChange={(event) => {
+                              setCustomLayerSectionIds((current) => current.includes(layer.id) ? current : [...current, layer.id]);
+                              updateLayerDirection(index, "beam_width", event.target.value);
+                            }}
+                          />
+                        </label>
+                      </div>
+                      {DIRECTION_FIELDS.filter((field) => field !== "beam_height" && field !== "beam_width").map((field) => (
                         <label key={field} className={field === "support_distances" ? "layer-field-wide" : undefined}>
                           {DIRECTION_FIELD_LABELS[field]}
                           <input
@@ -1711,22 +1813,22 @@ export function App() {
                 toolHint={
                   !stepPalletBuilt && !buildingStepPallet && stepModel !== null
                     ? selectedStepFace === null
-                      ? "Select the lower support face\nПКМ — отменить последний выбор"
-                      : "Support face selected\nПКМ — отменить последний выбор"
+                      ? "Выберите нижнюю грань опоры\nПКМ — отменить последний выбор"
+                      : "Грань опоры выбрана\nПКМ — отменить последний выбор"
                     : insertionMode
                     ? manualSupports.length === 0
-                      ? "Select the first support beam\nПКМ — отменить последний выбор"
+                      ? "Выберите первый опорный брус\nПКМ — отменить последний выбор"
                       : manualSupports.length === 1
-                        ? "Select the second parallel support beam\nПКМ — отменить последний выбор"
+                        ? "Выберите второй параллельный опорный брус\nПКМ — отменить последний выбор"
                         : manualReferenceMode === "face" && !manualReference
-                          ? "Select the reference side face\nПКМ — отменить последний выбор"
-                          : "Enter the distance in the panel\nПКМ — отменить последний выбор"
+                          ? "Выберите боковую грань для отсчёта\nПКМ — отменить последний выбор"
+                          : "Укажите расстояние в панели\nПКМ — отменить последний выбор"
                     : beamTool === "delete"
-                      ? "Select beams to delete\nПКМ — отменить последний выбор"
+                      ? "Выберите брусья для удаления\nПКМ — отменить последний выбор"
                       : beamTool === "section"
-                        ? "Select beams to change their section\nПКМ — отменить последний выбор"
+                        ? "Выберите брусья для изменения сечения\nПКМ — отменить последний выбор"
                         : dimensionEditing
-                          ? "Select a dimension line to edit\nПКМ — отменить последний выбор"
+                          ? "Выберите размерную линию для редактирования\nПКМ — отменить последний выбор"
                           : null
                 }
                 toolError={viewportToolError}
@@ -1741,7 +1843,6 @@ export function App() {
             </Suspense>
           </>
         ) : null}
-        {calculationError ? <p className="error">{calculationError}</p> : null}
         </section>
       </div>
     </main>
