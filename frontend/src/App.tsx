@@ -52,6 +52,15 @@ type Direction = {
   rounding_step: 5 | 50;
 };
 type Layer = { id: string; axis: "length" | "width"; direction: Direction };
+
+function rawPalletSize(direction: Direction): number {
+  return direction.margin_start
+    + direction.first_edge_to_support
+    + direction.support_distances.reduce((total, distance) => total + distance, 0)
+    + direction.last_support_to_edge
+    + direction.margin_end;
+}
+
 const DIRECTION_FIELDS = [
   "beam_height",
   "beam_width",
@@ -1076,15 +1085,25 @@ export function App() {
     if (!project) return;
     const layer = project.pallet.layers[index];
     if (!layer) return;
+    const updatedDirection = { ...layer.direction, [field]: parsed } as Direction;
+    const targetRawSize = rawPalletSize(updatedDirection);
+    const layers = project.pallet.layers.map((item, layerIndex) => {
+      if (layerIndex === index) {
+        return { ...item, direction: updatedDirection };
+      }
+      if (item.axis !== layer.axis) return item;
+
+      // Parallel layers may use different support grids, but they form one
+      // pallet envelope. Keep their grids intact and move only the dependent
+      // end margin, matching the established legacy editor behaviour.
+      const marginEnd = item.direction.margin_end + targetRawSize - rawPalletSize(item.direction);
+      return { ...item, direction: { ...item.direction, margin_end: marginEnd } };
+    });
     setProject({
       ...project,
       pallet: {
         ...project.pallet,
-        layers: project.pallet.layers.map((item, layerIndex) =>
-          layerIndex === index
-            ? { ...item, direction: { ...layer.direction, [field]: parsed } as Direction }
-            : item,
-        ),
+        layers,
       },
     });
   }
