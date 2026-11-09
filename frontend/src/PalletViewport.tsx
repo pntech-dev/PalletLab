@@ -3,6 +3,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import {
   BufferGeometry,
   CanvasTexture,
+  DoubleSide,
   Float32BufferAttribute,
   LinearFilter,
   Matrix4,
@@ -331,7 +332,18 @@ function StepModel({
   return (
     <group matrix={transform} matrixAutoUpdate={false}>
       <mesh ref={meshRef} geometry={geometry}>
-        <meshStandardMaterial color="#b8c2cc" transparent opacity={0.2} depthWrite roughness={0.62} metalness={0.1} />
+        {/* STEP tessellation can contain faces with reversed winding.  Treat
+            both sides as pickable so the raycaster selects the visible face,
+            rather than skipping it for a farther one behind the model. */}
+        <meshStandardMaterial
+          color="#b8c2cc"
+          transparent
+          opacity={0.2}
+          depthWrite
+          roughness={0.62}
+          metalness={0.1}
+          side={DoubleSide}
+        />
       </mesh>
       <lineSegments geometry={edgeGeometry} renderOrder={2}>
         <lineBasicMaterial color="#31414d" transparent opacity={1} depthTest={true} depthWrite={false} />

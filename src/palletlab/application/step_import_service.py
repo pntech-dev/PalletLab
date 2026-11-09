@@ -24,10 +24,6 @@ from palletlab.step_performance import StepPerformanceTrace, geometry_footprint,
 
 
 _MODEL_STANDARD_SECTION = BeamSection(70, 50)
-# Keep a sub-visible clearance above the physical bearing plane.  STEP display
-# triangles are tessellated approximations and coplanar transparent surfaces
-# blend as if the machine were embedded in the wood.
-_MODEL_CONTACT_CLEARANCE = 2.0
 
 
 class StepImportService:
@@ -184,18 +180,13 @@ class StepImportService:
             if result is None:
                 raise CalculationError(errors[-1] if errors else "Не удалось построить поддон по модели.")
             bearing_height = _model_bearing_height(result)
-            # Inputs need a height before the pallet exists.  Correct the
-            # local Z translation from the calculated top support plane, not
-            # from an assumed stack height.  The small clearance prevents a
-            # visibly sunk contact when transparent, tessellated surfaces are
-            # exactly coplanar in the viewport.
-            placement_matrix[2, 3] += (
-                bearing_height - provisional_bearing_height + _MODEL_CONTACT_CLEARANCE
-            )
+            # Inputs need a height before the pallet exists. Correct the local
+            # Z translation from the calculated top support plane, not from an
+            # assumed stack height. The model rests on that physical plane.
+            placement_matrix[2, 3] += bearing_height - provisional_bearing_height
             trace.checkpoint(
                 "pallet-calculation",
                 bearingHeight=bearing_height,
-                contactClearance=_MODEL_CONTACT_CLEARANCE,
             )
             report = trace.report()
             write_step_performance("build-pallet", report)
