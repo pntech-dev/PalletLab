@@ -16,9 +16,23 @@ import type {
   ViewportPoint,
   StepModelSnapshot,
 } from "./PalletViewport";
-import { prepareStepModel, type StepModelPayload } from "./stepModelGeometry";
+import type { StepModelPayload } from "./stepModelGeometry";
 
-const PalletViewport = lazy(() => import("./PalletViewport"));
+const startupStartedAt = performance.now();
+
+function reportStartupStage(stage: string) {
+  const elapsed = Math.round(performance.now() - startupStartedAt);
+  performance.mark(`palletlab-startup:${stage}`);
+  console.info(`[PalletLab] Запуск: ${stage} (+${elapsed} мс)`);
+}
+
+// Fetch and evaluate the 3D renderer while the desktop bridge prepares the
+// first project. Previously this request did not start until after calculation.
+const palletViewportModule = import("./PalletViewport").then((module) => {
+  reportStartupStage("модуль 3D-вида готов");
+  return module;
+});
+const PalletViewport = lazy(() => palletViewportModule);
 
 type ApplicationStatus = {
   application: string;
@@ -328,6 +342,12 @@ export function App() {
   const formEditStart = useRef<Project | null>(null);
   const viewportToolErrorTimeout = useRef<number | null>(null);
   const lastNotifiedCalculationError = useRef<string | null>(null);
+  const connectionStarted = useRef(false);
+  const calculatedInitialProject = useRef<Project | null>(null);
+
+  const reportFirstViewportFrame = useCallback(() => {
+    reportStartupStage("первый кадр 3D-вида");
+  }, []);
 
   function showViewportToolError(message: string) {
     if (viewportToolErrorTimeout.current !== null) {
@@ -448,36 +468,56 @@ export function App() {
 
   useEffect(() => {
     async function connect() {
+      if (connectionStarted.current) return;
       const api = window.pywebview?.api;
       if (!api) return;
+      connectionStarted.current = true;
       try {
-        const [nextStatus, defaultProject, savedSolidWorksSettings, savedDrawingSettings] = await Promise.all([
+        reportStartupStage("мост Python подключён");
+        const [nextStatus, defaultProject] = await Promise.all([
           api.status(),
           api.default_project(),
-          api.solidworks_export_settings(),
-          api.drawing_settings(),
         ]);
         const recovered = recoveredProject();
+        const initialProject = recovered ?? (defaultProject as Project);
+        const initialCalculation = await api.calculate(initialProject);
+        reportStartupStage("первый расчёт завершён");
         if (recovered) {
-          const recovery = await api.calculate(recovered);
-          if (recovery.ok && recovery.snapshot) {
-            applyProject(recovery.snapshot.project);
-            applyCalculation(recovery);
+          if (initialCalculation.ok && initialCalculation.snapshot) {
+            calculatedInitialProject.current = initialCalculation.snapshot.project;
+            applyProject(initialCalculation.snapshot.project);
+            applyCalculation(initialCalculation);
             setRecoveryNotice("Восстановлен последний автосохранённый проект.");
           } else {
             discardRecoveredProject();
             applyProject(defaultProject as Project);
           }
         } else {
-          applyProject(defaultProject as Project);
+          if (initialCalculation.ok && initialCalculation.snapshot) {
+            calculatedInitialProject.current = initialCalculation.snapshot.project;
+            applyProject(initialCalculation.snapshot.project);
+            applyCalculation(initialCalculation);
+          } else {
+            applyProject(defaultProject as Project);
+          }
         }
         setStatus(nextStatus);
-        if (savedSolidWorksSettings.ok && savedSolidWorksSettings.options) {
-          setSolidWorksOptions(savedSolidWorksSettings.options);
-        }
-        if (savedDrawingSettings.ok && savedDrawingSettings.templates) {
-          setDrawingTemplates(savedDrawingSettings.templates);
-        }
+        // These settings are only needed when their export dialogs are opened.
+        // Do not make the first usable 3D view wait for two extra bridge calls.
+        void api.solidworks_export_settings()
+          .then((savedSolidWorksSettings) => {
+            if (savedSolidWorksSettings.ok && savedSolidWorksSettings.options) {
+              setSolidWorksOptions(savedSolidWorksSettings.options);
+            }
+          })
+          .catch(() => undefined);
+        void api.drawing_settings()
+          .then((savedDrawingSettings) => {
+            if (savedDrawingSettings.ok && savedDrawingSettings.templates) {
+              setDrawingTemplates(savedDrawingSettings.templates);
+            }
+          })
+          .catch(() => undefined);
       } catch {
         setStatus(null);
       }
@@ -496,6 +536,10 @@ export function App() {
 
   useEffect(() => {
     if (!status || !project) return;
+    if (calculatedInitialProject.current === project) {
+      calculatedInitialProject.current = null;
+      return;
+    }
     const timeout = window.setTimeout(() => {
       void calculateProject();
     }, 300);
@@ -745,6 +789,7 @@ export function App() {
       try {
         const response = await api.step_model_snapshot(stepImport.operationId);
         if (response.ok && response.assetUrl) {
+          const { prepareStepModel } = await import("./stepModelGeometry");
           const prepared = await prepareStepModel({ assetUrl: response.assetUrl } satisfies StepModelPayload);
           setStepModel(prepared);
           setFitRequest((value) => value + 1);
@@ -1833,6 +1878,7 @@ export function App() {
                 }
                 toolError={viewportToolError}
                 toolErrorVersion={viewportToolErrorVersion}
+                onFirstFrame={reportFirstViewportFrame}
                 onUndoToolSelection={
                   (!stepPalletBuilt && !buildingStepPallet && stepModel !== null) || insertionMode || beamTool !== "none" || dimensionEditing
                     ? undoLastToolSelection
