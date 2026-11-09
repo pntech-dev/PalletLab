@@ -145,6 +145,7 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
             "camera": state.camera,
             "show_length_dimensions": state.show_length_dimensions,
             "show_width_dimensions": state.show_width_dimensions,
+            "hidden_layer_ids": state.hidden_layer_ids,
         },
     }
 
@@ -213,6 +214,7 @@ def project_from_dict(raw: object) -> ProjectState:
         layer_sections[(layer_id, index)] = BeamSection(height, width)
     if not layer_sections:
         layer_sections = {(axis, index): section for (axis, index), section in beam_sections.items()}
+    hidden_layer_ids = _hidden_layer_ids(view, layer_ids)
     manual_beams: list[ManualBeamInput] = []
     manual_ids: set[str] = set()
     raw_manual = pallet.get("manual_beams", [])
@@ -268,7 +270,18 @@ def project_from_dict(raw: object) -> ProjectState:
         camera=camera,
         show_length_dimensions=_boolean(view, "show_length_dimensions", True),
         show_width_dimensions=_boolean(view, "show_width_dimensions", True),
+        hidden_layer_ids=hidden_layer_ids,
     )
+
+
+def _hidden_layer_ids(view: dict[str, Any], layer_ids: set[str]) -> list[str]:
+    """Read persisted layer visibility without breaking older project files."""
+    raw = view.get("hidden_layer_ids", [])
+    if not isinstance(raw, list) or any(not isinstance(layer_id, str) for layer_id in raw):
+        raise ProjectPersistenceError("Скрытые слои должны быть списком идентификаторов.")
+    if len(raw) != len(set(raw)) or any(layer_id not in layer_ids for layer_id in raw):
+        raise ProjectPersistenceError("Скрытые слои содержат недопустимый идентификатор.")
+    return list(raw)
 
 
 def save_project(path: str | Path, state: ProjectState) -> None:

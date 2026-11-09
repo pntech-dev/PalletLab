@@ -27,6 +27,7 @@ def _state() -> ProjectState:
 
 def test_project_json_round_trip_preserves_configuration_not_transient_state(tmp_path):
     state = _state()
+    state.hidden_layer_ids = ["length"]
     state.active_tool = "deletion"
     state.selected_for_deletion["length"].add(2)
     state.beam_sections[("length", 2)] = BeamSection(100, 75)
@@ -41,6 +42,7 @@ def test_project_json_round_trip_preserves_configuration_not_transient_state(tmp
     assert restored.material_id == "spruce"
     assert restored.camera == "top"
     assert restored.show_length_dimensions is False
+    assert restored.hidden_layer_ids == ["length"]
     assert restored.active_tool == "none"
     assert restored.selected_for_deletion == {"length": set(), "width": set()}
     assert restored.beam_sections == {("length", 2): BeamSection(100, 75)}

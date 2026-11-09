@@ -52,6 +52,7 @@ class ProjectState:
     camera: CameraMode = "isometric"
     show_length_dimensions: bool = True
     show_width_dimensions: bool = True
+    hidden_layer_ids: list[str] = field(default_factory=list)
 
     def input_for(self, axis: PalletAxis) -> DirectionInput | None:
         """Return the editable input associated with an axis."""
@@ -71,6 +72,7 @@ class ProjectState:
         self.layer_sections = {
             key: section for key, section in self.layer_sections.items() if key[0] in layer_ids
         }
+        self.hidden_layer_ids = [layer_id for layer_id in self.hidden_layer_ids if layer_id in layer_ids]
 
 
 @dataclass

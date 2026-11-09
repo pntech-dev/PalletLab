@@ -92,6 +92,7 @@ type Project = {
     camera: CameraPreset;
     show_length_dimensions: boolean;
     show_width_dimensions: boolean;
+    hidden_layer_ids: string[];
   };
 };
 type Material = { id: string; name: string };
@@ -337,6 +338,7 @@ export function App() {
   function applyProject(nextProject: Project) {
     setProject(nextProject);
     setCamera(nextProject.view.camera);
+    setHiddenLayerIds(nextProject.view.hidden_layer_ids);
     setDistanceText(
       Object.fromEntries(
         nextProject.pallet.layers.map((layer) => [
@@ -1170,11 +1172,15 @@ export function App() {
   }
 
   function toggleLayerVisibility(layerId: string) {
-    setHiddenLayerIds((current) =>
-      current.includes(layerId)
-        ? current.filter((id) => id !== layerId)
-        : [...current, layerId],
-    );
+    if (!project) return;
+    const hiddenLayerIds = project.view.hidden_layer_ids.includes(layerId)
+      ? project.view.hidden_layer_ids.filter((id) => id !== layerId)
+      : [...project.view.hidden_layer_ids, layerId];
+    setHiddenLayerIds(hiddenLayerIds);
+    updateProject({
+      ...project,
+      view: { ...project.view, hidden_layer_ids: hiddenLayerIds },
+    });
     setSelectedBeams((current) => current.filter((beam) => beam.layerId !== layerId));
     setManualSupports((current) => current.filter(({ beam }) => beam.layerId !== layerId));
     if (manualReference?.layerId === layerId) setManualReference(null);
@@ -1192,6 +1198,7 @@ export function App() {
 
   function removeLayer(index: number) {
     if (!project || project.pallet.layers.length <= 2) return;
+    const removedLayerId = project.pallet.layers[index]?.id;
     updateProject({
       ...project,
       pallet: {
@@ -1199,6 +1206,10 @@ export function App() {
         layers: project.pallet.layers.filter(
           (_, layerIndex) => layerIndex !== index,
         ),
+      },
+      view: {
+        ...project.view,
+        hidden_layer_ids: project.view.hidden_layer_ids.filter((id) => id !== removedLayerId),
       },
     });
   }
