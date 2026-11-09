@@ -172,6 +172,13 @@ legend { padding: 0 4px; color: #3e4c4b; font-size: 13px; font-weight: 600; }
 .layer-field-wide { grid-column: 1 / -1; }
 .layer-section-dimensions { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .layer-stack-footer { display: flex; justify-content: end; padding-top: 4px; }
+.pallet-margins { padding: 12px; border: 1px solid #ebeae5; border-radius: 8px; background: #fcfbf7; }
+.pallet-margins h2 { margin: 0 0 8px; font-size: 16px; }
+.pallet-margins-fields { display: grid; grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr); align-items: end; gap: 8px; }
+.pallet-margins-fields + .pallet-margins-fields { margin-top: 8px; }
+.pallet-margins-fields label, .pallet-margins-fields input { min-width: 0; width: 100%; }
+.pallet-margins-fields .margin-link { display: grid; place-items: center; width: 36px; height: 32px; padding: 0; }
+.pallet-margins-fields .margin-link.is-linked { border-color: #315b61; background: #e1eeeb; color: #315b61; }
 .layer-stack-footer button { min-height: 32px; padding: 6px 9px; }
 
 @media (max-width: 1040px) { .app-header { gap: 12px; padding: 0 16px; } .app-actions { gap: 4px; } .app-header button { padding: 7px 8px; font-size: 12px; } .workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 40%); } }

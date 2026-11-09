@@ -121,6 +121,8 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
             "upper_layer": state.upper_layer,
             "rounding_step": state.rounding_step,
             "material_id": state.material_id,
+            **({"pallet_margins": list(state.pallet_margins)} if state.pallet_margins is not None else {}),
+            **({"pallet_margin_links": list(state.pallet_margin_links)} if state.pallet_margin_links is not None else {}),
             "beam_sections": [
                 {"axis": axis, "index": index, "height": section.height, "width": section.width}
                 for (axis, index), section in sorted(state.beam_sections.items())
@@ -157,6 +159,23 @@ def project_from_dict(raw: object) -> ProjectState:
     pallet, view = raw.get("pallet"), raw.get("view")
     if not isinstance(pallet, dict) or not isinstance(view, dict):
         raise ProjectPersistenceError("В файле отсутствуют разделы поддона или вида.")
+    raw_margins = pallet.get("pallet_margins")
+    pallet_margins = None
+    if raw_margins is not None:
+        if (not isinstance(raw_margins, list) or len(raw_margins) not in (2, 4)
+                or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       or not math.isfinite(value) or value < 0 for value in raw_margins)):
+            raise ProjectPersistenceError("Отступы поддона должны быть неотрицательными числами.")
+        values = [float(value) for value in raw_margins]
+        if len(values) == 2:
+            values = values * 2
+        pallet_margins = (values[0], values[1], values[2], values[3])
+    raw_links = pallet.get("pallet_margin_links")
+    pallet_margin_links = None
+    if raw_links is not None:
+        if not isinstance(raw_links, list) or len(raw_links) != 2 or any(type(value) is not bool for value in raw_links):
+            raise ProjectPersistenceError("Связи отступов должны быть логическими значениями.")
+        pallet_margin_links = (raw_links[0], raw_links[1])
     upper_layer, rounding_step, camera = pallet.get("upper_layer"), pallet.get("rounding_step"), view.get("camera")
     material_id = pallet.get("material_id", DEFAULT_MATERIAL_ID)
     if upper_layer not in ("length", "width") or rounding_step not in (0, 5, 50) or camera not in ("isometric", "top", "front", "side") or material_id not in MATERIALS:
@@ -258,6 +277,8 @@ def project_from_dict(raw: object) -> ProjectState:
             start_point=start_point,
         ))
     return ProjectState(
+        pallet_margins=pallet_margins,
+        pallet_margin_links=pallet_margin_links,
         length_input=length_input,
         width_input=width_input,
         upper_layer=upper_layer,

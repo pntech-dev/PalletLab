@@ -17,6 +17,7 @@ import type {
   StepModelSnapshot,
 } from "./PalletViewport";
 import type { StepModelPayload } from "./stepModelGeometry";
+import { changePalletMargin, marginLinks, palletMargins, toggleMarginLink, type MarginIndex } from "./palletMargins";
 
 const startupStartedAt = performance.now();
 
@@ -54,7 +55,7 @@ type CalculationResponse = {
   };
 };
 
-type Direction = {
+export type Direction = {
   beam_height: number;
   beam_width: number;
   support_distances: number[];
@@ -62,6 +63,7 @@ type Direction = {
   last_support_to_edge: number;
   margin_start: number;
   margin_end: number;
+  support_positions?: number[] | null;
   round_pallet_size: boolean;
   rounding_step: 5 | 50;
 };
@@ -110,13 +112,16 @@ const DIRECTION_FIELD_LABELS: Record<DirectionField, string> = {
   margin_start: "Отступ с начала, мм",
   margin_end: "Отступ с конца, мм",
 };
-type Project = {
+export type Project = {
   pallet: {
     length: Direction;
     width: Direction;
     layers: Layer[];
     upper_layer: "length" | "width";
     material_id: string;
+    pallet_margins?: [number, number] | [number, number, number, number];
+    pallet_margin_links?: [boolean, boolean];
+    manual_beams?: { start_point?: number[] | null; [key: string]: unknown }[];
   };
   view: {
     camera: CameraPreset;
@@ -303,6 +308,7 @@ export function App() {
   const [savedProject, setSavedProject] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [distanceText, setDistanceText] = useState<Record<string, string>>({});
+  const [marginDrafts, setMarginDrafts] = useState<Partial<Record<MarginIndex, string>>>({});
   const [expandedLayerId, setExpandedLayerId] = useState<string | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [dropLayerId, setDropLayerId] = useState<string | null>(null);
@@ -364,6 +370,7 @@ export function App() {
   const lastNotifiedCalculationError = useRef<string | null>(null);
   const connectionStarted = useRef(false);
   const calculatedInitialProject = useRef<Project | null>(null);
+  const stepPlacement = useRef<{ transform: number[]; starts: [number, number] } | null>(null);
 
   const reportFirstViewportFrame = useCallback(() => {
     reportStartupStage("первый кадр 3D-вида");
@@ -843,6 +850,11 @@ export function App() {
       const response = await api.build_step_pallet(stepImport.operationId, project, faceIndex);
       applyCalculation(response);
       if (response.ok && response.snapshot && response.modelTransform) {
+        const margins = palletMargins(response.snapshot.project);
+        stepPlacement.current = {
+          transform: response.modelTransform,
+          starts: [margins[0], margins[2]],
+        };
         updateHistory(project, response.snapshot.project);
         applyProject(response.snapshot.project);
         setStepModel((model) => model ? { ...model, transform: response.modelTransform! } : model);
@@ -1218,6 +1230,14 @@ export function App() {
         layers,
       },
     });
+  }
+
+  function updatePalletMargin(index: MarginIndex, value: string) {
+    if (!project) return;
+    if (value.trim() === "") return;
+    const next = Number(value);
+    if (!Number.isFinite(next) || next < 0) return;
+    setProject(changePalletMargin(project, index, next));
   }
 
   function layerSectionPreset(layer: Layer): SectionPresetId {
@@ -1824,7 +1844,7 @@ export function App() {
                           />
                         </label>
                       </div>
-                      {DIRECTION_FIELDS.filter((field) => field !== "beam_height" && field !== "beam_width").map((field) => (
+                      {DIRECTION_FIELDS.filter((field) => field !== "beam_height" && field !== "beam_width" && field !== "margin_start" && field !== "margin_end").map((field) => (
                         <label key={field} className={field === "support_distances" ? "layer-field-wide" : undefined}>
                           {DIRECTION_FIELD_LABELS[field]}
                           <input
@@ -1846,6 +1866,35 @@ export function App() {
               })}
               </div>
             </section>
+              {project ? <section className="pallet-margins">
+                <h2>Отступы поддона</h2>
+                {([0, 1] as const).map((pair) => {
+                  const first: MarginIndex = pair === 0 ? 0 : 2;
+                  const second: MarginIndex = pair === 0 ? 1 : 3;
+                  const linked = marginLinks(project)[pair];
+                  const names = pair === 0 ? ["Слева, мм", "Справа, мм"] : ["Сверху, мм", "Снизу, мм"];
+                  return <div className="pallet-margins-fields" key={pair}>
+                    <label>{names[0]}<input type="number" min="0" value={marginDrafts[first] ?? palletMargins(project)[first]}
+                      onFocus={() => { beginFormEdit(); setMarginDrafts((drafts) => ({ ...drafts, [first]: String(palletMargins(project)[first]) })); }}
+                      onBlur={() => { setMarginDrafts((drafts) => { const next = { ...drafts }; delete next[first]; return next; }); finishFormEdit(); }}
+                      onChange={(event) => { setMarginDrafts((drafts) => ({ ...drafts, [first]: event.target.value })); updatePalletMargin(first, event.target.value); }} /></label>
+                    <button type="button" className={`margin-link secondary${linked ? " is-linked" : ""}`}
+                      aria-pressed={linked} aria-label={`${linked ? "Разъединить" : "Связать"} отступы ${pair === 0 ? "слева и справа" : "сверху и снизу"}`}
+                      title={linked ? "Разъединить отступы" : "Связать отступы"}
+                      onClick={() => updateProject(toggleMarginLink(project, pair))}>
+                      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M10 13a5 5 0 0 0 7.1 0l2.1-2.1a5 5 0 0 0-7.1-7.1L11 4.9" />
+                        <path d="M14 11a5 5 0 0 0-7.1 0l-2.1 2.1a5 5 0 0 0 7.1 7.1l1.1-1.1" />
+                        {!linked && <path d="M4 4l16 16" />}
+                      </svg>
+                    </button>
+                    <label>{names[1]}<input type="number" min="0" disabled={linked} value={marginDrafts[second] ?? palletMargins(project)[second]}
+                      onFocus={() => { beginFormEdit(); setMarginDrafts((drafts) => ({ ...drafts, [second]: String(palletMargins(project)[second]) })); }}
+                      onBlur={() => { setMarginDrafts((drafts) => { const next = { ...drafts }; delete next[second]; return next; }); finishFormEdit(); }}
+                      onChange={(event) => { setMarginDrafts((drafts) => ({ ...drafts, [second]: event.target.value })); updatePalletMargin(second, event.target.value); }} /></label>
+                  </div>;
+                })}
+              </section> : null}
               <div className="layer-stack-footer">
                 <button type="button" className="secondary" onClick={() => void resetProject()}>
                   Сбросить проект
@@ -1864,7 +1913,14 @@ export function App() {
                 preset={camera}
                 presetRequest={cameraRequest}
                 fitRequest={fitRequest}
-                stepModel={stepModel}
+                stepModel={stepModel && stepPalletBuilt && stepPlacement.current && calculation?.snapshot
+                  ? { ...stepModel, transform: stepPlacement.current.transform.map((value, index) => {
+                    const current = palletMargins(calculation.snapshot!.project);
+                    if (index === 12) return value + (current[0] - stepPlacement.current!.starts[0]) / 1000;
+                    if (index === 14) return value + (current[2] - stepPlacement.current!.starts[1]) / 1000;
+                    return value;
+                  }) }
+                  : stepModel}
                 selectedStepFace={selectedStepFace}
                 onSelectStepFace={selectStepSupport}
                 stepFaceSelectionEnabled={!stepPalletBuilt && !buildingStepPallet}

@@ -58,6 +58,20 @@ def test_project_json_rejects_unknown_or_invalid_format():
         project_from_dict({"format_version": 99})
 
 
+def test_common_pallet_margins_survive_round_trip_and_validate():
+    state = _state()
+    state.pallet_margins = (120, 175, 80, 90)
+    state.pallet_margin_links = (False, True)
+    payload = project_to_dict(state)
+    assert project_from_dict(payload).pallet_margins == (120, 175, 80, 90)
+    assert project_from_dict(payload).pallet_margin_links == (False, True)
+    payload["pallet"]["pallet_margins"] = [120, 175]
+    assert project_from_dict(payload).pallet_margins == (120, 175, 120, 175)
+    payload["pallet"]["pallet_margins"] = [-1, 175]
+    with pytest.raises(ProjectPersistenceError):
+        project_from_dict(payload)
+
+
 def test_version_two_project_is_migrated_to_an_ordered_layer_stack(tmp_path):
     state = _state()
     path = tmp_path / "project.json"

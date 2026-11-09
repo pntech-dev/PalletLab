@@ -170,6 +170,8 @@ class StepImportService:
                 pallet_height=provisional_bearing_height,
                 return_placement_matrix=True,
             )
+            if state.pallet_margins is not None:
+                state.pallet_margins = (length.margin_start, length.margin_end, width.margin_start, width.margin_end)
             trace.checkpoint("model-placement-matrix")
             layers, top_edge_sections = _model_pallet_layers(length, width)
             state.manual_beams.clear()

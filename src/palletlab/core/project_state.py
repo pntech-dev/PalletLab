@@ -42,6 +42,8 @@ class ProjectState:
     upper_layer: Literal["length", "width"] = "width"
     rounding_step: Literal[0, 5, 50] = 50
     material_id: str = DEFAULT_MATERIAL_ID
+    pallet_margins: tuple[float, float, float, float] | None = None
+    pallet_margin_links: tuple[bool, bool] | None = None
     result: PalletResult | None = None
 
     active_tool: ToolMode = "none"
