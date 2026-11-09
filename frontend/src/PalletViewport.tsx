@@ -11,7 +11,7 @@ import {
   PerspectiveCamera,
   Vector3,
 } from "three";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 export type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 
@@ -55,6 +55,69 @@ export type ViewportInsertionMarker = {
 type ManualBeamSection = { height: number; width: number };
 type BeamReferenceFace = "x_min" | "x_max" | "y_min" | "y_max";
 type ManualReference = { beam: ViewportBeam; face: BeamReferenceFace };
+
+function DirectionCompassUpdater({ compass }: { compass: RefObject<SVGSVGElement | null> }) {
+  const direction = useMemo(() => new Vector3(), []);
+  useFrame(({ camera }) => {
+    const axes = [
+      ["x", 1, 0, 0],
+      ["y", 0, 0, 1],
+      ["z", 0, 1, 0],
+    ] as const;
+    for (const [name, x, y, z] of axes) {
+      direction.set(x, y, z).applyQuaternion(camera.quaternion.clone().invert());
+      const endX = 40 + direction.x * 25;
+      const endY = 40 - direction.y * 25;
+      const line = compass.current?.querySelector(`[data-axis-line="${name}"]`);
+      const label = compass.current?.querySelector(`[data-axis-label="${name}"]`);
+      line?.setAttribute("x2", String(endX));
+      line?.setAttribute("y2", String(endY));
+      label?.setAttribute("x", String(40 + direction.x * 33));
+      label?.setAttribute("y", String(40 - direction.y * 33));
+    }
+  });
+  return null;
+}
+
+function CameraZoom({ command, fitRequest, presetRequest, onChange }: {
+  command: RefObject<((factor: number) => void) | null>;
+  fitRequest: number;
+  presetRequest: number;
+  onChange: (value: number) => void;
+}) {
+  const { camera, controls, invalidate } = useThree();
+  const referenceDistance = useRef<number | null>(null);
+  const lastPercent = useRef<number | null>(null);
+  const orbit = controls as { target: Vector3; update: () => void } | null;
+  useEffect(() => {
+    referenceDistance.current = null;
+    invalidate();
+  }, [fitRequest, presetRequest, invalidate]);
+  useEffect(() => {
+    if (!orbit) return;
+    command.current = (factor) => {
+      const offset = camera.position.clone().sub(orbit.target);
+      const nextDistance = Math.max(0.05, Math.min(10000, offset.length() * factor));
+      if (offset.lengthSq() === 0) return;
+      camera.position.copy(orbit.target).add(offset.setLength(nextDistance));
+      orbit.update();
+      invalidate();
+    };
+    return () => { command.current = null; };
+  }, [camera, orbit, command, invalidate]);
+  useFrame(() => {
+    if (!orbit) return;
+    const distance = camera.position.distanceTo(orbit.target);
+    if (distance <= 0) return;
+    referenceDistance.current ??= distance;
+    const percent = Math.round(referenceDistance.current / distance * 100);
+    if (percent !== lastPercent.current) {
+      lastPercent.current = percent;
+      onChange(percent);
+    }
+  });
+  return null;
+}
 
 function FirstFrameReporter({ onFirstFrame }: { onFirstFrame?: () => void }) {
   const reported = useRef(false);
@@ -391,6 +454,7 @@ export default function PalletViewport({
 }) {
   const [cursor, setCursor] = useState<[number, number]>([16, 16]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
+  const [zoomPercent, setZoomPercent] = useState(100);
   const [showDetails, setShowDetails] = useState(false);
   const [errorPresentation, setErrorPresentation] = useState<{
     message: string;
@@ -399,6 +463,8 @@ export default function PalletViewport({
   } | null>(null);
   const stepPicker = useRef<((clientX: number, clientY: number, bounds: DOMRect) => void) | null>(null);
   const pointerDown = useRef<[number, number] | null>(null);
+  const compass = useRef<SVGSVGElement>(null);
+  const zoomCommand = useRef<((factor: number) => void) | null>(null);
   const detailsFrame = useRef<number | null>(null);
   const revealDetailsAfterFirstFrame = useCallback(() => {
     onFirstFrame?.();
@@ -562,11 +628,14 @@ export default function PalletViewport({
     >
       <Canvas
         frameloop="demand"
+        resize={{ scroll: true, debounce: 0 }}
         camera={{ position: [5, 4, 5], fov: 42 }}
       >
           <FirstFrameReporter onFirstFrame={revealDetailsAfterFirstFrame} />
+          <DirectionCompassUpdater compass={compass} />
           <Camera preset={preset} presetRequest={presetRequest} bounds={bounds} />
           <FitCamera fitRequest={fitRequest} bounds={bounds} />
+          <CameraZoom command={zoomCommand} fitRequest={fitRequest} presetRequest={presetRequest} onChange={setZoomPercent} />
         <color attach="background" args={["#edf1f3"]} />
         <ambientLight intensity={1.5} />
         <directionalLight position={[5, 8, 4]} intensity={2} castShadow />
@@ -803,8 +872,31 @@ export default function PalletViewport({
             </Suspense>
           ) : null}
       </Canvas>
+      <div className="viewport-navigation-guide">
+        <svg ref={compass} className="viewport-compass" viewBox="0 0 80 80" role="img" aria-label="Направления осей X, Y и Z">
+          <circle cx="40" cy="40" r="2.5" fill="#6d7b80" />
+          {(["x", "y", "z"] as const).map((axis) => (
+            <g key={axis} className={`viewport-compass-${axis}`}>
+              <line data-axis-line={axis} x1="40" y1="40" x2="40" y2="40" />
+              <text data-axis-label={axis} x="40" y="40">{axis.toUpperCase()}</text>
+            </g>
+          ))}
+        </svg>
+        <div className="viewport-navigation-help">
+          <div>ЛКМ (зажать) – вращать</div>
+          <div>Колёсико мыши (зажать) – изменить масштаб</div>
+          <div>ПКМ (зажать) – двигать</div>
+        </div>
+      </div>
       {toolbar ? <div className="viewport-floating-toolbar">{toolbar}</div> : null}
-      {fitViewControl ? <div className="viewport-fit-control">{fitViewControl}</div> : null}
+      <div className="viewport-fit-control">
+        {fitViewControl}
+        <div className="viewport-zoom-control" aria-label="Масштаб просмотра">
+          <button type="button" onClick={() => zoomCommand.current?.(1.2)} aria-label="Уменьшить масштаб">−</button>
+          <span aria-live="polite">{zoomPercent}%</span>
+          <button type="button" onClick={() => zoomCommand.current?.(1 / 1.2)} aria-label="Увеличить масштаб">+</button>
+        </div>
+      </div>
       {toolHint ? (
         <div
           className="viewport-hint"

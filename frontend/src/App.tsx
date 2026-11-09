@@ -75,6 +75,22 @@ function rawPalletSize(direction: Direction): number {
     + direction.margin_end;
 }
 
+function palletDetails(beams: ViewportBeam[]) {
+  const groups = new Map<string, { height: number; width: number; length: number; count: number }>();
+  for (const beam of beams) {
+    const length = beam.orientation === "length" ? beam.size[0] : beam.size[1];
+    const width = beam.orientation === "length" ? beam.size[1] : beam.size[0];
+    const height = beam.size[2];
+    const key = JSON.stringify([height, width, length]);
+    const group = groups.get(key);
+    if (group) group.count += 1;
+    else groups.set(key, { height, width, length, count: 1 });
+  }
+  return [...groups.values()];
+}
+
+const formatMillimetres = (value: number) => new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value);
+
 const DIRECTION_FIELDS = [
   "beam_height",
   "beam_width",
@@ -293,6 +309,7 @@ export function App() {
   const [dropAfterLayer, setDropAfterLayer] = useState(false);
   const [hiddenLayerIds, setHiddenLayerIds] = useState<string[]>([]);
   const [camera, setCamera] = useState<CameraPreset>("isometric");
+  const [viewportExpanded, setViewportExpanded] = useState(false);
   const [cameraRequest, setCameraRequest] = useState(0);
   const [fitRequest, setFitRequest] = useState(0);
   const [stepImport, setStepImport] = useState<StepImportOperation | null>(null);
@@ -1249,13 +1266,16 @@ export function App() {
       0,
     ) + 1;
     const layerId = `layer-${nextNumber === 3 ? 1 : nextNumber - 1}`;
+    const source = project.pallet.layers.at(-2) ?? project.pallet.layers.at(-1);
     updateProject({
       ...project,
       pallet: {
         ...project.pallet,
         layers: [
           ...project.pallet.layers,
-          { id: layerId, axis: "length", direction: { ...project.pallet.length } },
+          source
+            ? { id: layerId, axis: source.axis, direction: { ...source.direction, support_distances: [...source.direction.support_distances] } }
+            : { id: layerId, axis: "length", direction: { ...project.pallet.length } },
         ],
       },
     });
@@ -1427,6 +1447,7 @@ export function App() {
   ) : null;
   const viewportToolbar: ReactNode = (
     <>
+      {viewportExpanded ? <button type="button" className="secondary" onClick={addLayer} disabled={!project}>Добавить слой</button> : null}
       <div className="viewport-tool-group viewport-history-actions">
         <button type="button" className="secondary" onClick={undo} disabled={!project || undoStack.current.length === 0}>Назад</button>
         <button type="button" className="secondary" onClick={redo} disabled={!project || redoStack.current.length === 0}>Вперёд</button>
@@ -1451,7 +1472,11 @@ export function App() {
         <button type="button" className={beamTool === "section" ? "active-tool" : ""} onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}>Изменить сечение</button>
         <button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}>Изменить расстояние</button>
       </div>
-      <div className="viewport-tool-spacer" />
+      {viewportExpanded && calculation?.snapshot?.pallet ? (
+        <span className="viewport-toolbar-summary">
+          Длина: {formatMillimetres(calculation.snapshot.pallet.size.length)} мм · Ширина: {formatMillimetres(calculation.snapshot.pallet.size.width)} мм · Высота: {formatMillimetres(calculation.snapshot.pallet.size.height)} мм · {calculation.snapshot.pallet.beams.length} шт.
+        </span>
+      ) : <div className="viewport-tool-spacer" />}
       <label className="viewport-view-select">
         <span>Вид</span>
         <select
@@ -1470,6 +1495,9 @@ export function App() {
           <option value="side">Сбоку</option>
         </select>
       </label>
+      <button type="button" className="secondary" onClick={() => setViewportExpanded((value) => !value)} aria-pressed={viewportExpanded} aria-label={viewportExpanded ? "Свернуть область просмотра" : "Развернуть область просмотра"}>
+        {viewportExpanded ? "Свернуть" : "Развернуть"}
+      </button>
     </>
   );
 
@@ -1500,7 +1528,7 @@ export function App() {
           Настройки экспорта
         </button>
       </header>
-      <div className="workspace">
+      <div className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}`}>
         <aside className="editor-panel" aria-label="Редактор поддона">
           <div className="editor-heading">
             <p className="eyebrow">Редактор</p>
@@ -1903,6 +1931,29 @@ export function App() {
                 beamSelectionEnabled={insertionMode || beamTool !== "none"}
               />
             </Suspense>
+            <div className="pallet-summary-transition" aria-hidden={viewportExpanded} inert={viewportExpanded}>
+            <div className="pallet-summary">
+              <section className="pallet-summary-card" aria-label="Габариты поддона">
+                <h2>Габариты поддона</h2>
+                <dl className="pallet-summary-sizes">
+                  <div><dt>Длина</dt><dd>{formatMillimetres(calculation.snapshot.pallet.size.length)} <span>мм</span></dd></div>
+                  <div><dt>Ширина</dt><dd>{formatMillimetres(calculation.snapshot.pallet.size.width)} <span>мм</span></dd></div>
+                  <div><dt>Высота</dt><dd>{formatMillimetres(calculation.snapshot.pallet.size.height)} <span>мм</span></dd></div>
+                </dl>
+              </section>
+              <section className="pallet-summary-card" aria-label="Детали поддона">
+                <h2>Детали</h2>
+                <div className="pallet-details-scroll" tabIndex={0} aria-label="Список деталей поддона">
+                  {palletDetails(calculation.snapshot.pallet.beams).map((detail) => (
+                    <div className="pallet-detail" key={`${detail.height}-${detail.width}-${detail.length}`}>
+                      <strong>{formatMillimetres(detail.height)} × {formatMillimetres(detail.width)} × {formatMillimetres(detail.length)} мм</strong>
+                      <span>{detail.count} шт.</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+            </div>
           </>
         ) : null}
         </section>
