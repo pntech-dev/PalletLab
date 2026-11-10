@@ -13,6 +13,7 @@ import {
 } from "three";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
+import SceneSettings from "./SceneSettings";
 export type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 
 const StepModelViewport = lazy(() => import("./StepModelViewport"));
@@ -457,6 +458,10 @@ export default function PalletViewport({
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [showDetails, setShowDetails] = useState(false);
+  const [modelVisible, setModelVisible] = useState(true);
+  const [modelTransparency, setModelTransparency] = useState(80);
+  const [dimensionsVisible, setDimensionsVisible] = useState(true);
+  const [gridVisible, setGridVisible] = useState(true);
   const [errorPresentation, setErrorPresentation] = useState<{
     message: string;
     version: number;
@@ -640,7 +645,7 @@ export default function PalletViewport({
         <color attach="background" args={["#edf1f3"]} />
         <ambientLight intensity={1.5} />
         <directionalLight position={[5, 8, 4]} intensity={2} castShadow />
-        {showDetails ? (
+        {showDetails && gridVisible ? (
           <gridHelper
             args={[grid.size, grid.divisions, "#aab9c1", "#d9e1e5"]}
             position={grid.position}
@@ -757,7 +762,7 @@ export default function PalletViewport({
               );
             })
           : null}
-          {showDetails && showPallet ? dimensions.map((dimension, index) => {
+          {showDetails && showPallet && dimensionsVisible ? dimensions.map((dimension, index) => {
           const dimensionKey = `${dimension.layerId}:${dimension.index}`;
           const isHovered =
             dimensionEditing && hoveredDimension === dimensionKey;
@@ -861,7 +866,7 @@ export default function PalletViewport({
             minPolarAngle={0.03}
             maxPolarAngle={Math.PI - 0.03}
           />
-          {stepModel ? (
+          {stepModel && modelVisible && modelTransparency < 100 ? (
             <Suspense fallback={null}>
               <StepModelViewport
                 model={stepModel}
@@ -869,6 +874,7 @@ export default function PalletViewport({
                 onSelectFace={(faceId) => onSelectStepFace?.(faceId)}
                 selectionEnabled={stepFaceSelectionEnabled}
                 pickerRef={stepPicker}
+                opacity={1 - modelTransparency / 100}
               />
             </Suspense>
           ) : null}
@@ -891,6 +897,10 @@ export default function PalletViewport({
       </div>
       {toolbar ? <div className="viewport-floating-toolbar">{toolbar}</div> : null}
       <div className="viewport-fit-control">
+        <SceneSettings hasModel={!!stepModel} modelVisible={modelVisible} setModelVisible={setModelVisible}
+          transparency={modelTransparency} setTransparency={setModelTransparency}
+          dimensionsVisible={dimensionsVisible} setDimensionsVisible={setDimensionsVisible}
+          gridVisible={gridVisible} setGridVisible={setGridVisible} />
         {fitViewControl}
         <div className="viewport-zoom-control" aria-label="Масштаб просмотра">
           <button type="button" onClick={() => zoomCommand.current?.(1.2)} aria-label="Уменьшить масштаб">−</button>

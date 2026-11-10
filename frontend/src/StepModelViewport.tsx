@@ -23,12 +23,14 @@ export default function StepModelViewport({
   onSelectFace,
   selectionEnabled,
   pickerRef,
+  opacity,
 }: {
   model: StepModelGeometry;
   selectedFace: number | null;
   onSelectFace: (faceId: number) => void;
   selectionEnabled: boolean;
   pickerRef: StepFacePickerRef;
+  opacity: number;
 }) {
   const meshRef = useRef<Mesh>(null);
   const { camera } = useThree();
@@ -81,7 +83,7 @@ export default function StepModelViewport({
         <meshStandardMaterial
           color="#b8c2cc"
           transparent
-          opacity={0.2}
+          opacity={opacity}
           depthWrite
           roughness={0.62}
           metalness={0.1}
@@ -89,7 +91,7 @@ export default function StepModelViewport({
         />
       </mesh>
       <lineSegments geometry={edgeGeometry} renderOrder={2}>
-        <lineBasicMaterial color="#31414d" transparent opacity={1} depthTest={true} depthWrite={false} />
+        <lineBasicMaterial color="#31414d" transparent opacity={Math.min(1, opacity * 5)} depthTest={true} depthWrite={false} />
       </lineSegments>
       {selectedFace !== null ? (
         <StepFaceOverlay

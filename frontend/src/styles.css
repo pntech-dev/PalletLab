@@ -121,6 +121,19 @@ input:disabled { cursor: default; background: #ecece8; color: #7d8583; }
 .viewport-view-select select { min-width: 118px; min-height: 30px; border: 0; background: #f4f2eb; color: #29383b; padding: 5px 8px; }
 .viewport-fit-control { position: absolute; z-index: 8; right: 16px; bottom: 16px; display: flex; align-items: center; gap: 8px; }
 .viewport-fit-control button { min-height: 32px; border-color: rgb(225 235 229 / 22%); background: rgb(25 43 46 / 92%); color: #eff3ef; box-shadow: 0 6px 16px rgb(0 0 0 / 16%); }
+.scene-settings-anchor { position: relative; }
+.viewport-fit-control .scene-settings-toggle { width: 34px; padding: 6px; display: grid; place-items: center; }
+.viewport-fit-control .scene-settings-toggle:hover { background: #315b61; }
+.scene-settings-panel { position: absolute; right: -100px; bottom: calc(100% + 10px); width: 240px; min-width: 0; max-width: calc(100vw - 48px); gap: 10px; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(6px) scale(.98); transform-origin: 58% 100%; transition: opacity 160ms ease, transform 160ms ease, visibility 0s linear 160ms; }
+.scene-settings-panel.is-open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1); transition: opacity 160ms ease, transform 160ms ease, visibility 0s; }
+.scene-settings-panel hr { width: 100%; margin: 0; border: 0; border-top: 1px solid rgb(255 255 255 / 18%); }
+.manual-hud .scene-settings-check { display: flex; align-items: center; gap: 9px; color: #f5f5ef; cursor: pointer; font-size: 13px; }
+.manual-hud .scene-settings-check input { flex: 0 0 auto; width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; accent-color: #75aa9e; }
+.manual-hud .scene-settings-range { display: grid; gap: 6px; color: #d9e4df; font-size: 12px; }
+.scene-settings-range > span { display: flex; justify-content: space-between; }
+.manual-hud .scene-settings-range input { width: 100%; min-height: 0; margin: 0; padding: 0; accent-color: #75aa9e; cursor: pointer; }
+.manual-hud .scene-settings-range input:disabled { cursor: default; opacity: .5; }
+@media (prefers-reduced-motion: reduce) { .scene-settings-panel { transition-duration: 0s; } }
 .viewport-zoom-control { display: flex; align-items: center; gap: 8px; padding: 3px; border-radius: 8px; background: rgb(25 43 46 / 92%); color: #eff3ef; font-size: 12px; }
 .viewport-zoom-control button { min-width: 30px; padding: 4px; box-shadow: none; }
 .viewport-zoom-control span { min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
