@@ -8,6 +8,14 @@ def test_web_application_api_reports_compatible_snapshot_version() -> None:
     assert status["snapshotVersion"] == 1
 
 
+def test_restore_step_uses_import_service_and_reports_missing_path(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    source = str(tmp_path / "model.step")
+    monkeypatch.setattr(api._step_imports, "start", lambda path: {"ok": True, "path": path})
+    assert api.restore_step_model(source) == {"ok": True, "path": source}
+    assert not api.restore_step_model("")["ok"]
+
+
 def test_web_api_uses_a_native_folder_choice_for_kompas_export(monkeypatch, tmp_path) -> None:
     api = WebApplicationApi()
     project = {"project": "payload"}

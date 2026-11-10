@@ -181,6 +181,12 @@ class WebApplicationApi:
         path = self._choose_file("step")
         return {"ok": False, "cancelled": True} if path is None else self._step_imports.start(path)
 
+    def restore_step_model(self, path: object) -> dict[str, Any]:
+        """Restore a model referenced by a project using the regular import/cache path."""
+        if not isinstance(path, str) or not path.strip():
+            return {"ok": False, "error": "В проекте не указан путь к STEP-модели."}
+        return self._step_imports.start(path)
+
     def step_import_status(self, operation_id: object) -> dict[str, Any]:
         return self._step_imports.status(operation_id)
 

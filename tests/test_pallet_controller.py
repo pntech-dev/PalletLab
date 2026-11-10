@@ -357,6 +357,34 @@ def test_manual_beam_dimensions_follow_the_chosen_reference_side():
     assert errors == []
 
 
+@pytest.mark.parametrize(("support_layer", "face", "axis"), [("width", "x_max", 0), ("length", "y_max", 1)])
+@pytest.mark.parametrize("distance", [100, -100])
+def test_web_manual_dimension_extensions_touch_the_actual_beam_faces(support_layer, face, axis, distance):
+    from palletlab.application.snapshots import pallet_snapshot
+
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+    result = controller.add_manual_beam(
+        (support_layer, 0), (support_layer, 1), distance, BeamSection(70, 50),
+        reference_support=(support_layer, 0), reference_face=face,
+    )
+    assert result is not None
+    reference = next(beam for beam in result.beams_3d if beam.layer_id == support_layer and beam.layer_index == 0)
+    added = next(beam for beam in result.beams_3d if beam.layer_id == "manual-1")
+    dimension = next(item for item in pallet_snapshot(result, tuple(state.manual_beams))["dimensions"]
+                     if item["layerId"] == "manual-1")
+    reference_direction = 1 if distance >= 0 else -1
+    for endpoint, beam, direction in ((dimension["startExtension"], reference, reference_direction),
+                                      (dimension["endExtension"], added, -reference_direction)):
+        centers = (beam.x, beam.y)
+        sizes = (beam.size_x, beam.size_y)
+        assert endpoint[axis] == pytest.approx(centers[axis] + direction * sizes[axis] / 2)
+        assert endpoint[1 - axis] == pytest.approx(centers[1 - axis] + sizes[1 - axis] / 2)
+        assert endpoint[2] == pytest.approx(beam.z + beam.size_z / 2)
+    assert abs(dimension["end"][axis] - dimension["start"][axis]) == pytest.approx(100)
+    assert errors == []
+
+
 def test_three_layer_pallet_accepts_a_manual_beam_at_the_base_point_and_section_changes():
     controller, state, _view, _timer, _calculated, errors, _stale = _controller()
     layers = [

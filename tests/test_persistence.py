@@ -58,6 +58,23 @@ def test_project_json_rejects_unknown_or_invalid_format():
         project_from_dict({"format_version": 99})
 
 
+def test_step_reference_and_placement_round_trip_and_validate(tmp_path):
+    from palletlab.application.service import ApplicationService
+
+    state = _state()
+    state.step_model = {"source": str(tmp_path / "model.step"), "transform": list(range(16)), "starts": [100, 150]}
+    path = tmp_path / "project.palletlab.json"
+    save_project(path, state)
+    assert load_project(path).step_model == state.step_model
+    calculated = ApplicationService().calculate(project_to_dict(state))
+    assert calculated["ok"]
+    assert calculated["snapshot"]["project"]["step_model"] == state.step_model
+    payload = project_to_dict(state)
+    payload["step_model"]["transform"] = [1, 2]
+    with pytest.raises(ProjectPersistenceError, match="STEP-модели"):
+        project_from_dict(payload)
+
+
 def test_common_pallet_margins_survive_round_trip_and_validate():
     state = _state()
     state.pallet_margins = (120, 175, 80, 90)

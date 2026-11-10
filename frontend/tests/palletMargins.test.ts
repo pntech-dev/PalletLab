@@ -20,17 +20,17 @@ function example() {
 }
 
 test("visible sides address the requested axes and their own links", () => {
-  assert.deepEqual(MARGIN_PAIRS.map(({ first, second, link }) => [first, second, link]), [[0, 1, 0], [2, 3, 1]]);
+  assert.deepEqual(MARGIN_PAIRS.map(({ first, second, link }) => [first, second, link]), [[2, 3, 1], [0, 1, 0]]);
   let project = toggleMarginLink(example(), MARGIN_PAIRS[0].link);
   project = toggleMarginLink(project, MARGIN_PAIRS[1].link);
   const left = changePalletMargin(project, MARGIN_PAIRS[0].first, 130);
-  assert.deepEqual(palletMargins(left), [130, 100, 100, 100]);
+  assert.deepEqual(palletMargins(left), [100, 100, 130, 100]);
   const right = changePalletMargin(project, MARGIN_PAIRS[0].second, 140);
-  assert.deepEqual(palletMargins(right), [100, 140, 100, 100]);
+  assert.deepEqual(palletMargins(right), [100, 100, 100, 140]);
   const top = changePalletMargin(project, MARGIN_PAIRS[1].first, 150);
-  assert.deepEqual(palletMargins(top), [100, 100, 150, 100]);
+  assert.deepEqual(palletMargins(top), [150, 100, 100, 100]);
   const bottom = changePalletMargin(project, MARGIN_PAIRS[1].second, 160);
-  assert.deepEqual(palletMargins(bottom), [100, 100, 100, 160]);
+  assert.deepEqual(palletMargins(bottom), [100, 160, 100, 100]);
 });
 
 test("linked margins change together only on their own axis", () => {

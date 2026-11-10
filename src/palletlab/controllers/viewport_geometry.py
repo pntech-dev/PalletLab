@@ -282,13 +282,13 @@ def _manual_beam_dimensions(
             if axis == "length":
                 start = (reference_position, _display_y(result, result.pallet_width + line_offset), result.pallet_height + 2)
                 end = (position, _display_y(result, result.pallet_width + line_offset), result.pallet_height + 2)
-                start_extension = (reference_position, _display_y(result, reference.y + reference.size_y / 2), result.pallet_height + 2)
-                end_extension = (position, _display_y(result, beam.y + beam.size_y / 2), result.pallet_height + 2)
+                start_extension = (reference_position, _display_y(result, reference.y + reference.size_y / 2), reference.z + reference.size_z / 2)
+                end_extension = (position, _display_y(result, beam.y + beam.size_y / 2), beam.z + beam.size_z / 2)
             else:
                 start = (result.pallet_length + line_offset, _display_y(result, reference_position), result.pallet_height + 2)
                 end = (result.pallet_length + line_offset, _display_y(result, position), result.pallet_height + 2)
-                start_extension = (reference.x + reference.size_x / 2, _display_y(result, reference_position), result.pallet_height + 2)
-                end_extension = (beam.x + beam.size_x / 2, _display_y(result, position), result.pallet_height + 2)
+                start_extension = (reference.x + reference.size_x / 2, _display_y(result, reference_position), reference.z + reference.size_z / 2)
+                end_extension = (beam.x + beam.size_x / 2, _display_y(result, position), beam.z + beam.size_z / 2)
         if reference is None:
             start_extension = None
             end_extension = None

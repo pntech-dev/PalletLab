@@ -44,6 +44,7 @@ class ProjectState:
     material_id: str = DEFAULT_MATERIAL_ID
     pallet_margins: tuple[float, float, float, float] | None = None
     pallet_margin_links: tuple[bool, bool] | None = None
+    step_model: dict[str, object] | None = None
     result: PalletResult | None = None
 
     active_tool: ToolMode = "none"

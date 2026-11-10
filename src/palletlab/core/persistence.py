@@ -115,6 +115,7 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
     layers = state.layers or _legacy_layers(state.length_input, state.width_input, state.upper_layer)
     return {
         "format_version": FORMAT_VERSION,
+        **({"step_model": state.step_model} if state.step_model is not None else {}),
         "pallet": {
             "length": _direction_to_dict(state.length_input),
             "width": _direction_to_dict(state.width_input),
@@ -159,6 +160,18 @@ def project_from_dict(raw: object) -> ProjectState:
     pallet, view = raw.get("pallet"), raw.get("view")
     if not isinstance(pallet, dict) or not isinstance(view, dict):
         raise ProjectPersistenceError("В файле отсутствуют разделы поддона или вида.")
+    step_model = raw.get("step_model")
+    if step_model is not None:
+        if not isinstance(step_model, dict):
+            raise ProjectPersistenceError("Данные STEP-модели должны быть объектом.")
+        source, transform, starts = step_model.get("source"), step_model.get("transform"), step_model.get("starts")
+        if (not isinstance(source, str) or not source.strip()
+                or not isinstance(transform, list) or len(transform) != 16
+                or not isinstance(starts, list) or len(starts) != 2
+                or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+                       for value in (*transform, *starts))):
+            raise ProjectPersistenceError("Данные STEP-модели содержат некорректные параметры.")
+        step_model = {"source": source, "transform": list(transform), "starts": list(starts)}
     raw_margins = pallet.get("pallet_margins")
     pallet_margins = None
     if raw_margins is not None:
@@ -277,6 +290,7 @@ def project_from_dict(raw: object) -> ProjectState:
             start_point=start_point,
         ))
     return ProjectState(
+        step_model=step_model,
         pallet_margins=pallet_margins,
         pallet_margin_links=pallet_margin_links,
         length_input=length_input,

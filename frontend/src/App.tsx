@@ -18,6 +18,7 @@ import type {
 } from "./PalletViewport";
 import type { StepModelPayload } from "./stepModelGeometry";
 import { changePalletMargin, marginLinks, MARGIN_PAIRS, palletMargins, toggleMarginLink, type MarginIndex } from "./palletMargins";
+import { remainingImportFeedback, stepImportPhase } from "./stepImportUi";
 
 const startupStartedAt = performance.now();
 
@@ -113,6 +114,7 @@ const DIRECTION_FIELD_LABELS: Record<DirectionField, string> = {
   margin_end: "Отступ с конца, мм",
 };
 export type Project = {
+  step_model?: { source: string; transform: number[]; starts: [number, number] };
   pallet: {
     length: Direction;
     width: Direction;
@@ -165,6 +167,7 @@ type StepImportOperation = {
   progress?: number;
   label?: string;
   error?: string;
+  path?: string;
 };
 type StepModelResponse = { ok: boolean; error?: string; assetUrl?: string };
 type StepPalletResponse = CalculationResponse & {
@@ -300,6 +303,7 @@ declare global {
         save_drawing_template: (cad: DrawingCad, template: string) => Promise<CommandResponse>;
         create_drawings: (project: Project, cad: DrawingCad, scope: DrawingScope, template: string | null) => Promise<CommandResponse>;
         import_step_model: () => Promise<StepImportOperation>;
+        restore_step_model: (path: string) => Promise<StepImportOperation>;
         step_import_status: (operationId: string) => Promise<StepImportOperation>;
         cancel_step_import: (operationId: string) => Promise<StepImportOperation>;
         step_model_snapshot: (operationId: string) => Promise<StepModelResponse>;
@@ -332,6 +336,7 @@ export function App() {
   const [cameraRequest, setCameraRequest] = useState(0);
   const [fitRequest, setFitRequest] = useState(0);
   const [stepImport, setStepImport] = useState<StepImportOperation | null>(null);
+  const stepImportStartedAt = useRef(0);
   const [stepModel, setStepModel] = useState<StepModelSnapshot | null>(null);
   const [selectedStepFace, setSelectedStepFace] = useState<number | null>(null);
   const [stepPalletBuilt, setStepPalletBuilt] = useState(false);
@@ -384,6 +389,34 @@ export function App() {
   const connectionStarted = useRef(false);
   const calculatedInitialProject = useRef<Project | null>(null);
   const stepPlacement = useRef<{ transform: number[]; starts: [number, number] } | null>(null);
+  const stepRestoreGeneration = useRef(0);
+  const [stepRestoreError, setStepRestoreError] = useState<string | null>(null);
+
+  async function restoreProjectStep(nextProject: Project) {
+    const generation = ++stepRestoreGeneration.current;
+    const model = nextProject.step_model;
+    setStepModel(null);
+    setStepImport(null);
+    setSelectedStepFace(null);
+    setStepPalletBuilt(false);
+    setStepRestoreError(null);
+    stepPlacement.current = null;
+    if (!model) return;
+    stepImportStartedAt.current = performance.now();
+    stepPlacement.current = { transform: model.transform, starts: model.starts };
+    setStepPalletBuilt(true);
+    try {
+      const response = await window.pywebview!.api!.restore_step_model(model.source);
+      if (generation !== stepRestoreGeneration.current) return;
+      if (!response.ok) {
+        setStepRestoreError(`Не удалось восстановить STEP-модель: ${response.error ?? "файл недоступен"}`);
+        return;
+      }
+      setStepImport(response);
+    } catch {
+      if (generation === stepRestoreGeneration.current) setStepRestoreError("Не удалось восстановить STEP-модель из файла проекта.");
+    }
+  }
 
   const reportFirstViewportFrame = useCallback(() => {
     reportStartupStage("первый кадр 3D-вида");
@@ -475,6 +508,7 @@ export function App() {
     const previous = undoStack.current.pop();
     if (!project || !previous) return;
     redoStack.current.push(copyProject(project));
+    if (JSON.stringify(project.step_model) !== JSON.stringify(previous.step_model)) void restoreProjectStep(previous);
     applyProject(previous);
     clearInteractionState();
     setHistoryVersion((value) => value + 1);
@@ -485,6 +519,7 @@ export function App() {
     const next = redoStack.current.pop();
     if (!project || !next) return;
     undoStack.current.push(copyProject(project));
+    if (JSON.stringify(project.step_model) !== JSON.stringify(next.step_model)) void restoreProjectStep(next);
     applyProject(next);
     clearInteractionState();
     setHistoryVersion((value) => value + 1);
@@ -520,6 +555,7 @@ export function App() {
         ]);
         const recovered = recoveredProject();
         const initialProject = recovered ?? (defaultProject as Project);
+        void restoreProjectStep(initialProject);
         const initialCalculation = await api.calculate(initialProject);
         reportStartupStage("первый расчёт завершён");
         if (recovered) {
@@ -637,6 +673,7 @@ export function App() {
   async function openProject() {
     const response = await window.pywebview!.api!.open_project();
     if (response.project) {
+      void restoreProjectStep(response.project);
       applyProject(response.project);
       setSavedProject(JSON.stringify(response.project));
       setCalculationError(null);
@@ -822,6 +859,17 @@ export function App() {
     if (!api) return;
     const response = await api.import_step_model();
     if (response.cancelled) return;
+    if (!response.ok) {
+      setCalculationError(response.error ?? "Не удалось импортировать STEP-модель.");
+      return;
+    }
+    stepImportStartedAt.current = performance.now();
+    stepRestoreGeneration.current += 1;
+    setStepRestoreError(null);
+    if (project?.step_model) {
+      const { step_model: _previousModel, ...withoutModel } = project;
+      updateProject(withoutModel);
+    }
     setStepModel(null);
     setSelectedStepFace(null);
     setStepPalletBuilt(false);
@@ -847,10 +895,12 @@ export function App() {
   useEffect(() => {
     if (stepImport?.state === "failed") {
       setCalculationError(stepImport.error ?? "Не удалось импортировать STEP-модель.");
+      if (stepPalletBuilt) setStepRestoreError(`Не удалось восстановить STEP-модель: ${stepImport.error ?? "ошибка импорта"}`);
     }
-  }, [stepImport?.error, stepImport?.state]);
+  }, [stepImport?.error, stepImport?.state, stepPalletBuilt]);
 
   useEffect(() => {
+    let cancelled = false;
     async function loadPreparedModel() {
       const api = window.pywebview?.api;
       if (!api || !stepImport?.operationId || stepImport.state !== "completed") return;
@@ -859,16 +909,20 @@ export function App() {
         if (response.ok && response.assetUrl) {
           const { prepareStepModel } = await import("./stepModelGeometry");
           const prepared = await prepareStepModel({ assetUrl: response.assetUrl } satisfies StepModelPayload);
+          const remaining = remainingImportFeedback(stepImportStartedAt.current, performance.now());
+          if (remaining > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
+          if (cancelled) return;
           setStepModel(prepared);
           setFitRequest((value) => value + 1);
         } else {
-          setCalculationError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
+          if (!cancelled) setStepRestoreError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
         }
       } catch (error) {
-        setCalculationError(error instanceof Error ? error.message : "Не удалось подготовить STEP-модель для просмотра.");
+        if (!cancelled) setStepRestoreError(error instanceof Error ? error.message : "Не удалось подготовить STEP-модель для просмотра.");
       }
     }
     void loadPreparedModel();
+    return () => { cancelled = true; };
   }, [stepImport?.operationId, stepImport?.state]);
 
   async function buildStepPallet(faceIndex = selectedStepFace) {
@@ -878,17 +932,23 @@ export function App() {
     try {
       const response = await api.build_step_pallet(stepImport.operationId, project, faceIndex);
       applyCalculation(response);
-      if (response.ok && response.snapshot && response.modelTransform) {
+      if (response.ok && response.snapshot && response.modelTransform && stepImport.path) {
         const margins = palletMargins(response.snapshot.project);
         stepPlacement.current = {
           transform: response.modelTransform,
           starts: [margins[0], margins[2]],
         };
-        updateHistory(project, response.snapshot.project);
-        applyProject(response.snapshot.project);
+        const nextProject: Project = {
+          ...response.snapshot.project,
+          step_model: { source: stepImport.path, transform: response.modelTransform, starts: [margins[0], margins[2]] },
+          view: { ...response.snapshot.project.view, camera: "isometric" },
+        };
+        updateHistory(project, nextProject);
+        applyProject(nextProject);
         setStepModel((model) => model ? { ...model, transform: response.modelTransform! } : model);
         setSelectedStepFace(null);
         setStepPalletBuilt(true);
+        setCameraRequest((value) => value + 1);
         setFitRequest((value) => value + 1);
         setCalculationError(null);
       }
@@ -919,6 +979,8 @@ export function App() {
       pallet: { ...defaultProject.pallet, material_id: project.pallet.material_id },
     };
     updateProject(nextProject);
+    stepRestoreGeneration.current += 1;
+    setStepRestoreError(null);
     setStepImport(null);
     setStepModel(null);
     setSelectedStepFace(null);
@@ -1562,7 +1624,7 @@ export function App() {
             type="button"
             className="secondary"
             onClick={() => void importStepModel()}
-            disabled={!status || stepImport?.state === "running" || stepImport?.state === "cancelling"}
+            disabled={!status || stepImportPhase(stepImport?.state, stepModel !== null, stepRestoreError !== null) !== null}
           >
             Импорт
           </button>
@@ -1717,12 +1779,15 @@ export function App() {
           </div>
         ) : null}
         {recoveryNotice ? <p className="recovery-notice">{recoveryNotice}</p> : null}
-        {stepImport && ["running", "cancelling"].includes(stepImport.state ?? "") ? (
+        {stepRestoreError ? <p className="error" role="alert">{stepRestoreError}</p> : null}
+        {stepImport && stepImportPhase(stepImport.state, stepModel !== null, stepRestoreError !== null) ? (
           <div className="modal-backdrop" role="presentation">
             <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="step-import-title">
               <h2 id="step-import-title">Импорт STEP-модели</h2>
-              <p>{stepImport.label ?? "Подготавливаем STEP-модель…"}</p>
-              <progress max="100" value={stepImport.progress ?? 0} aria-label="Прогресс импорта STEP-модели" />
+              <p>{stepImport.state === "completed" ? "Подготавливаем модель к отображению…" : stepImport.label ?? "Подготавливаем STEP-модель…"}</p>
+              {stepImport.state === "completed"
+                ? <progress aria-label="Подготовка STEP-модели" />
+                : <progress max="100" value={stepImport.progress ?? 0} aria-label="Прогресс импорта STEP-модели" />}
               <p className="modal-hint">Не изменяйте проект до окончания импорта.</p>
               {stepImport.state === "running" ? (
                 <footer className="modal-actions">

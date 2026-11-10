@@ -48,6 +48,10 @@ def pallet_snapshot(
     """Return viewport data without coupling the caller to PyVista or Qt."""
     slots = _insertion_slots(result, layers)
     physical_layers = beam_layer_ids(layers, manual_beams)
+    def viewport_dimension_point(point: tuple[float, float, float]) -> list[float]:
+        # Legacy dimension geometry uses a mirrored Y axis; web beams do not.
+        return [point[0], result.pallet_width - point[1], point[2]]
+
     return {
         "size": {
             "length": result.pallet_length,
@@ -78,10 +82,10 @@ def pallet_snapshot(
                 "value": dimension.value,
                 "editValue": dimension.edit_value,
                 "editable": dimension.editable,
-                "start": list(dimension.start),
-                "end": list(dimension.end),
-                "startExtension": list(dimension.start_extension) if dimension.start_extension else None,
-                "endExtension": list(dimension.end_extension) if dimension.end_extension else None,
+                "start": viewport_dimension_point(dimension.start),
+                "end": viewport_dimension_point(dimension.end),
+                "startExtension": viewport_dimension_point(dimension.start_extension) if dimension.start_extension else None,
+                "endExtension": viewport_dimension_point(dimension.end_extension) if dimension.end_extension else None,
             }
             for dimension in editable_dimensions(result, tuple(manual_beams))
         ],
