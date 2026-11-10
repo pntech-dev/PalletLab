@@ -4,10 +4,10 @@ export type Margins = [number, number, number, number];
 export type MarginIndex = 0 | 1 | 2 | 3;
 
 // Persisted values are in X-/X+/Y-/Y+ order. The controls use the
-// controls: left/right change Y-/Y+, top/bottom change X-/X+.
+// controls: left/right change X-/X+, top/bottom change Y-/Y+.
 export const MARGIN_PAIRS = [
-  { first: 2, second: 3, link: 1, labels: ["Слева, мм", "Справа, мм"], description: "слева и справа" },
-  { first: 0, second: 1, link: 0, labels: ["Сверху, мм", "Снизу, мм"], description: "сверху и снизу" },
+  { first: 0, second: 1, link: 0, labels: ["Слева, мм", "Справа, мм"], description: "слева и справа" },
+  { first: 2, second: 3, link: 1, labels: ["Сверху, мм", "Снизу, мм"], description: "сверху и снизу" },
 ] as const;
 
 export function palletMargins(project: Project): Margins {
