@@ -264,7 +264,7 @@ def _manual_beam_dimensions(
         if beam is None:
             continue
         axis: PalletAxis = "length" if beam.orientation == "width" else "width"
-        reference = source.get(item.reference_support) if item.reference_support else None
+        reference = source.get(item.reference_support) if item.reference_support and item.second_reference_support is None else None
         position = _manual_measurement_edge(beam, axis)
         if reference is None:
             counts[axis] += 1
@@ -294,7 +294,8 @@ def _manual_beam_dimensions(
             end_extension = None
         dimensions.append(EditableDimension(
             item.beam_id, axis, 0, abs(position - (0.0 if reference is None else reference_position)), start, end,
-            editable=True, start_extension=start_extension, end_extension=end_extension, edit_value=item.distance,
+            editable=item.second_reference_support is None, start_extension=start_extension, end_extension=end_extension,
+            edit_value=item.distance if item.second_reference_support is None else None,
         ))
     return tuple(dimensions)
 

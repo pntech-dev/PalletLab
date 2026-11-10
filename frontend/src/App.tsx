@@ -19,6 +19,7 @@ import type {
 import type { StepModelPayload } from "./stepModelGeometry";
 import { changePalletMargin, marginLinks, MARGIN_PAIRS, palletMargins, toggleMarginLink, type MarginIndex } from "./palletMargins";
 import { remainingImportFeedback, stepImportPhase } from "./stepImportUi";
+import { betweenFaces, type BeamReference, type BeamReferenceFace } from "./manualBeamBetween";
 
 const startupStartedAt = performance.now();
 
@@ -374,9 +375,13 @@ export function App() {
     { beam: ViewportBeam; point: ViewportPoint }[]
   >([]);
   const [manualDistance, setManualDistance] = useState(0);
-  const [manualReferenceMode, setManualReferenceMode] = useState<"base" | "face">("base");
+  const [manualReferenceMode, setManualReferenceMode] = useState<"base" | "face" | "between">("base");
   const [manualReference, setManualReference] = useState<ViewportBeam | null>(null);
-  const [manualReferenceFace, setManualReferenceFace] = useState<"x_min" | "x_max" | "y_min" | "y_max">("x_min");
+  const [manualReferenceFace, setManualReferenceFace] = useState<BeamReferenceFace>("x_min");
+  const [manualSecondReference, setManualSecondReference] = useState<BeamReference | null>(null);
+  const firstManualReference = manualReference ? { beam: manualReference, face: manualReferenceFace } : null;
+  const manualBetween = firstManualReference && manualSecondReference
+    ? betweenFaces(firstManualReference, manualSecondReference, section.width) : null;
   const [viewportToolError, setViewportToolError] = useState<string | null>(null);
   const [viewportToolErrorVersion, setViewportToolErrorVersion] = useState(0);
   const [, setHistoryVersion] = useState(0);
@@ -997,7 +1002,7 @@ export function App() {
 
   function toggleBeam(beam: ViewportBeam, point?: ViewportPoint, normal?: ViewportFaceNormal) {
     if (insertionMode) {
-      if (manualReferenceMode === "face" && manualSupports.length === 2) {
+      if ((manualReferenceMode === "face" || manualReferenceMode === "between") && manualSupports.length === 2) {
         const support = manualSupports[0].beam;
         const alongX = support.size[0] >= support.size[1];
         const directionalNormal = alongX ? normal?.[0] : normal?.[2];
@@ -1005,12 +1010,20 @@ export function App() {
           showViewportToolError("Выберите боковую грань бруса в направлении нового бруса.");
           return;
         }
+        const face: BeamReferenceFace = alongX
+          ? directionalNormal > 0 ? "x_max" : "x_min"
+          : directionalNormal > 0 ? "y_max" : "y_min";
+        if (manualReferenceMode === "between" && manualReference) {
+          const candidate = { beam, face };
+          if (!betweenFaces({ beam: manualReference, face: manualReferenceFace }, candidate, section.width)) {
+            showViewportToolError("Выберите противоположную грань другого бруса, чтобы новый брус поместился между ними.");
+            return;
+          }
+          setManualSecondReference(candidate);
+          return;
+        }
         setManualReference(beam);
-        setManualReferenceFace(
-          alongX
-            ? directionalNormal > 0 ? "x_max" : "x_min"
-            : directionalNormal > 0 ? "y_max" : "y_min",
-        );
+        setManualReferenceFace(face);
         setManualDistance(0);
         return;
       }
@@ -1131,6 +1144,7 @@ export function App() {
     setSelectedSlot(null);
     setManualSupports([]);
     setManualReference(null);
+    setManualSecondReference(null);
     setManualReferenceFace("x_min");
     setManualReferenceMode("base");
     setSelectedBeams([]);
@@ -1143,6 +1157,10 @@ export function App() {
       return;
     }
     if (insertionMode) {
+      if (manualSecondReference) {
+        setManualSecondReference(null);
+        return;
+      }
       if (manualReference) {
         setManualReference(null);
         return;
@@ -1198,7 +1216,8 @@ export function App() {
   async function addManualBeam() {
     const api = window.pywebview?.api;
     if (!api || !project || manualSupports.length !== 2
-        || (manualReferenceMode === "face" && !manualReference)) return;
+        || (manualReferenceMode === "face" && !manualReference)
+        || (manualReferenceMode === "between" && !manualBetween)) return;
     const response = await api.add_manual_beam(
       project,
       manualSupports.map(({ beam }) => ({
@@ -1206,10 +1225,13 @@ export function App() {
         layerIndex: beam.layerIndex,
       })),
       {
-        distance: manualDistance,
+        distance: manualReferenceMode === "between" ? manualBetween!.baseDistance : manualDistance,
         section,
         reference: manualReference ? { layerId: manualReference.layerId, layerIndex: manualReference.layerIndex } : undefined,
         referenceFace: manualReference ? manualReferenceFace : undefined,
+        secondReference: manualReferenceMode === "between" && manualSecondReference
+          ? { layerId: manualSecondReference.beam.layerId, layerIndex: manualSecondReference.beam.layerIndex } : undefined,
+        secondReferenceFace: manualReferenceMode === "between" ? manualSecondReference?.face : undefined,
       },
     );
     if (!response.ok) {
@@ -1222,6 +1244,7 @@ export function App() {
       applyProject(response.snapshot.project);
       setManualSupports([]);
       setManualReference(null);
+      setManualSecondReference(null);
       setSelectedBeams([]);
     }
   }
@@ -1414,6 +1437,7 @@ export function App() {
     setSelectedBeams((current) => current.filter((beam) => beam.layerId !== layerId));
     setManualSupports((current) => current.filter(({ beam }) => beam.layerId !== layerId));
     if (manualReference?.layerId === layerId) setManualReference(null);
+    if (manualSecondReference?.beam.layerId === layerId) setManualSecondReference(null);
   }
 
   function moveLayer(sourceId: string, targetId: string, insertAfter: boolean) {
@@ -1456,14 +1480,16 @@ export function App() {
         <select
           value={manualReferenceMode}
           onChange={(event) => {
-            const mode = event.target.value as "base" | "face";
+            const mode = event.target.value as "base" | "face" | "between";
             setManualReferenceMode(mode);
             setManualReference(null);
+            setManualSecondReference(null);
             setManualDistance(mode === "base" ? basePointDistance(manualSupports[0]) : 0);
           }}
         >
           <option value="base">От нулевой точки</option>
           <option value="face">От выбранной грани</option>
+          <option value="between">Между двух граней</option>
         </select>
       </label>
       {manualReferenceMode === "face" ? (
@@ -1473,11 +1499,15 @@ export function App() {
           <span>Выберите боковую грань в 3D-виде</span>
         )
       ) : null}
+      {manualReferenceMode === "between" ? (
+        <span>{!manualReference ? "Выберите первую грань" : !manualSecondReference ? "Выберите вторую грань" : manualBetween ? "Выбраны две грани" : "Брус не помещается между гранями"}</span>
+      ) : null}
       <label>
-        Расстояние, мм
+        {manualReferenceMode === "between" ? "От нулевой точки, мм" : "Расстояние, мм"}
         <input
           type="number"
-          value={manualDistance}
+          value={manualReferenceMode === "between" ? (manualBetween ? Number(manualBetween.baseDistance.toFixed(2)) : "") : manualDistance}
+          disabled={manualReferenceMode === "between"}
           onChange={(event) => setManualDistance(Number(event.target.value))}
           onKeyDown={(event) => {
             if (event.key === "Enter") void addManualBeam();
@@ -1485,7 +1515,7 @@ export function App() {
           }}
         />
       </label>
-      <button type="button" onClick={addManualBeam} disabled={manualReferenceMode === "face" && !manualReference}>Добавить брус</button>
+      <button type="button" onClick={addManualBeam} disabled={(manualReferenceMode === "face" && !manualReference) || (manualReferenceMode === "between" && !manualBetween)}>Добавить брус</button>
       <button type="button" onClick={stopInsertion}>Отмена</button>
     </div>
   ) : null;
@@ -2069,6 +2099,8 @@ export function App() {
                 manualSupports={manualSupports}
                 manualSection={section}
                 manualReference={manualReference ? { beam: manualReference, face: manualReferenceFace } : null}
+                manualSecondReference={manualReferenceMode === "between" ? manualSecondReference : null}
+                manualBetweenMode={manualReferenceMode === "between"}
                 manualDistance={manualDistance}
                 manualHud={manualHud}
                 dimensionHud={dimensionHud}
@@ -2085,8 +2117,8 @@ export function App() {
                       ? "Выберите первый опорный брус\nПКМ — отменить последний выбор"
                       : manualSupports.length === 1
                         ? "Выберите второй параллельный опорный брус\nПКМ — отменить последний выбор"
-                        : manualReferenceMode === "face" && !manualReference
-                          ? "Выберите боковую грань для отсчёта\nПКМ — отменить последний выбор"
+                        : (manualReferenceMode === "face" && !manualReference) || (manualReferenceMode === "between" && (!manualReference || !manualSecondReference))
+                          ? `Выберите ${manualReferenceMode === "between" ? (manualReference ? "вторую" : "первую") : "боковую"} грань для отсчёта\nПКМ — отменить последний выбор`
                           : "Укажите расстояние в панели\nПКМ — отменить последний выбор"
                     : beamTool === "delete"
                       ? "Выберите брусья для удаления\nПКМ — отменить последний выбор"

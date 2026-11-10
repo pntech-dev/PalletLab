@@ -70,6 +70,8 @@ class ManualBeamInput:
     first_face: Literal["top", "bottom"] = "top"
     second_face: Literal["top", "bottom"] = "top"
     start_point: tuple[float, float, float] | None = None
+    second_reference_support: LayerBeamKey | None = None
+    second_reference_face: str | None = None
 
 
 @dataclass(frozen=True)

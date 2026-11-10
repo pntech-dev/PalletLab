@@ -139,6 +139,8 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
                  "distance": beam.distance, "height": beam.section.height, "width": beam.section.width,
                  "reference": list(beam.reference_support) if beam.reference_support else None,
                  "reference_face": beam.reference_face,
+                 **({"second_reference": list(beam.second_reference_support), "second_reference_face": beam.second_reference_face}
+                    if beam.second_reference_support is not None else {}),
                  "first_face": beam.first_face, "second_face": beam.second_face,
                  "start_point": list(beam.start_point) if beam.start_point else None}
                 for beam in state.manual_beams
@@ -257,14 +259,17 @@ def project_from_dict(raw: object) -> ProjectState:
             beam_id = str(item["id"])
             first, second = item["first"], item["second"]
             reference = item.get("reference")
+            second_reference = item.get("second_reference")
             first_key = (str(first[0]), int(first[1]))
             second_key = (str(second[0]), int(second[1]))
             reference_key = (str(reference[0]), int(reference[1])) if reference is not None else None
+            second_reference_key = (str(second_reference[0]), int(second_reference[1])) if second_reference is not None else None
             section = BeamSection(float(item["height"]), float(item["width"]))
             distance = float(item["distance"])
             first_face = item.get("first_face", "top")
             second_face = item.get("second_face", "top")
             reference_face = item.get("reference_face")
+            second_reference_face = item.get("second_reference_face")
             raw_start_point = item.get("start_point")
             start_point = (
                 tuple(float(value) for value in raw_start_point)
@@ -275,6 +280,10 @@ def project_from_dict(raw: object) -> ProjectState:
         available_ids = layer_ids | manual_ids
         if (not beam_id or first_key[0] not in available_ids or second_key[0] not in available_ids
                 or (reference_key is not None and reference_key[0] not in available_ids)
+                or (second_reference_key is not None and (second_reference_key[0] not in available_ids or reference_key is None
+                    or second_reference_key == reference_key
+                    or (reference_face, second_reference_face) not in (("x_min", "x_max"), ("x_max", "x_min"), ("y_min", "y_max"), ("y_max", "y_min"))))
+                or (second_reference_key is None and second_reference_face is not None)
                 or first_face not in ("top", "bottom") or second_face not in ("top", "bottom")
                 or reference_face not in (None, "top", "bottom", "x_min", "x_max", "y_min", "y_max")
                 or (start_point is not None and (len(start_point) != 3 or not all(math.isfinite(value) for value in start_point)))
@@ -288,6 +297,7 @@ def project_from_dict(raw: object) -> ProjectState:
             reference_support=reference_key, reference_face=reference_face,
             first_face=first_face, second_face=second_face,
             start_point=start_point,
+            second_reference_support=second_reference_key, second_reference_face=second_reference_face,
         ))
     return ProjectState(
         step_model=step_model,

@@ -317,6 +317,80 @@ def test_manual_beam_can_use_a_previous_manual_beam_as_its_reference():
     assert errors == []
 
 
+@pytest.mark.parametrize(("layer", "axis", "first_face", "second_face"), [
+    ("width", "x", "x_max", "x_min"), ("length", "y", "y_max", "y_min"),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_manual_beam_stays_centered_between_faces(layer, axis, first_face, second_face, reverse):
+    from dataclasses import replace
+    from palletlab.core.persistence import project_from_dict, project_to_dict
+
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+    reference_layer = "length" if layer == "width" else "width"
+    ref1, ref2 = (reference_layer, 0), (reference_layer, 1)
+    if reverse:
+        ref1, ref2, first_face, second_face = ref2, ref1, second_face, first_face
+    result = controller.add_manual_beam(
+        (layer, 0), (layer, 1), 0, BeamSection(70, 50),
+        reference_support=ref1, reference_face=first_face,
+        second_reference_support=ref2, second_reference_face=second_face,
+    )
+    assert result is not None
+
+    def verify(pallet):
+        beam = next(item for item in pallet.beams_3d if item.layer_id == "manual-1")
+        refs = [next(item for item in pallet.beams_3d if (item.layer_id, item.layer_index) == key) for key in (ref1, ref2)]
+        first_coordinate = controller._reference_face_coordinate(refs[0], first_face)
+        second_coordinate = controller._reference_face_coordinate(refs[1], second_face)
+        assert getattr(beam, axis) == pytest.approx((first_coordinate + second_coordinate) / 2)
+        dimension = next(item for item in editable_dimensions(pallet, tuple(state.manual_beams)) if item.layer_id == "manual-1")
+        assert dimension.start[0 if axis == "x" else 1] == pytest.approx(0 if axis == "x" else pallet.pallet_width)
+        assert dimension.value == pytest.approx(abs(getattr(beam, axis) - beam.size_x / 2 if axis == "x" else beam.y - beam.size_y / 2))
+        assert not dimension.editable
+
+    verify(result)
+    saved = project_to_dict(state)
+    restored = project_from_dict(saved)
+    assert restored.manual_beams[0].second_reference_support == ref2
+    assert restored.manual_beams[0].second_reference_face == second_face
+    changed_length = replace(LENGTH_INPUT, support_distances=(1270, *LENGTH_INPUT.support_distances[1:]))
+    changed_width = replace(WIDTH_INPUT, support_distances=(760, *WIDTH_INPUT.support_distances[1:]))
+    changed = controller.calculate(changed_length, changed_width, "width")
+    assert changed is not None
+    verify(changed)
+    assert errors == []
+
+
+def test_centered_manual_beam_rejects_faces_that_do_not_face_each_other():
+    controller, _state, _view, _timer, _calculated, errors, _stale = _controller()
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+    result = controller.add_manual_beam(
+        ("width", 0), ("width", 1), 0, BeamSection(70, 50),
+        reference_support=("length", 0), reference_face="x_min",
+        second_reference_support=("length", 1), second_reference_face="x_max",
+    )
+    assert result is None
+    assert errors
+
+
+def test_centered_manual_beam_rejects_an_oversized_section_and_protects_both_references():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+    assert controller.add_manual_beam(
+        ("width", 0), ("width", 1), 0, BeamSection(70, 50),
+        reference_support=("length", 0), reference_face="x_max",
+        second_reference_support=("length", 1), second_reference_face="x_min",
+    ) is not None
+    controller.set_section_selection("manual-1", 0, True)
+    assert controller.apply_section_change(BeamSection(70, 500)) is None
+    assert state.manual_beams[0].section == BeamSection(70, 50)
+    controller.set_deletion_selection("length", 1, True)
+    assert controller.confirm_deletion() is None
+    assert state.manual_beams[0].second_reference_support == ("length", 1)
+    assert errors
+
+
 def test_manual_beam_dimensions_follow_the_chosen_reference_side():
     controller, state, _view, _timer, _calculated, errors, _stale = _controller()
     assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None

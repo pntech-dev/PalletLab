@@ -147,6 +147,14 @@ class ApplicationService:
         distance, section, reference, reference_face, start_point, error = _manual_options(options)
         if error:
             return {"ok": False, "error": error}
+        second_reference = None
+        second_reference_face = None
+        if isinstance(options, dict) and options.get("secondReference") is not None:
+            parsed, error = _manual_supports([options["secondReference"], {"layerId": "_placeholder", "layerIndex": 0}])
+            second_reference_face = options.get("secondReferenceFace")
+            if error or reference is None or second_reference_face not in {"x_min", "x_max", "y_min", "y_max"}:
+                return {"ok": False, "error": "Некорректная вторая грань точки отсчёта."}
+            second_reference = parsed[0]
         controller, errors = self._controller_for(state)
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
@@ -154,6 +162,7 @@ class ApplicationService:
             parsed_supports[0], parsed_supports[1], distance, section,
             reference_support=reference, reference_face=reference_face,
             start_point=start_point,
+            second_reference_support=second_reference, second_reference_face=second_reference_face,
         )
         if result is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось добавить брус."}

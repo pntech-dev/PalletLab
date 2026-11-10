@@ -14,6 +14,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 import SceneSettings from "./SceneSettings";
+import { betweenFaces } from "./manualBeamBetween";
 export type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 
 const StepModelViewport = lazy(() => import("./StepModelViewport"));
@@ -403,6 +404,8 @@ export default function PalletViewport({
   manualSupports = [],
     manualSection,
   manualReference,
+  manualSecondReference,
+  manualBetweenMode = false,
   manualDistance = 0,
   manualHud,
   dimensionHud,
@@ -441,6 +444,8 @@ export default function PalletViewport({
   manualSupports?: { beam: ViewportBeam; point: ViewportPoint }[];
     manualSection?: ManualBeamSection;
   manualReference?: ManualReference | null;
+  manualSecondReference?: ManualReference | null;
+  manualBetweenMode?: boolean;
   manualDistance?: number;
   manualHud?: ReactNode;
   dimensionHud?: ReactNode;
@@ -546,6 +551,7 @@ export default function PalletViewport({
   const manualPreview = useMemo(() => {
     if (manualSupports.length !== 2 || !manualSection) return null;
     const [first, second] = manualSupports;
+    if (manualBetweenMode && (!manualReference || !manualSecondReference)) return null;
     const alongX = first.beam.size[0] >= first.beam.size[1];
     const firstCenter = alongX
       ? first.beam.center[1] / 1000
@@ -572,7 +578,11 @@ export default function PalletViewport({
       second.beam.center[2] + second.beam.size[2] / 2,
     ) / 1000;
     let lateral = alongX ? first.point[0] : first.point[2];
-    if (manualReference) {
+    if (manualBetweenMode && manualReference && manualSecondReference) {
+      const placement = betweenFaces(manualReference, manualSecondReference, manualSection.width);
+      if (!placement) return null;
+      lateral = placement.center / 1000;
+    } else if (manualReference) {
       const reference = manualReference.beam;
       const referenceCentre = alongX ? reference.center[0] / 1000 : reference.center[1] / 1000;
       const referenceHalfSize = alongX ? reference.size[0] / 2000 : reference.size[1] / 2000;
@@ -587,7 +597,7 @@ export default function PalletViewport({
         : [(start + end) / 2, bearing + height / 2, lateral]) as ViewportPoint,
       size: alongX ? [thickness, height, length] as [number, number, number] : [length, height, thickness] as [number, number, number],
     };
-  }, [manualDistance, manualReference, manualSection, manualSupports]);
+  }, [manualBetweenMode, manualDistance, manualReference, manualSecondReference, manualSection, manualSupports]);
   const sectionHudAnchor = useMemo<ViewportPoint | null>(() => {
     if (selectedBeams.length === 0) return null;
     const selected = beams.filter((beam) =>
@@ -706,6 +716,7 @@ export default function PalletViewport({
           </mesh>
           )) : null}
           {showDetails && showPallet && manualReference ? <BeamFaceOverlay reference={manualReference} /> : null}
+          {showDetails && showPallet && manualSecondReference ? <BeamFaceOverlay reference={manualSecondReference} /> : null}
           {showDetails && showPallet && manualPreview ? <mesh position={manualPreview.position}>
           <boxGeometry args={manualPreview.size} />
           <meshStandardMaterial color="#36b778" transparent opacity={0.42} depthWrite={false} />

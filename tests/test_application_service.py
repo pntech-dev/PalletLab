@@ -147,6 +147,26 @@ def test_add_manual_beam_uses_two_viewport_supports() -> None:
     assert any(beam["layerId"].startswith("manual-") for beam in response["snapshot"]["pallet"]["beams"])
 
 
+def test_add_centered_manual_beam_round_trips_and_uses_base_dimension() -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    result = service.add_manual_beam(project,
+        [{"layerId": "length", "layerIndex": 0}, {"layerId": "length", "layerIndex": 1}],
+        {"distance": 0, "section": {"height": 70, "width": 50},
+         "reference": {"layerId": "width", "layerIndex": 0}, "referenceFace": "y_max",
+         "secondReference": {"layerId": "width", "layerIndex": 1}, "secondReferenceFace": "y_min"})
+    assert result["ok"], result
+    saved = result["snapshot"]["project"]
+    assert saved["pallet"]["manual_beams"][0]["second_reference"] == ["width", 1]
+    recalculated = service.calculate(saved)
+    assert recalculated["ok"]
+    beam = next(item for item in recalculated["snapshot"]["pallet"]["beams"] if item["layerId"] == "manual-1")
+    dimension = next(item for item in recalculated["snapshot"]["pallet"]["dimensions"] if item["layerId"] == "manual-1")
+    assert dimension["start"][1] == 0
+    assert dimension["value"] == abs(beam["center"][1] - beam["size"][1] / 2)
+    assert dimension["editable"] is False
+
+
 def test_add_manual_beam_keeps_the_first_viewport_point() -> None:
     service = ApplicationService()
     calculated = service.calculate(service.default_project())

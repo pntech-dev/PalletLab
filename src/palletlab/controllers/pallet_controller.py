@@ -101,11 +101,11 @@ class PalletController:
                 upper_layer,
                 self.state.beam_sections,
             )
+            result = self._with_manual_beams(result)
         except CalculationError as exc:
             self._on_stale_changed(True)
             self._on_error(exc, show_error)
             return None
-        result = self._with_manual_beams(result)
         # Apply only a fully calculated candidate.  A failed calculation must
         # leave both the current scene and the editable project untouched.
         self.state.length_input = length_input
@@ -159,6 +159,7 @@ class PalletController:
                 definitions,
                 fallback_directions=fallback_directions,
             )
+            result = self._with_manual_beams(result)
         except CalculationError as exc:
             self._on_stale_changed(True)
             self._on_error(exc, show_error)
@@ -181,7 +182,6 @@ class PalletController:
             rounding_input.rounding_step if rounding_input and rounding_input.round_pallet_size else 0
         )
         self.state.multi_layer_mode = True
-        result = self._with_manual_beams(result)
         self.state.result = result
         self._show_result(result)
         self._on_calculated(result)
@@ -597,6 +597,8 @@ class PalletController:
         supports = [item.first_support, item.second_support]
         if item.reference_support is not None:
             supports.append(item.reference_support)
+        if item.second_reference_support is not None:
+            supports.append(item.second_reference_support)
         return tuple(supports)
 
     def _manual_beams_using_supports(
@@ -623,6 +625,7 @@ class PalletController:
                 first_support=shifted(item.first_support),  # type: ignore[arg-type]
                 second_support=shifted(item.second_support),  # type: ignore[arg-type]
                 reference_support=shifted(item.reference_support),
+                second_reference_support=shifted(item.second_reference_support),
             )
             for item in self.state.manual_beams
         ]
@@ -643,6 +646,7 @@ class PalletController:
                 first_support=shifted(item.first_support),  # type: ignore[arg-type]
                 second_support=shifted(item.second_support),  # type: ignore[arg-type]
                 reference_support=shifted(item.reference_support),
+                second_reference_support=shifted(item.second_reference_support),
             )
             for item in self.state.manual_beams
         ]
@@ -658,12 +662,14 @@ class PalletController:
         section: BeamSection, reference_support: LayerBeamKey | None = None,
         reference_face: str | None = None, first_face: str = "top", second_face: str = "top",
         start_point: tuple[float, float, float] | None = None,
+        second_reference_support: LayerBeamKey | None = None, second_reference_face: str | None = None,
     ) -> PalletResult | None:
         """Store one explicitly supported beam and rebuild the pallet view."""
         current = self.state.result
         supports = {(beam.layer_id, beam.layer_index): beam for beam in current.beams_3d} if current else {}
         first, second = supports.get(first_support), supports.get(second_support)
         reference = supports.get(reference_support) if reference_support is not None else None
+        second_reference = supports.get(second_reference_support) if second_reference_support is not None else None
         physical_layers = beam_layer_ids(self.state.layers, self.state.manual_beams)
         first_layer = physical_layers.get(first.layer_id) if first else None
         second_layer = physical_layers.get(second.layer_id) if second else None
@@ -677,13 +683,26 @@ class PalletController:
                 or not isfinite(section.height) or not isfinite(section.width)
                 or section.height <= 0 or section.width <= 0
                 or (start_point is not None and (len(start_point) != 3 or not all(isfinite(value) for value in start_point)))
-                or (reference_support is not None and reference is None)):
+                or (reference_support is not None and reference is None)
+                or (second_reference_support is not None and second_reference is None)):
             self._on_error(CalculationError("Ручной брус должен опираться на две разные параллельные грани с корректным сечением."), False)
             return None
         if reference is not None:
             allowed_faces = {"x_min", "x_max"} if first.orientation == "length" else {"y_min", "y_max"}
             if reference_face not in allowed_faces:
                 self._on_error(CalculationError("Для ручного бруса выбрана грань неподходящего направления."), False)
+                return None
+        if second_reference_support is not None:
+            if (reference is None or second_reference is None or reference_support == second_reference_support
+                    or (reference_face, second_reference_face) not in (("x_min", "x_max"), ("x_max", "x_min"), ("y_min", "y_max"), ("y_max", "y_min"))):
+                self._on_error(CalculationError("Выберите две противоположные грани разных брусьев."), False)
+                return None
+            first_pos = self._reference_face_coordinate(reference, reference_face)
+            second_pos = self._reference_face_coordinate(second_reference, second_reference_face)
+            if ((reference_face.endswith("max") and first_pos >= second_pos)
+                    or (reference_face.endswith("min") and first_pos <= second_pos)
+                    or abs(second_pos - first_pos) < section.width):
+                self._on_error(CalculationError("Грани должны смотреть друг на друга, а брус должен помещаться между ними."), False)
                 return None
         if self.state.multi_layer_mode:
             layer_index = next(
@@ -704,6 +723,7 @@ class PalletController:
             reference_support=reference_support, reference_face=reference_face,
             first_face=first_face, second_face=second_face,
             start_point=start_point,
+            second_reference_support=second_reference_support, second_reference_face=second_reference_face,
         ))
         result = self.recalculate_from_state()
         if result is None:
@@ -722,8 +742,18 @@ class PalletController:
             if first is None or second is None or first.orientation != second.orientation:
                 continue
             reference = source.get(item.reference_support) if item.reference_support else None
+            second_reference = source.get(item.second_reference_support) if item.second_reference_support else None
             if item.reference_support is not None and reference is None:
                 continue
+            if item.second_reference_support is not None and second_reference is None:
+                continue
+            if reference is not None and second_reference is not None:
+                first_pos = self._reference_face_coordinate(reference, item.reference_face)
+                second_pos = self._reference_face_coordinate(second_reference, item.second_reference_face)
+                if ((item.reference_face == "x_max" or item.reference_face == "y_max") and first_pos >= second_pos
+                        or (item.reference_face == "x_min" or item.reference_face == "y_min") and first_pos <= second_pos
+                        or abs(second_pos - first_pos) < item.section.width):
+                    raise CalculationError("Брус больше не помещается между выбранными гранями.")
             if item.first_face != item.second_face:
                 continue
             bearing = (
@@ -737,6 +767,9 @@ class PalletController:
                 coordinate = self._offset_from_reference(
                     reference, item.reference_face, "x", item.distance, item.section.width,
                 )
+                if reference is not None and second_reference is not None:
+                    coordinate = (self._reference_face_coordinate(reference, item.reference_face)
+                                  + self._reference_face_coordinate(second_reference, item.second_reference_face)) / 2
                 added = Beam3D(
                     coordinate, (start + end) / 2, z,
                     item.section.width, end - start, item.section.height,
@@ -747,6 +780,9 @@ class PalletController:
                 coordinate = self._offset_from_reference(
                     reference, item.reference_face, "y", item.distance, item.section.width,
                 )
+                if reference is not None and second_reference is not None:
+                    coordinate = (self._reference_face_coordinate(reference, item.reference_face)
+                                  + self._reference_face_coordinate(second_reference, item.second_reference_face)) / 2
                 added = Beam3D(
                     (start + end) / 2, coordinate, z,
                     end - start, item.section.width, item.section.height,
@@ -761,6 +797,18 @@ class PalletController:
             return result
         height = max(result.pallet_height, *(beam.z + beam.size_z / 2 for beam in extras))
         return replace(result, beams_3d=(*result.beams_3d, *extras), pallet_height=height)
+
+    @staticmethod
+    def _reference_face_coordinate(beam: Beam3D, face: str | None) -> float:
+        if face == "x_min":
+            return beam.x - beam.size_x / 2
+        if face == "x_max":
+            return beam.x + beam.size_x / 2
+        if face == "y_min":
+            return beam.y - beam.size_y / 2
+        if face == "y_max":
+            return beam.y + beam.size_y / 2
+        raise ValueError("Некорректная грань бруса.")
 
     @staticmethod
     def _manual_span(
