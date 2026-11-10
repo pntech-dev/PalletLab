@@ -59,7 +59,7 @@ input:disabled { cursor: default; background: #ecece8; color: #7d8583; }
 .file-field-control { display: flex; min-width: 0; width: 100%; gap: 8px; }
 .file-field-control input { flex: 1 1 0; width: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-field-control button { flex: 0 0 auto; white-space: nowrap; }
-.modal-actions { display: flex; justify-content: end; gap: 8px; margin-top: 4px; }
+.modal-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 8px; margin-top: 4px; }
 .progress-modal { width: min(420px, 100%); }
 .progress-modal progress { width: 100%; height: 16px; accent-color: #b86131; }
 .result-modal { width: min(500px, 100%); }

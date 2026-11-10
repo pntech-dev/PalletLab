@@ -41,22 +41,30 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check and build web frontend
         shell: pwsh
         working-directory: frontend
         run: |
           npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run static analysis
         shell: pwsh
         run: |
           python -m ruff check src tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m mypy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run tests
         shell: pwsh
@@ -101,7 +109,9 @@ jobs:
           dotnet publish tools/SolidWorksDrawingHelper/SolidWorksDrawingHelper.csproj -c Release -r win-x64 --self-contained true -p:UseInstalledInterop=false -o build/SolidWorksDrawingHelper
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller --noconfirm palletlab.spec
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m PyInstaller --noconfirm updater.spec
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Smoke-test frozen application
         if: github.ref == 'refs/heads/main' && steps.existing_release.outputs.exists == 'false'
@@ -111,6 +121,7 @@ jobs:
             -FilePath .\dist\PalletLab\PalletLab.exe `
             -ArgumentList "--smoke-test" `
             -Wait `
+            -WindowStyle Hidden `
             -PassThru
           if ($smokeTest.ExitCode -ne 0) {
             if (Test-Path .\palletlab-smoke-test-error.log) {
@@ -139,10 +150,13 @@ jobs:
           Compress-Archive -Path "dist\PalletLab" -DestinationPath "PalletLab-$env:VERSION-Portable.zip" -CompressionLevel Optimal
           $hash = (Get-FileHash -Path $updatePath -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $updateName" | Set-Content -NoNewline "$updatePath.sha256"
+          python tests/package_smoke.py "PalletLab-$env:VERSION-Portable.zip" $updatePath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:APP_VERSION = $env:VERSION
           $env:APP_DIST = (Resolve-Path "dist\PalletLab")
           $env:UPDATER_DIST = (Resolve-Path "dist\PalletLabUpdater")
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\PalletLab.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setupPath = Join-Path $PWD "installer\PalletLab-Setup-$env:VERSION.exe"
           "update_path=$updatePath" >> $env:GITHUB_OUTPUT
           "checksum_path=$updatePath.sha256" >> $env:GITHUB_OUTPUT

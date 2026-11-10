@@ -125,7 +125,7 @@ def main() -> int:
         if not result.is_file():
             raise RuntimeError("Timed out waiting for isolated update")
         recorded = [json.loads(line)["event"] for line in events.read_text(encoding="utf-8").splitlines()]
-        required_events = {"update_offered", "download_clicked", "download_verified", "unsaved_blocked", "project_saved"}
+        required_events = {"update_offered", "download_clicked", "download_verified", "unsaved_install_available", "project_saved"}
         if not required_events.issubset(recorded):
             raise RuntimeError(f"Missing UI stages: {required_events - set(recorded)}")
         if (app / "_internal" / "VERSION").read_text().strip() != "9.9.9":
@@ -134,7 +134,7 @@ def main() -> int:
             raise RuntimeError("The test project was not saved")
         if not {"/releases", "/package", "/checksum"}.issubset(requests):
             raise RuntimeError(f"Missing release requests: {requests}")
-        print("PASS: release discovery, download, checksum, save gate, updater handoff and isolated replacement")
+        print("PASS: release discovery, download, checksum, save choice, updater handoff and isolated replacement")
         return 0
     finally:
         server.shutdown()

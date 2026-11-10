@@ -1599,7 +1599,7 @@ export function App() {
               </> : null}
               {update.state === "ready" ? <>
                 <p>Версия {update.version} готова к установке. Приложение закроется.</p>
-                {project && JSON.stringify(project) !== savedProject ? <p>Перед установкой сохраните проект.</p> : null}
+                {project && JSON.stringify(project) !== savedProject ? <p>Несохранённые изменения могут быть потеряны. Вы можете сохранить проект перед установкой.</p> : null}
               </> : null}
               {update.state === "installing" ? <p>Запускается установка обновления…</p> : null}
               {update.error ? <p className="error">{update.error}</p> : null}
@@ -1607,7 +1607,7 @@ export function App() {
                 {update.state !== "downloading" && update.state !== "installing" ? <button type="button" className="secondary" onClick={() => setUpdateDismissed(true)}>Позже</button> : null}
                 {update.state === "available" || update.state === "failed" ? <button type="button" onClick={() => void window.pywebview?.api?.download_update().then(setUpdate)}>Скачать</button> : null}
                 {update.state === "ready" && project && JSON.stringify(project) !== savedProject ? <button type="button" disabled={saving} onClick={() => void saveProject()}>Сохранить проект</button> : null}
-                {update.state === "ready" ? <button type="button" disabled={!project || JSON.stringify(project) !== savedProject || saving} onClick={() => void window.pywebview?.api?.install_update().then(setUpdate)}>Установить</button> : null}
+                {update.state === "ready" ? <button type="button" disabled={saving} onClick={() => void window.pywebview?.api?.install_update().then(setUpdate)}>{project && JSON.stringify(project) !== savedProject ? "Установить без сохранения" : "Установить"}</button> : null}
               </footer>
             </section>
           </div>

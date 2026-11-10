@@ -174,15 +174,37 @@ class UpdaterDialog(QDialog):
         super().__init__()
         self.setWindowTitle("Обновление PalletLab")
         self.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(440)
+        self.setStyleSheet("""
+            QDialog { background: #fbfaf7; color: #273033; font-family: 'Segoe UI'; font-size: 13px; }
+            QLabel#updateTitle { color: #273033; font-size: 20px; font-weight: 600; }
+            QLabel#updateStatus { color: #56615f; font-size: 13px; }
+            QProgressBar { background: #e6e6e1; border: none; border-radius: 5px; height: 10px; }
+            QProgressBar::chunk { background: #b86131; border-radius: 5px; }
+            QPushButton { min-height: 32px; padding: 0 14px; border: 1px solid transparent;
+                          border-radius: 8px; background: #315b61; color: white; font-weight: 600; }
+            QPushButton:hover:!disabled { background: #25474d; }
+            QPushButton:disabled { background: #d5dbd9; color: #8c9794; }
+            QPushButton#secondary { border: 1px solid #c4c8c4; background: #fffefb; color: #3b5357; }
+            QPushButton#secondary:hover { background: #f2f1ec; }
+        """)
+        title = QLabel("Обновление PalletLab")
+        title.setObjectName("updateTitle")
         self.label = QLabel("Подготовка обновления…")
+        self.label.setObjectName("updateStatus")
         self.label.setWordWrap(True)
         self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.setAccessibleName("Ход установки обновления")
         self.close_button, self.open_button = QPushButton("Закрыть"), QPushButton("Открыть")
+        self.close_button.setObjectName("secondary")
         self.open_button.setEnabled(False)
         self.close_button.clicked.connect(self.reject)
         self.open_button.clicked.connect(self._open)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+        layout.addWidget(title)
         layout.addWidget(self.label)
         layout.addWidget(self.bar)
         buttons = QHBoxLayout()
