@@ -15,45 +15,49 @@ function example() {
   return { pallet: { length: x, width: y, layers: [
     { id: "x", axis: "length" as const, direction: x },
     { id: "y", axis: "width" as const, direction: y },
+    { id: "x2", axis: "length" as const, direction: x },
   ], upper_layer: "width" as const, material_id: "spruce", manual_beams: [{ start_point: [250, 300, 70] }] },
   view: { camera: "top" as const, show_length_dimensions: true, show_width_dimensions: true, hidden_layer_ids: [] } };
 }
 
-test("visible sides address the requested axes and their own links", () => {
+test("each visible side changes its physical axis and endpoint", () => {
   assert.deepEqual(MARGIN_PAIRS.map(({ first, second, link }) => [first, second, link]), [[0, 1, 0], [2, 3, 1]]);
-  let project = toggleMarginLink(example(), MARGIN_PAIRS[0].link);
-  project = toggleMarginLink(project, MARGIN_PAIRS[1].link);
-  const left = changePalletMargin(project, MARGIN_PAIRS[0].first, 130);
-  assert.deepEqual(palletMargins(left), [130, 100, 100, 100]);
-  const right = changePalletMargin(project, MARGIN_PAIRS[0].second, 140);
-  assert.deepEqual(palletMargins(right), [100, 140, 100, 100]);
-  const top = changePalletMargin(project, MARGIN_PAIRS[1].first, 150);
-  assert.deepEqual(palletMargins(top), [100, 100, 150, 100]);
-  const bottom = changePalletMargin(project, MARGIN_PAIRS[1].second, 160);
-  assert.deepEqual(palletMargins(bottom), [100, 100, 100, 160]);
+  const project = toggleMarginLink(toggleMarginLink(example(), 0), 1);
+  for (const [index, expected, xStart, xEnd, yStart, yEnd] of [
+    [MARGIN_PAIRS[0].first, [130, 100, 100, 100], 130, 100, 100, 100],
+    [MARGIN_PAIRS[0].second, [100, 130, 100, 100], 100, 130, 100, 100],
+    [MARGIN_PAIRS[1].first, [100, 100, 130, 100], 100, 100, 130, 100],
+    [MARGIN_PAIRS[1].second, [100, 100, 100, 130], 100, 100, 100, 130],
+  ] as const) {
+    const changed = changePalletMargin(project, index, 130);
+    assert.deepEqual(palletMargins(changed), expected);
+    for (const layer of changed.pallet.layers) {
+      assert.equal(layer.direction.margin_start, layer.axis === "length" ? xStart : yStart);
+      assert.equal(layer.direction.margin_end, layer.axis === "length" ? xEnd : yEnd);
+    }
+    assert.deepEqual(changed.pallet.manual_beams?.[0].start_point, [250 + xStart - 100, 300 + yStart - 100, 70]);
+  }
 });
 
-test("linked margins change together only on their own axis", () => {
+test("links affect only their physical axis and persist in X/Y order", () => {
   const project = example();
   assert.deepEqual(marginLinks(project), [true, true]);
-  const changed = changePalletMargin(project, 0, 200);
-  assert.deepEqual(palletMargins(changed), [200, 200, 100, 100]);
-  assert.deepEqual(changed.pallet.layers[0].direction.support_positions, [300, 800]);
-  assert.deepEqual(changed.pallet.layers[1].direction.support_positions, [250, 750]);
-  assert.deepEqual(changed.pallet.manual_beams?.[0].start_point, [350, 300, 70]);
+  const left = changePalletMargin(project, MARGIN_PAIRS[0].first, 200);
+  assert.deepEqual(palletMargins(left), [200, 200, 100, 100]);
+  assert.deepEqual(left.pallet.layers[0].direction.support_positions, [300, 800]);
+  assert.deepEqual(left.pallet.layers[1].direction.support_positions, [250, 750]);
+  assert.deepEqual(left.pallet.manual_beams?.[0].start_point, [350, 300, 70]);
+  const top = changePalletMargin(project, MARGIN_PAIRS[1].first, 150);
+  assert.deepEqual(palletMargins(top), [100, 100, 150, 150]);
+  assert.deepEqual(top.pallet.manual_beams?.[0].start_point, [250, 350, 70]);
   assert.deepEqual(project.pallet.layers[0].direction.support_positions, [200, 700]);
 });
 
-test("unlink, change independently, and relink to the first value", () => {
-  const unlinked = toggleMarginLink(example(), 1);
-  assert.deepEqual(marginLinks(unlinked), [true, false]);
-  const changed = changePalletMargin(unlinked, 3, 150);
+test("relink copies the first displayed value to the second", () => {
+  const unlinked = toggleMarginLink(example(), MARGIN_PAIRS[1].link);
+  const changed = changePalletMargin(unlinked, MARGIN_PAIRS[1].second, 150);
   assert.deepEqual(palletMargins(changed), [100, 100, 100, 150]);
-  assert.deepEqual(changed.pallet.layers[1].direction.support_positions, [250, 750]);
-  const relinked = toggleMarginLink(changed, 1);
+  const relinked = toggleMarginLink(changed, MARGIN_PAIRS[1].link);
   assert.deepEqual(palletMargins(relinked), [100, 100, 100, 100]);
-  const moved = changePalletMargin(relinked, 2, 125);
-  assert.deepEqual(palletMargins(moved), [100, 100, 125, 125]);
-  assert.deepEqual(moved.pallet.layers[1].direction.support_positions, [275, 775]);
-  assert.deepEqual(moved.pallet.manual_beams?.[0].start_point, [250, 325, 70]);
+  assert.deepEqual(relinked.pallet.manual_beams?.[0].start_point, [250, 300, 70]);
 });

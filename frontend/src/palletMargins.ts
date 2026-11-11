@@ -3,8 +3,7 @@ import type { Direction, Project } from "./App";
 export type Margins = [number, number, number, number];
 export type MarginIndex = 0 | 1 | 2 | 3;
 
-// Persisted values are in X-/X+/Y-/Y+ order. The controls use the
-// controls: left/right change X-/X+, top/bottom change Y-/Y+.
+// Persisted values are in X-/X+/Y-/Y+ order; control order is independent.
 export const MARGIN_PAIRS = [
   { first: 0, second: 1, link: 0, labels: ["Слева, мм", "Справа, мм"], description: "слева и справа" },
   { first: 2, second: 3, link: 1, labels: ["Сверху, мм", "Снизу, мм"], description: "сверху и снизу" },
@@ -32,8 +31,9 @@ export function changePalletMargin(project: Project, index: MarginIndex, next: n
   const margins: Margins = [...old];
   const links = marginLinks(project);
   margins[index] = next;
-  if (index === 0 && links[0]) margins[1] = next;
-  if (index === 2 && links[1]) margins[3] = next;
+  for (const pair of MARGIN_PAIRS) {
+    if (index === pair.first && links[pair.link]) margins[pair.second] = next;
+  }
   const deltas = margins.map((value, i) => value - old[i]);
   const shift = (direction: Direction, axis: "length" | "width"): Direction => {
     const offset = axis === "length" ? 0 : 2;
@@ -67,7 +67,7 @@ export function toggleMarginLink(project: Project, pair: 0 | 1): Project {
   let result: Project = { ...project, pallet: { ...project.pallet, pallet_margin_links: links } };
   if (links[pair]) {
     const margins = palletMargins(result);
-    const first = pair === 0 ? 0 : 2;
+    const first = MARGIN_PAIRS.find((item) => item.link === pair)!.first;
     result = changePalletMargin(result, first, margins[first]);
   }
   return result;
