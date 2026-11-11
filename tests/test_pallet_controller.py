@@ -191,6 +191,41 @@ def test_adding_the_first_extra_layer_preserves_legacy_section_changes():
     assert errors == []
 
 
+def test_deleting_beams_on_a_new_layer_keeps_other_layers_section_changes():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    assert controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width") is not None
+    controller.set_section_selection("length", 1, True)
+    assert controller.apply_section_change(BeamSection(100, 80)) is not None
+    controller.clear_section_selection()
+
+    layers = [
+        LayerInput("length", "length", LENGTH_INPUT),
+        LayerInput("width", "width", WIDTH_INPUT),
+        LayerInput("layer-1", "length", LENGTH_INPUT),
+    ]
+    assert controller.calculate_layers(layers) is not None
+    controller.set_section_selection("layer-1", 2, True)
+    assert controller.apply_section_change(BeamSection(90, 60)) is not None
+    controller.clear_section_selection()
+
+    controller.set_deletion_selection("layer-1", 1, True)
+    assert controller.confirm_deletion() is not None
+    assert controller.recalculate_from_state() is not None
+
+    # Deleting an internal beam renumbers only the edited layer: the override
+    # of the untouched "length" layer stays on the same physical beam, while
+    # the override of the edited layer follows its new index.
+    assert state.layer_sections[("length", 1)] == BeamSection(100, 80)
+    assert state.layer_sections[("layer-1", 1)] == BeamSection(90, 60)
+    result = state.result
+    assert result is not None
+    length_beam = next(beam for beam in result.beams_3d if beam.layer_id == "length" and beam.layer_index == 1)
+    assert (length_beam.size_x, length_beam.size_z) == (80, 100)
+    edited_layer_beam = next(beam for beam in result.beams_3d if beam.layer_id == "layer-1" and beam.layer_index == 1)
+    assert (edited_layer_beam.size_x, edited_layer_beam.size_z) == (60, 90)
+    assert errors == []
+
+
 def test_manual_beam_spans_the_outer_edges_of_two_selected_supports():
     controller, state, _view, _timer, _calculated, errors, _stale = _controller()
     result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")

@@ -579,10 +579,20 @@ class PalletController:
             self.state.beam_sections = moved
 
     def _reindex_sections_after_deletion(self, layer_id: str, indices: set[int]) -> None:
-        """Drop removed overrides and move following overrides to their new beam indices."""
+        """Drop removed overrides and move following overrides to their new beam indices.
+
+        Beam indices of other layers are independent, so deleting beams on one
+        layer must never move the section overrides of a parallel layer.
+        """
         sections = self.state.layer_sections if self.state.multi_layer_mode else self.state.beam_sections
+
+        def shifted(key_layer: str, index: int) -> int:
+            if key_layer != layer_id:
+                return index
+            return index - sum(removed < index for removed in indices)
+
         moved = {
-            (key_layer, index - sum(removed < index for removed in indices)): section
+            (key_layer, shifted(key_layer, index)): section
             for (key_layer, index), section in sections.items()
             if key_layer != layer_id or index not in indices
         }
