@@ -307,6 +307,7 @@ class PalletController:
             return None
         self._replace_layer_input(layer_id, updated)
         self._shift_sections_after_insertion(layer_id, slot.after_beam_index)
+        self._remember_inserted_section(layer_id, slot.after_beam_index, data)
         self._shift_manual_supports_after_insertion(layer_id, slot.after_beam_index)
         self.state.pending_insertion = None
         return layer_id, updated
@@ -577,6 +578,11 @@ class PalletController:
             self.state.layer_sections = moved
         else:
             self.state.beam_sections = moved
+
+    def _remember_inserted_section(self, layer_id: str, after_index: int, data: DirectionInput) -> None:
+        """Freeze the layer default for a manually inserted beam."""
+        sections = self.state.layer_sections if self.state.multi_layer_mode else self.state.beam_sections
+        sections[(layer_id, after_index + 1)] = BeamSection(data.beam_height, data.beam_width)
 
     def _reindex_sections_after_deletion(self, layer_id: str, indices: set[int]) -> None:
         """Drop removed overrides and move following overrides to their new beam indices.

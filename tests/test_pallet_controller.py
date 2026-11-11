@@ -226,6 +226,60 @@ def test_deleting_beams_on_a_new_layer_keeps_other_layers_section_changes():
     assert errors == []
 
 
+def test_insertion_uses_layer_section_even_if_anchor_was_manually_changed():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    layers = [
+        LayerInput("bottom", "length", LENGTH_INPUT),
+        LayerInput("middle", "width", WIDTH_INPUT),
+        LayerInput("top", "length", LENGTH_INPUT),
+    ]
+    assert controller.calculate_layers(layers) is not None
+    controller.set_section_selection("top", 1, True)
+    assert controller.apply_section_change(BeamSection(100, 80)) is not None
+    controller.clear_section_selection()
+
+    slot = next(slot for slot in insertion_slots_for_direction("top", "length", calculate_direction(LENGTH_INPUT))
+                if slot.after_beam_index == 1)
+    assert controller.begin_insertion(slot)
+    assert controller.confirm_insertion(100) is not None
+    assert controller.recalculate_from_state() is not None
+
+    assert state.layer_sections[("top", 2)] == BeamSection(70, 50)
+    added = next(beam for beam in state.result.beams_3d if beam.layer_id == "top" and beam.layer_index == 2)
+    assert (added.size_x, added.size_z) == (50, 70)
+    assert errors == []
+
+
+def test_insertion_without_section_overrides_keeps_the_layer_form_section():
+    controller, state, _view, _timer, _calculated, errors, _stale = _controller()
+    layers = [
+        LayerInput("bottom", "length", LENGTH_INPUT),
+        LayerInput("middle", "width", WIDTH_INPUT),
+        LayerInput("top", "length", LENGTH_INPUT),
+    ]
+    assert controller.calculate_layers(layers) is not None
+
+    slot = next(slot for slot in insertion_slots_for_direction("top", "length", calculate_direction(LENGTH_INPUT))
+                if slot.after_beam_index == 1)
+    assert controller.begin_insertion(slot)
+    assert controller.confirm_insertion(100) is not None
+    assert controller.recalculate_from_state() is not None
+
+    # An inserted beam keeps its initial section when the layer is edited.
+    assert state.layer_sections[("top", 2)] == BeamSection(70, 50)
+    added = next(beam for beam in state.result.beams_3d if beam.layer_id == "top" and beam.layer_index == 2)
+    assert (added.size_x, added.size_z) == (50, 70)
+    from dataclasses import replace
+    changed = [*state.layers[:-1], replace(state.layers[-1], direction=replace(state.layers[-1].direction, beam_height=100, beam_width=80))]
+    result = controller.calculate_layers(changed)
+    assert result is not None
+    inserted = next(beam for beam in result.beams_3d if beam.layer_id == "top" and beam.layer_index == 2)
+    automatic = next(beam for beam in result.beams_3d if beam.layer_id == "top" and beam.layer_index == 3)
+    assert (inserted.size_x, inserted.size_z) == (50, 70)
+    assert (automatic.size_x, automatic.size_z) == (80, 100)
+    assert errors == []
+
+
 def test_manual_beam_spans_the_outer_edges_of_two_selected_supports():
     controller, state, _view, _timer, _calculated, errors, _stale = _controller()
     result = controller.calculate(LENGTH_INPUT, WIDTH_INPUT, "width")

@@ -20,6 +20,7 @@ import type { StepModelPayload } from "./stepModelGeometry";
 import { changePalletMargin, marginLinks, MARGIN_PAIRS, palletMargins, toggleMarginLink, type MarginIndex } from "./palletMargins";
 import { remainingImportFeedback, stepImportPhase } from "./stepImportUi";
 import { betweenFaces, type BeamReference, type BeamReferenceFace } from "./manualBeamBetween";
+import { manualSectionForSupport } from "./manualBeamSection";
 
 const startupStartedAt = performance.now();
 
@@ -380,8 +381,12 @@ export function App() {
   const [manualReferenceFace, setManualReferenceFace] = useState<BeamReferenceFace>("x_min");
   const [manualSecondReference, setManualSecondReference] = useState<BeamReference | null>(null);
   const firstManualReference = manualReference ? { beam: manualReference, face: manualReferenceFace } : null;
+  function manualSectionFor(beam: ViewportBeam | null | undefined): BeamSection {
+    return manualSectionForSupport(project?.pallet.layers ?? [], beam, section);
+  }
+  const manualBeamSection = manualSectionFor(manualSupports[0]?.beam);
   const manualBetween = firstManualReference && manualSecondReference
-    ? betweenFaces(firstManualReference, manualSecondReference, section.width) : null;
+    ? betweenFaces(firstManualReference, manualSecondReference, manualBeamSection.width) : null;
   const [viewportToolError, setViewportToolError] = useState<string | null>(null);
   const [viewportToolErrorVersion, setViewportToolErrorVersion] = useState(0);
   const [, setHistoryVersion] = useState(0);
@@ -997,7 +1002,7 @@ export function App() {
 
   function basePointDistance(support: { beam: ViewportBeam; point: ViewportPoint }) {
     const alongX = support.beam.size[0] >= support.beam.size[1];
-    return (alongX ? support.point[0] : support.point[2]) * 1000 - section.width / 2;
+    return (alongX ? support.point[0] : support.point[2]) * 1000 - manualSectionFor(support.beam).width / 2;
   }
 
   function toggleBeam(beam: ViewportBeam, point?: ViewportPoint, normal?: ViewportFaceNormal) {
@@ -1015,7 +1020,7 @@ export function App() {
           : directionalNormal > 0 ? "y_max" : "y_min";
         if (manualReferenceMode === "between" && manualReference) {
           const candidate = { beam, face };
-          if (!betweenFaces({ beam: manualReference, face: manualReferenceFace }, candidate, section.width)) {
+          if (!betweenFaces({ beam: manualReference, face: manualReferenceFace }, candidate, manualBeamSection.width)) {
             showViewportToolError("Выберите противоположную грань другого бруса, чтобы новый брус поместился между ними.");
             return;
           }
@@ -1226,7 +1231,7 @@ export function App() {
       })),
       {
         distance: manualReferenceMode === "between" ? manualBetween!.baseDistance : manualDistance,
-        section,
+        section: manualBeamSection,
         reference: manualReference ? { layerId: manualReference.layerId, layerIndex: manualReference.layerIndex } : undefined,
         referenceFace: manualReference ? manualReferenceFace : undefined,
         secondReference: manualReferenceMode === "between" && manualSecondReference
@@ -2097,7 +2102,7 @@ export function App() {
                 selectedSlot={selectedSlot}
                 onSelectInsertion={selectInsertion}
                 manualSupports={manualSupports}
-                manualSection={section}
+                manualSection={manualBeamSection}
                 manualReference={manualReference ? { beam: manualReference, face: manualReferenceFace } : null}
                 manualSecondReference={manualReferenceMode === "between" ? manualSecondReference : null}
                 manualBetweenMode={manualReferenceMode === "between"}

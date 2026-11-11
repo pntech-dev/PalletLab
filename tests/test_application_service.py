@@ -147,6 +147,34 @@ def test_add_manual_beam_uses_two_viewport_supports() -> None:
     assert any(beam["layerId"].startswith("manual-") for beam in response["snapshot"]["pallet"]["beams"])
 
 
+def test_changing_layer_section_preserves_manual_and_individually_edited_beams() -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    changed = service.change_beam_sections(project, {"width": [1]}, {"height": 90, "width": 60})
+    assert changed["ok"], changed
+    created = service.add_manual_beam(
+        changed["snapshot"]["project"],
+        [{"layerId": "length", "layerIndex": 1}, {"layerId": "length", "layerIndex": 2}],
+        {"distance": 100, "section": {"height": 70, "width": 50}},
+    )
+    assert created["ok"], created
+    project = created["snapshot"]["project"]
+    layer = next(layer for layer in project["pallet"]["layers"] if layer["id"] == "width")
+    layer["direction"].update({"beam_height": 100, "beam_width": 80})
+    result = service.calculate(project)
+    assert result["ok"], result
+    beams = result["snapshot"]["pallet"]["beams"]
+    edited = next(b for b in beams if b["layerId"] == "width" and b["layerIndex"] == 1)
+    regular = next(b for b in beams if b["layerId"] == "width" and b["layerIndex"] == 2)
+    manual = next(b for b in beams if b["layerId"] == "manual-1")
+    def section(beam):
+        return (beam["size"][1 if beam["orientation"] == "length" else 0], beam["size"][2])
+
+    assert section(edited) == (60, 90)
+    assert section(regular) == (80, 100)
+    assert section(manual) == (50, 70)
+
+
 def test_add_centered_manual_beam_round_trips_and_uses_base_dimension() -> None:
     service = ApplicationService()
     project = service.default_project()
