@@ -1,4 +1,15 @@
-from palletlab.desktop.web_host import WebApplicationApi, _WebSettings
+from pathlib import Path
+
+from palletlab.desktop.web_host import WebApplicationApi, _WebSettings, _frontend_content_type
+
+
+def test_frontend_mime_types_do_not_depend_on_windows_registry(monkeypatch) -> None:
+    monkeypatch.setattr("palletlab.desktop.web_host.mimetypes.guess_type", lambda _name: ("text/plain", None))
+    assert _frontend_content_type(Path("index.html")) == "text/html"
+    assert _frontend_content_type(Path("index.js")) == "text/javascript"
+    assert _frontend_content_type(Path("module.MJS")) == "text/javascript"
+    assert _frontend_content_type(Path("style.css")) == "text/css"
+    assert _frontend_content_type(Path("other.bin")) == "text/plain"
 
 
 def test_web_application_api_reports_compatible_snapshot_version() -> None:

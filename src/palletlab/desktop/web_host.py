@@ -332,6 +332,12 @@ class _WebSettings:
             temporary.unlink(missing_ok=True)
 
 
+def _frontend_content_type(path: Path) -> str:
+    """Serve web entrypoints consistently even when Windows registry MIME types differ."""
+    known = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".html": "text/html"}
+    return known.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+
+
 class _StepAssetServer:
     """Serve bundled web assets and opaque STEP buffers from one loopback origin."""
 
@@ -376,7 +382,7 @@ class _StepAssetServer:
                     self.send_error(404)
                     return
                 self.send_response(200)
-                self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+                self.send_header("Content-Type", _frontend_content_type(path))
                 self.send_header("Content-Length", str(path.stat().st_size))
                 self.end_headers()
                 with path.open("rb") as stream:

@@ -10,7 +10,10 @@ test_scripts/.step_cache/
 htmlcov/
 build/
 dist/
+installer/*.exe
 frontend/dist/
+tools/SolidWorksDrawingHelper/bin/Release/
+tools/SolidWorksDrawingHelper/obj/Release/
 frontend/node_modules/
 frontend/*.tsbuildinfo
 *.spec.tmp

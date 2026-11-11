@@ -1,8 +1,14 @@
 {
   "version": 2,
-  "dgSpecHash": "+0UotgcFheE=",
+  "dgSpecHash": "k4hHc5gVSho=",
   "success": true,
-  "projectFilePath": "E:\\Python Projects\\PalleteLab\\tools\\SolidWorksDrawingHelper\\SolidWorksDrawingHelper.csproj",
-  "expectedPackageFiles": [],
+  "projectFilePath": "E:\\Projects\\Python Projects\\PalleteLab\\tools\\SolidWorksDrawingHelper\\SolidWorksDrawingHelper.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\User\\.nuget\\packages\\solidworks.interop.sldworks\\32.1.0\\solidworks.interop.sldworks.32.1.0.nupkg.sha512",
+    "C:\\Users\\User\\.nuget\\packages\\solidworks.interop.swconst\\32.1.0\\solidworks.interop.swconst.32.1.0.nupkg.sha512",
+    "C:\\Users\\User\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\10.0.12\\microsoft.netcore.app.runtime.win-x64.10.0.12.nupkg.sha512",
+    "C:\\Users\\User\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\10.0.12\\microsoft.windowsdesktop.app.runtime.win-x64.10.0.12.nupkg.sha512",
+    "C:\\Users\\User\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\10.0.12\\microsoft.aspnetcore.app.runtime.win-x64.10.0.12.nupkg.sha512"
+  ],
   "logs": []
 }

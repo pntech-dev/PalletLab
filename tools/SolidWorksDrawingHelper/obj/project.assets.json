@@ -1,11 +1,78 @@
 {
   "version": 4,
   "targets": {
-    "net10.0-windows": {}
+    "net10.0-windows": {
+      "SolidWorks.Interop.sldworks/32.1.0": {
+        "type": "package",
+        "compile": {
+          "lib/netstandard2.0/SolidWorks.Interop.sldworks.dll": {}
+        },
+        "runtime": {
+          "lib/netstandard2.0/SolidWorks.Interop.sldworks.dll": {}
+        }
+      },
+      "SolidWorks.Interop.swconst/32.1.0": {
+        "type": "package",
+        "compile": {
+          "lib/netstandard2.0/SolidWorks.Interop.swconst.dll": {}
+        },
+        "runtime": {
+          "lib/netstandard2.0/SolidWorks.Interop.swconst.dll": {}
+        }
+      }
+    },
+    "net10.0-windows/win-x64": {
+      "SolidWorks.Interop.sldworks/32.1.0": {
+        "type": "package",
+        "compile": {
+          "lib/netstandard2.0/SolidWorks.Interop.sldworks.dll": {}
+        },
+        "runtime": {
+          "lib/netstandard2.0/SolidWorks.Interop.sldworks.dll": {}
+        }
+      },
+      "SolidWorks.Interop.swconst/32.1.0": {
+        "type": "package",
+        "compile": {
+          "lib/netstandard2.0/SolidWorks.Interop.swconst.dll": {}
+        },
+        "runtime": {
+          "lib/netstandard2.0/SolidWorks.Interop.swconst.dll": {}
+        }
+      }
+    }
   },
-  "libraries": {},
+  "libraries": {
+    "SolidWorks.Interop.sldworks/32.1.0": {
+      "sha512": "lq3QmJwBbVE3K+pN5JFSGn1Bj7J1vUyTr4TtT23UAOtd8MXLElZROm9Iee2N8SP8AXsLTpXdBXGs7xYeJT53qw==",
+      "type": "package",
+      "path": "solidworks.interop.sldworks/32.1.0",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "lib/netstandard2.0/SolidWorks.Interop.sldworks.dll",
+        "solidworks.interop.sldworks.32.1.0.nupkg.sha512",
+        "solidworks.interop.sldworks.nuspec"
+      ]
+    },
+    "SolidWorks.Interop.swconst/32.1.0": {
+      "sha512": "mOLeWDKf0hX7iSNmdc22FmwoCaqH3KuNhODNGdWuT36KB/maGzQdfU+r9YS97n3mMIdWN3qaLBQ4eJG8z77rMw==",
+      "type": "package",
+      "path": "solidworks.interop.swconst/32.1.0",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "lib/netstandard2.0/SolidWorks.Interop.swconst.dll",
+        "solidworks.interop.swconst.32.1.0.nupkg.sha512",
+        "solidworks.interop.swconst.nuspec"
+      ]
+    }
+  },
   "projectFileDependencyGroups": {
-    "net10.0-windows": []
+    "net10.0-windows": [
+      "SolidWorks.Interop.sldworks >= 32.1.0",
+      "SolidWorks.Interop.swconst >= 32.1.0"
+    ]
   },
   "packageFolders": {
     "C:\\Users\\User\\.nuget\\packages\\": {}
@@ -13,11 +80,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "E:\\Python Projects\\PalleteLab\\tools\\SolidWorksDrawingHelper\\SolidWorksDrawingHelper.csproj",
+      "projectUniqueName": "E:\\Projects\\Python Projects\\PalleteLab\\tools\\SolidWorksDrawingHelper\\SolidWorksDrawingHelper.csproj",
       "projectName": "SolidWorksDrawingHelper",
-      "projectPath": "E:\\Python Projects\\PalleteLab\\tools\\SolidWorksDrawingHelper\\SolidWorksDrawingHelper.csproj",
+      "projectPath": "E:\\Projects\\Python Projects\\PalleteLab\\tools\\SolidWorksDrawingHelper\\SolidWorksDrawingHelper.csproj",
       "packagesPath": "C:\\Users\\User\\.nuget\\packages\\",
-      "outputPath": "E:\\Python Projects\\PalleteLab\\tools\\SolidWorksDrawingHelper\\obj\\",
+      "outputPath": "E:\\Projects\\Python Projects\\PalleteLab\\tools\\SolidWorksDrawingHelper\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\User\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -51,6 +118,16 @@
       "net10.0-windows": {
         "framework": "net10.0-windows7.0",
         "targetAlias": "net10.0-windows",
+        "dependencies": {
+          "SolidWorks.Interop.sldworks": {
+            "target": "Package",
+            "version": "[32.1.0, )"
+          },
+          "SolidWorks.Interop.swconst": {
+            "target": "Package",
+            "version": "[32.1.0, )"
+          }
+        },
         "imports": [
           "net461",
           "net462",
@@ -62,6 +139,20 @@
         ],
         "assetTargetFallback": true,
         "warn": true,
+        "downloadDependencies": [
+          {
+            "name": "Microsoft.AspNetCore.App.Runtime.win-x64",
+            "version": "[10.0.12, 10.0.12]"
+          },
+          {
+            "name": "Microsoft.NETCore.App.Runtime.win-x64",
+            "version": "[10.0.12, 10.0.12]"
+          },
+          {
+            "name": "Microsoft.WindowsDesktop.App.Runtime.win-x64",
+            "version": "[10.0.12, 10.0.12]"
+          }
+        ],
         "frameworkReferences": {
           "Microsoft.NETCore.App": {
             "privateAssets": "all"
@@ -361,6 +452,11 @@
           "System.Xml.XPath": "(,4.3.32767]",
           "System.Xml.XPath.XDocument": "(,5.0.32767]"
         }
+      }
+    },
+    "runtimes": {
+      "win-x64": {
+        "#import": []
       }
     }
   }
