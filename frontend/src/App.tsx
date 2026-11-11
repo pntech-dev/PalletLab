@@ -403,6 +403,9 @@ export function App() {
   const connectionStarted = useRef(false);
   const calculatedInitialProject = useRef<Project | null>(null);
   const stepPlacement = useRef<{ transform: number[]; starts: [number, number] } | null>(null);
+  // Set by a project reset and consumed by the first calculation that lands
+  // afterwards, so the isometric preset applies with the fresh bounds.
+  const resetCameraPending = useRef(false);
   const stepRestoreGeneration = useRef(0);
   const [stepRestoreError, setStepRestoreError] = useState<string | null>(null);
 
@@ -545,7 +548,15 @@ export function App() {
     if (response.ok && response.snapshot) {
       setCalculation(response);
       setCalculationError(null);
+      if (resetCameraPending.current) {
+        // A project reset replaced the whole scene: return the camera to the
+        // default isometric view once the reset snapshot has rendered, exactly
+        // like building a pallet from a model does.
+        resetCameraPending.current = false;
+        setCameraRequest((value) => value + 1);
+      }
     } else {
+      resetCameraPending.current = false;
       const message = response.error ?? "Не удалось рассчитать поддон.";
       if (insertionMode || beamTool !== "none" || dimensionEditing) {
         showViewportToolError(message);
@@ -994,6 +1005,9 @@ export function App() {
       pallet: { ...defaultProject.pallet, material_id: project.pallet.material_id },
     };
     updateProject(nextProject);
+    // The reset recalculation is debounced; the camera command is consumed by
+    // the first calculation that lands afterwards.
+    resetCameraPending.current = true;
     stepRestoreGeneration.current += 1;
     setStepRestoreError(null);
     setStepImport(null);
