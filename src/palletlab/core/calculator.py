@@ -350,7 +350,7 @@ def build_multilayer_pallet(
                 continue
             # The first layer is top-aligned to provide one continuous bearing
             # plane for the next layer.  Other layers rest on the plane below.
-            z = top_z - section.height / 2 if layer_index == 0 else base_z + section.height / 2
+            z = top_z - section.height / 2 if layer_index == 0 or layer.align_top else base_z + section.height / 2
             if layer.axis == "length":
                 beams.append(Beam3D(
                     centre, pallet_width / 2, z, section.width, pallet_width, section.height,

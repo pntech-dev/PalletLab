@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from math import isfinite
 from pathlib import Path
 from typing import Any, cast
@@ -182,6 +183,75 @@ class ApplicationService:
         if _locked_layer_content(state) != locked_before:
             return {"ok": False, "error": "Операция изменяет заблокированный слой. Сначала разблокируйте его."}
         return {"ok": True, "snapshot": project_snapshot(state)}
+
+    def duplicate_layer(self, project: object, layer_id: object) -> dict[str, Any]:
+        """Copy a complete physical layer directly above its source."""
+        try:
+            state = project_from_dict(project)
+        except ProjectPersistenceError as exc:
+            return {"ok": False, "error": str(exc)}
+        index = next((i for i, layer in enumerate(state.layers) if layer.layer_id == layer_id), None)
+        if index is None:
+            return {"ok": False, "error": "Выбранный слой больше не существует."}
+        controller, errors = self._controller_for(state)
+        result = controller.recalculate_from_state(show_error=False)
+        if result is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
+
+        original_layers = beam_layer_ids(state.layers, state.manual_beams)
+        original_beams = {beam.layer_id: beam for beam in result.beams_3d if beam.layer_id in original_layers}
+        layer_results = {layer.layer_id: layer for layer in result.layers}
+        anchored = []
+        for manual in state.manual_beams:
+            physical = original_layers.get(manual.beam_id)
+            beam, layer = original_beams.get(manual.beam_id), layer_results.get(physical)
+            if beam is None or layer is None:
+                return {"ok": False, "error": "Не удалось определить положение ручного бруса. Проверьте его опоры."}
+            anchored.append(replace(manual, physical_layer_id=physical,
+                                    layer_offset=beam.z - beam.size_z / 2 - layer.base_z))
+
+        used_ids = {layer.layer_id for layer in state.layers}
+        number = 1
+        while f"layer-{number}" in used_ids:
+            number += 1
+        new_id = f"layer-{number}"
+        source = state.layers[index]
+        state.multi_layer_mode = True
+        state.layers.insert(index + 1, replace(source, layer_id=new_id, align_top=index == 0 or source.align_top))
+        state.layer_sections.update({(new_id, beam_index): section
+                                     for (owner, beam_index), section in list(state.layer_sections.items())
+                                     if owner == layer_id})
+        existing_ids = {beam.beam_id for beam in anchored}
+        id_map: dict[str, str] = {}
+        for beam in anchored:
+            if beam.physical_layer_id == layer_id:
+                number = 1
+                while f"manual-{number}" in existing_ids:
+                    number += 1
+                new_beam_id = f"manual-{number}"
+                existing_ids.add(new_beam_id)
+                id_map[beam.beam_id] = new_beam_id
+
+        def remap(key: tuple[str, int] | None) -> tuple[str, int] | None:
+            return (new_id if key[0] == layer_id else id_map.get(key[0], key[0]), key[1]) if key is not None else None
+
+        copies = [replace(beam, beam_id=id_map[beam.beam_id], physical_layer_id=new_id,
+                          first_support=remap(beam.first_support),  # type: ignore[arg-type]
+                          second_support=remap(beam.second_support),  # type: ignore[arg-type]
+                          reference_support=remap(beam.reference_support),
+                          second_reference_support=remap(beam.second_reference_support))
+                  for beam in anchored if beam.beam_id in id_map]
+        state.manual_beams = anchored + copies
+        if layer_id in state.hidden_layer_ids:
+            state.hidden_layer_ids.append(new_id)
+        if layer_id in state.locked_layer_ids:
+            state.locked_layer_ids.append(new_id)
+        result = controller.recalculate_from_state(show_error=False)
+        if result is None:
+            return {"ok": False, "error": errors[-1] if errors else "Не удалось продублировать слой."}
+        if any(not any(rendered.layer_id == beam.beam_id for rendered in result.beams_3d) for beam in state.manual_beams):
+            return {"ok": False, "error": "Не удалось восстановить ручные брусья после дублирования."}
+        return {"ok": True, "snapshot": project_snapshot(state), "layerId": new_id}
 
     def default_project(self) -> dict[str, Any]:
         """Return the same starting configuration as the current desktop reset."""

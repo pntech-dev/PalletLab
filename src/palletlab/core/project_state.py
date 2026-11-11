@@ -24,6 +24,9 @@ def beam_layer_ids(layers: Sequence[LayerInput], manual_beams: Sequence[ManualBe
     ids = [layer.layer_id for layer in layers]
     result = {layer_id: layer_id for layer_id in ids}
     for beam in manual_beams:
+        if beam.physical_layer_id in ids:
+            result[beam.beam_id] = beam.physical_layer_id
+            continue
         support_layer = result.get(beam.first_support[0])
         if support_layer is None:
             continue

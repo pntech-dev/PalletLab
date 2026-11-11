@@ -47,6 +47,7 @@ type ApplicationStatus = {
 type CalculationResponse = {
   ok: boolean;
   error?: string;
+  layerId?: string;
   snapshot?: {
     project: Project;
     pallet: {
@@ -70,7 +71,10 @@ export type Direction = {
   round_pallet_size: boolean;
   rounding_step: 5 | 50;
 };
-type Layer = { id: string; axis: "length" | "width"; direction: Direction };
+type Layer = { id: string; axis: "length" | "width"; direction: Direction; align_top?: boolean };
+type ManualBeam = { id: string; first: [string, number]; second: [string, number]; first_face?: "top" | "bottom";
+  reference?: [string, number] | null; second_reference?: [string, number] | null;
+  physical_layer_id?: string; start_point?: number[] | null; [key: string]: unknown };
 
 function rawPalletSize(direction: Direction): number {
   return direction.margin_start
@@ -125,7 +129,8 @@ export type Project = {
     material_id: string;
     pallet_margins?: [number, number] | [number, number, number, number];
     pallet_margin_links?: [boolean, boolean];
-    manual_beams?: { start_point?: number[] | null; [key: string]: unknown }[];
+    manual_beams?: ManualBeam[];
+    layer_sections?: { layer_id: string; index: number; height: number; width: number }[];
   };
   view: {
     camera: CameraPreset;
@@ -256,6 +261,7 @@ declare global {
         status: () => Promise<ApplicationStatus>;
         default_project: () => Promise<object>;
         calculate: (project: object) => Promise<CalculationResponse>;
+        duplicate_layer: (project: object, layerId: string) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;
         check_update: () => Promise<UpdateStatus>;
         update_status: () => Promise<UpdateStatus>;
@@ -323,6 +329,10 @@ export function App() {
   );
   const [calculationError, setCalculationError] = useState<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
+  const currentProject = useRef(project);
+  currentProject.current = project;
+  const duplicatingLayer = useRef(false);
+  const [duplicateBusy, setDuplicateBusy] = useState(false);
   const [savedProject, setSavedProject] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [update, setUpdate] = useState<UpdateStatus>({ state: "idle" });
@@ -1496,6 +1506,35 @@ export function App() {
     setSelectedLayerId(layerId);
   }
 
+  async function duplicateLayer() {
+    const api = window.pywebview?.api;
+    if (!api || !project || !selectedLayerId || duplicatingLayer.current) return;
+    duplicatingLayer.current = true;
+    setDuplicateBusy(true);
+    try {
+      const response = await api.duplicate_layer(project, selectedLayerId);
+      if (!response.ok || !response.snapshot || !response.layerId) {
+        showViewportToolError(response.error ?? "Не удалось продублировать слой.");
+        return;
+      }
+      if (currentProject.current !== project) {
+        showViewportToolError("Проект изменился во время дублирования. Повторите действие.");
+        return;
+      }
+      clearInteractionState();
+      updateHistory(project, response.snapshot.project);
+      applyProject(response.snapshot.project);
+      applyCalculation(response);
+      setSelectedLayerId(response.layerId);
+      setExpandedLayerId(response.layerId);
+    } catch {
+      showViewportToolError("Не удалось продублировать слой.");
+    } finally {
+      duplicatingLayer.current = false;
+      setDuplicateBusy(false);
+    }
+  }
+
   function layerNumber(layer: Layer, fallbackIndex: number) {
     if (layer.id === "length") return 1;
     if (layer.id === "width") return 2;
@@ -1541,11 +1580,28 @@ export function App() {
       showViewportToolError("Для удаления слоя разблокируйте слои.");
       return;
     }
+    const manual = project.pallet.manual_beams ?? [];
+    const physical = new Map(project.pallet.layers.map((layer) => [layer.id, layer.id]));
+    for (const beam of manual) {
+      const support = physical.get(beam.first[0]);
+      const supportIndex = project.pallet.layers.findIndex((layer) => layer.id === support);
+      const target = beam.physical_layer_id ?? (supportIndex >= 0 ? project.pallet.layers[supportIndex + (beam.first_face === "bottom" ? -1 : 1)]?.id : undefined);
+      if (target) physical.set(beam.id, target);
+    }
+    const removedManual = new Set(manual.filter((beam) => physical.get(beam.id) === removedLayerId).map((beam) => beam.id));
+    if (manual.some((beam) => !removedManual.has(beam.id)
+      && [beam.first, beam.second, beam.reference, beam.second_reference]
+        .some((key) => key && (key[0] === removedLayerId || removedManual.has(key[0]))))) {
+      showViewportToolError("На брусья этого слоя опираются другие брусья. Сначала удалите зависимые брусья.");
+      return;
+    }
     setCustomLayerSectionIds((current) => current.filter((id) => id !== removedLayerId));
     updateProject({
       ...project,
       pallet: {
         ...project.pallet,
+        manual_beams: manual.filter((beam) => !removedManual.has(beam.id)),
+        layer_sections: project.pallet.layer_sections?.filter((section) => section.layer_id !== removedLayerId),
         layers: project.pallet.layers.filter(
           (_, layerIndex) => layerIndex !== index,
         ),
@@ -1940,6 +1996,9 @@ export function App() {
                     updateProject({ ...project, view: { ...project.view, locked_layer_ids: next } });
                   }}>
                   {selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать" : "Заблокировать"}
+                </button>
+                <button type="button" className="secondary" disabled={!selectedLayerId || duplicateBusy} onClick={() => void duplicateLayer()}>
+                  Дублировать
                 </button>
                 <span>{selectedLayerId ? `Слой ${layerNumber(project.pallet.layers.find((layer) => layer.id === selectedLayerId)!, project.pallet.layers.findIndex((layer) => layer.id === selectedLayerId))}` : "Выберите слой"}</span>
               </div>

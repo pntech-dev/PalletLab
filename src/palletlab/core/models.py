@@ -49,6 +49,7 @@ class LayerInput:
     layer_id: str
     axis: PalletAxis
     direction: DirectionInput
+    align_top: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,8 @@ class ManualBeamInput:
     start_point: tuple[float, float, float] | None = None
     second_reference_support: LayerBeamKey | None = None
     second_reference_face: str | None = None
+    physical_layer_id: str | None = None
+    layer_offset: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,7 @@ class LayerDefinition:
     direction: DirectionResult
     # An empty tuple means that every beam uses the section from ``direction``.
     sections: tuple[BeamSection, ...] = ()
+    align_top: bool = False
 
 
 @dataclass(frozen=True)

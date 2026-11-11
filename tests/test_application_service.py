@@ -432,3 +432,120 @@ def test_locked_physical_layer_rejects_manual_beam_insertion_and_edit() -> None:
     beam = next(item for item in created["pallet"]["beams"] if item["layerId"].startswith("manual-"))
     created["project"]["view"]["locked_layer_ids"] = ["width"]
     assert not service.change_beam_sections(created["project"], {beam["layerId"]: [beam["layerIndex"]]}, {"height": 100, "width": 75})["ok"]
+
+
+def test_duplicate_copies_grid_sections_visibility_and_first_layer_alignment() -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    changed = service.change_beam_sections(project, {"length": [1]}, {"height": 40, "width": 45})
+    assert changed["ok"]
+    project = changed["snapshot"]["project"]
+    project["view"]["hidden_layer_ids"] = ["length"]
+    project["view"]["locked_layer_ids"] = ["length"]
+    response = service.duplicate_layer(project, "length")
+    assert response["ok"], response
+    snapshot = response["snapshot"]
+    new_id = response["layerId"]
+    layers = snapshot["project"]["pallet"]["layers"]
+    assert [layer["id"] for layer in layers][:2] == ["length", new_id]
+    assert layers[0]["direction"] == layers[1]["direction"]
+    assert new_id in snapshot["project"]["view"]["hidden_layer_ids"]
+    assert new_id in snapshot["project"]["view"]["locked_layer_ids"]
+    beams = snapshot["pallet"]["beams"]
+    source = [beam for beam in beams if beam["layerId"] == "length"]
+    copied = [beam for beam in beams if beam["layerId"] == new_id]
+    assert len(source) == len(copied)
+    delta = snapshot["pallet"]["layers"][1]["baseZ"]
+    for original, duplicate in zip(source, copied):
+        assert original["size"] == duplicate["size"]
+        assert original["center"][:2] == duplicate["center"][:2]
+        assert duplicate["center"][2] == original["center"][2] + delta
+    assert service.calculate(snapshot["project"])["ok"]
+
+
+def test_duplicate_preserves_manual_beams_in_both_original_and_copy() -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    supports = [{"layerId": "length", "layerIndex": 1}, {"layerId": "length", "layerIndex": 2}]
+    response = service.add_manual_beam(project, supports, {"distance": 100, "section": {"height": 70, "width": 50}})
+    assert response["ok"], response
+    before = response["snapshot"]
+    original = next(beam for beam in before["pallet"]["beams"] if beam["layerId"].startswith("manual-"))
+    assert original["physicalLayerId"] == "width"
+    response = service.duplicate_layer(before["project"], "width")
+    assert response["ok"], response
+    after = response["snapshot"]
+    manual = [beam for beam in after["pallet"]["beams"] if beam["layerId"].startswith("manual-")]
+    assert len(manual) == 2
+    assert manual[0]["physicalLayerId"] == "width"
+    assert manual[1]["physicalLayerId"] == response["layerId"]
+    assert manual[0]["center"] == original["center"]
+    assert manual[0]["size"] == manual[1]["size"] == original["size"]
+    assert manual[0]["center"][:2] == manual[1]["center"][:2]
+    assert manual[1]["center"][2] > manual[0]["center"][2]
+    reloaded = service.calculate(after["project"])
+    assert reloaded["ok"]
+    assert [beam for beam in reloaded["snapshot"]["pallet"]["beams"] if beam["layerId"].startswith("manual-")] == manual
+    edited = service.change_beam_sections(after["project"], {manual[1]["layerId"]: [0]}, {"height": 90, "width": 60})
+    assert edited["ok"], edited
+    updated = [beam for beam in edited["snapshot"]["pallet"]["beams"] if beam["layerId"].startswith("manual-")]
+    assert updated[0]["size"] == manual[0]["size"]
+    assert updated[1]["size"] != manual[1]["size"]
+
+
+def test_duplicate_below_manual_beam_keeps_it_in_original_layer() -> None:
+    service = ApplicationService()
+    supports = [{"layerId": "length", "layerIndex": 1}, {"layerId": "length", "layerIndex": 2}]
+    created = service.add_manual_beam(service.default_project(), supports, {"distance": 100, "section": {"height": 70, "width": 50}})
+    response = service.duplicate_layer(created["snapshot"]["project"], "length")
+    assert response["ok"], response
+    manual = next(beam for beam in response["snapshot"]["pallet"]["beams"] if beam["layerId"].startswith("manual-"))
+    assert manual["physicalLayerId"] == "width"
+    assert manual["center"][2] > next(beam for beam in created["snapshot"]["pallet"]["beams"] if beam["layerId"] == manual["layerId"])["center"][2]
+
+
+def test_duplicate_preserves_inserted_and_deleted_beams_and_can_be_repeated() -> None:
+    service = ApplicationService()
+    snapshot = service.calculate(service.default_project())["snapshot"]
+    slot = next(item["slot"] for item in snapshot["pallet"]["insertionMarkers"] if item["slot"]["layerId"] == "length")
+    inserted = service.insert_beam(snapshot["project"], slot, slot["suggestedClearGap"])
+    assert inserted["ok"], inserted
+    deleted = service.delete_beams(inserted["snapshot"]["project"], {"length": [1]})
+    assert deleted["ok"], deleted
+    copied = service.duplicate_layer(deleted["snapshot"]["project"], "length")
+    assert copied["ok"], copied
+    beams = copied["snapshot"]["pallet"]["beams"]
+    source = [beam for beam in beams if beam["layerId"] == "length"]
+    duplicate = [beam for beam in beams if beam["layerId"] == copied["layerId"]]
+    assert [(b["layerIndex"], b["size"], b["center"][:2]) for b in source] == [
+        (b["layerIndex"], b["size"], b["center"][:2]) for b in duplicate]
+    again = service.duplicate_layer(copied["snapshot"]["project"], copied["layerId"])
+    assert again["ok"], again
+    assert again["layerId"] != copied["layerId"]
+
+
+def test_duplicate_legacy_two_layer_project_switches_to_layer_stack() -> None:
+    service = ApplicationService()
+    state = ProjectState(
+        length_input=DirectionInput(100, 80, (700,), 100, 100, 50, 50),
+        width_input=DirectionInput(80, 60, (500,), 80, 80, 40, 40),
+    )
+    result = service.duplicate_layer(project_to_dict(state), "length")
+    assert result["ok"], result
+    assert len(result["snapshot"]["pallet"]["layers"]) == 3
+
+
+def test_duplicate_rebinds_manual_beam_references_to_copied_layer() -> None:
+    service = ApplicationService()
+    created = service.add_manual_beam(service.default_project(),
+        [{"layerId": "length", "layerIndex": 0}, {"layerId": "length", "layerIndex": 1}],
+        {"distance": 0, "section": {"height": 70, "width": 50},
+         "reference": {"layerId": "width", "layerIndex": 0}, "referenceFace": "y_max",
+         "secondReference": {"layerId": "width", "layerIndex": 1}, "secondReferenceFace": "y_min"})
+    assert created["ok"], created
+    copied = service.duplicate_layer(created["snapshot"]["project"], "width")
+    assert copied["ok"], copied
+    manuals = copied["snapshot"]["project"]["pallet"]["manual_beams"]
+    assert manuals[0]["reference"][0] == "width"
+    assert manuals[1]["reference"][0] == copied["layerId"]
+    assert manuals[1]["second_reference"][0] == copied["layerId"]

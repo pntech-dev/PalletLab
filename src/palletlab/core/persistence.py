@@ -86,7 +86,8 @@ def _direction_from_dict(raw: object, name: str) -> DirectionInput:
 
 
 def _layer_to_dict(layer: LayerInput) -> dict[str, Any]:
-    return {"id": layer.layer_id, "axis": layer.axis, "direction": _direction_to_dict(layer.direction)}
+    return {"id": layer.layer_id, "axis": layer.axis, "direction": _direction_to_dict(layer.direction),
+            **({"align_top": True} if layer.align_top else {})}
 
 
 def _layer_from_dict(raw: object) -> LayerInput:
@@ -96,7 +97,10 @@ def _layer_from_dict(raw: object) -> LayerInput:
     if not layer_id:
         raise ProjectPersistenceError("Идентификатор слоя не может быть пустым.")
     axis: PalletAxis = "length" if raw["axis"] == "length" else "width"
-    return LayerInput(layer_id, axis, _direction_from_dict(raw.get("direction"), f"слой «{layer_id}»"))
+    align_top = raw.get("align_top", False)
+    if type(align_top) is not bool:
+        raise ProjectPersistenceError("Выравнивание слоя должно быть логическим значением.")
+    return LayerInput(layer_id, axis, _direction_from_dict(raw.get("direction"), f"слой «{layer_id}»"), align_top)
 
 
 def _legacy_layers(length: DirectionInput, width: DirectionInput, upper_layer: str) -> list[LayerInput]:
@@ -142,7 +146,9 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
                  **({"second_reference": list(beam.second_reference_support), "second_reference_face": beam.second_reference_face}
                     if beam.second_reference_support is not None else {}),
                  "first_face": beam.first_face, "second_face": beam.second_face,
-                 "start_point": list(beam.start_point) if beam.start_point else None}
+                 "start_point": list(beam.start_point) if beam.start_point else None,
+                 **({"physical_layer_id": beam.physical_layer_id, "layer_offset": beam.layer_offset}
+                    if beam.physical_layer_id is not None else {})}
                 for beam in state.manual_beams
             ],
         },
@@ -268,6 +274,8 @@ def project_from_dict(raw: object) -> ProjectState:
             second_reference_key = (str(second_reference[0]), int(second_reference[1])) if second_reference is not None else None
             section = BeamSection(float(item["height"]), float(item["width"]))
             distance = float(item["distance"])
+            physical_layer_id = item.get("physical_layer_id")
+            layer_offset = item.get("layer_offset", 0.0)
             first_face = item.get("first_face", "top")
             second_face = item.get("second_face", "top")
             reference_face = item.get("reference_face")
@@ -286,6 +294,8 @@ def project_from_dict(raw: object) -> ProjectState:
                     or second_reference_key == reference_key
                     or (reference_face, second_reference_face) not in (("x_min", "x_max"), ("x_max", "x_min"), ("y_min", "y_max"), ("y_max", "y_min"))))
                 or (second_reference_key is None and second_reference_face is not None)
+                or (physical_layer_id is not None and (not isinstance(physical_layer_id, str) or physical_layer_id not in layer_ids))
+                or isinstance(layer_offset, bool) or not isinstance(layer_offset, (int, float)) or not math.isfinite(layer_offset)
                 or first_face not in ("top", "bottom") or second_face not in ("top", "bottom")
                 or reference_face not in (None, "top", "bottom", "x_min", "x_max", "y_min", "y_max")
                 or (start_point is not None and (len(start_point) != 3 or not all(math.isfinite(value) for value in start_point)))
@@ -300,6 +310,7 @@ def project_from_dict(raw: object) -> ProjectState:
             first_face=first_face, second_face=second_face,
             start_point=start_point,
             second_reference_support=second_reference_key, second_reference_face=second_reference_face,
+            physical_layer_id=physical_layer_id, layer_offset=float(layer_offset),
         ))
     return ProjectState(
         step_model=step_model,

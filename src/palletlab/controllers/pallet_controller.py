@@ -146,7 +146,7 @@ class PalletController:
                     else BeamSection(direction.beam_height, direction.beam_width)
                     for index in range(len(direction.beam_centers))
                 )
-                definitions.append(LayerDefinition(layer.layer_id, layer.axis, direction, sections))
+                definitions.append(LayerDefinition(layer.layer_id, layer.axis, direction, sections, layer.align_top))
             fallback_directions = {
                 axis: calculate_direction(data)
                 for axis, data in (
@@ -778,6 +778,11 @@ class PalletController:
                 else min(first.z - first.size_z / 2, second.z - second.size_z / 2)
             )
             z = bearing + item.section.height / 2 if item.first_face == "top" else bearing - item.section.height / 2
+            if item.physical_layer_id is not None:
+                layer = next((layer for layer in result.layers if layer.layer_id == item.physical_layer_id), None)
+                if layer is None:
+                    raise CalculationError("Слой ручного бруса больше не существует.")
+                z = layer.base_z + item.layer_offset + item.section.height / 2
             if first.orientation == "length":
                 start, end = self._manual_span(first, second, "y")
                 coordinate = self._offset_from_reference(

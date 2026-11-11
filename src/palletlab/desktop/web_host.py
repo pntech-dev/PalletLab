@@ -81,6 +81,9 @@ class WebApplicationApi:
     def add_manual_beam(self, project: object, supports: object, options: object) -> dict[str, Any]:
         return ApplicationService().add_manual_beam(project, supports, options)
 
+    def duplicate_layer(self, project: object, layer_id: object) -> dict[str, Any]:
+        return ApplicationService().duplicate_layer(project, layer_id)
+
     def default_project(self) -> dict[str, Any]:
         """Provide the temporary frontend with a valid starting project."""
         return ApplicationService().default_project()
