@@ -1576,8 +1576,8 @@ export function App() {
   function removeLayer(index: number) {
     if (!project || project.pallet.layers.length <= 2) return;
     const removedLayerId = project.pallet.layers[index]?.id;
-    if (isLocked(removedLayerId) || (project.view.locked_layer_ids ?? []).length) {
-      showViewportToolError("Для удаления слоя разблокируйте слои.");
+    if (isLocked(removedLayerId)) {
+      showViewportToolError("Для удаления слоя сначала разблокируйте его.");
       return;
     }
     const manual = project.pallet.manual_beams ?? [];
@@ -2068,7 +2068,7 @@ export function App() {
                       className="icon-button secondary"
                       aria-label={`Удалить слой ${layerNumber(layer, index)}`}
                       onClick={(event) => { event.stopPropagation(); removeLayer(index); }}
-                      disabled={project.pallet.layers.length <= 2 || (project.view.locked_layer_ids ?? []).length > 0}
+                      disabled={project.pallet.layers.length <= 2 || isLocked(layer.id)}
                     >
                       ×
                     </button>
