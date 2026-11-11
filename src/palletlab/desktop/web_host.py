@@ -365,6 +365,7 @@ class _StepAssetServer:
                 self.send_header("Content-Type", "application/octet-stream")
                 self.send_header("Content-Length", str(size))
                 self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 with path.open("rb") as stream:
                     while chunk := stream.read(1024 * 1024):
@@ -384,6 +385,10 @@ class _StepAssetServer:
                 self.send_response(200)
                 self.send_header("Content-Type", _frontend_content_type(path))
                 self.send_header("Content-Length", str(path.stat().st_size))
+                # The WebView2 disk cache outlives the application process.
+                # Without this header a rebuilt frontend bundle would keep
+                # being served from that cache after every restart.
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 with path.open("rb") as stream:
                     while chunk := stream.read(1024 * 1024):

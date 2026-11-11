@@ -29,6 +29,7 @@ class AutosaveStore:
         self.directory = Path(directory) if directory is not None else default_autosave_directory()
         self._unsaved_session = uuid4().hex
         self._project_key = f"unsaved-{self._unsaved_session}"
+        self._save_sequence = 0
 
     def set_project(self, path: str | Path | None) -> None:
         """Associate subsequent snapshots with a manually saved project path."""
@@ -49,7 +50,13 @@ class AutosaveStore:
     def save(self, state: ProjectState) -> Path:
         """Write a snapshot, retaining only the three newest successful saves."""
         self.directory.mkdir(parents=True, exist_ok=True)
-        snapshot = self.directory / f"{self._project_key}-{time.time_ns()}.autosave.palletlab.json"
+        # Windows clock granularity can hand out identical ``time_ns`` values
+        # to rapid consecutive saves, which once overwrote a snapshot under
+        # the same name.  The per-store sequence keeps every name unique and
+        # strictly creation-ordered inside one session.
+        self._save_sequence += 1
+        stamp = f"{time.time_ns():019d}-{self._save_sequence:06d}"
+        snapshot = self.directory / f"{self._project_key}-{stamp}.autosave.palletlab.json"
         save_project(snapshot, state)
         snapshots = self._snapshots_for_current_project()
         for obsolete in snapshots[:-AUTOSAVE_LIMIT]:
@@ -58,7 +65,8 @@ class AutosaveStore:
 
     def _snapshots_for_current_project(self) -> list[Path]:
         pattern = f"{self._project_key}-*.autosave.palletlab.json"
-        return sorted(
-            self.directory.glob(pattern),
-            key=lambda path: (path.stat().st_mtime_ns, path.name),
-        )
+        # The file name embeds the creation time with a fixed digit count, so
+        # ordering by name is exact.  NTFS modification times can lag or round
+        # under rapid sequential writes, which once misordered the rolling
+        # window and pruned the wrong snapshots.
+        return sorted(self.directory.glob(pattern), key=lambda path: path.name)

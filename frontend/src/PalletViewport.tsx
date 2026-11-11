@@ -19,6 +19,8 @@ export type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry
 
 const StepModelViewport = lazy(() => import("./StepModelViewport"));
 
+const DEFAULT_MODEL_TRANSPARENCY = 80;
+
 export type ViewportBeam = {
   index: number;
   layerId: string;
@@ -385,6 +387,7 @@ export default function PalletViewport({
   presetRequest,
   fitRequest,
   stepModel,
+  stepModelGeneration = 0,
   selectedStepFace,
   onSelectStepFace,
   stepFaceSelectionEnabled = false,
@@ -425,6 +428,7 @@ export default function PalletViewport({
   presetRequest: number;
     fitRequest: number;
     stepModel?: StepModelSnapshot | null;
+    stepModelGeneration?: number;
     selectedStepFace?: number | null;
     onSelectStepFace?: (faceId: number) => void;
     stepFaceSelectionEnabled?: boolean;
@@ -464,9 +468,17 @@ export default function PalletViewport({
   const [zoomPercent, setZoomPercent] = useState(100);
   const [showDetails, setShowDetails] = useState(false);
   const [modelVisible, setModelVisible] = useState(true);
-  const [modelTransparency, setModelTransparency] = useState(80);
+  const [modelTransparency, setModelTransparency] = useState(DEFAULT_MODEL_TRANSPARENCY);
   const [dimensionsVisible, setDimensionsVisible] = useState(true);
   const [gridVisible, setGridVisible] = useState(true);
+  // A freshly imported or restored model must show up visible with the
+  // default scene display settings, whatever the previous model used.
+  useEffect(() => {
+    setModelVisible(true);
+    setModelTransparency(DEFAULT_MODEL_TRANSPARENCY);
+    setDimensionsVisible(true);
+    setGridVisible(true);
+  }, [stepModelGeneration]);
   const [errorPresentation, setErrorPresentation] = useState<{
     message: string;
     version: number;

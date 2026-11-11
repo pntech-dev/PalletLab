@@ -340,6 +340,9 @@ export function App() {
   const [stepImport, setStepImport] = useState<StepImportOperation | null>(null);
   const stepImportStartedAt = useRef(0);
   const [stepModel, setStepModel] = useState<StepModelSnapshot | null>(null);
+  // Bumped every time a model is loaded into the scene, so the viewport can
+  // reset its scene display settings for the fresh model.
+  const [stepModelGeneration, setStepModelGeneration] = useState(0);
   const [selectedStepFace, setSelectedStepFace] = useState<number | null>(null);
   const [stepPalletBuilt, setStepPalletBuilt] = useState(false);
   const [solidWorksOptions, setSolidWorksOptions] = useState<SolidWorksOptions | null>(storedSolidWorksOptions);
@@ -387,6 +390,7 @@ export function App() {
   const manualBeamSection = manualSectionFor(manualSupports[0]?.beam);
   const manualBetween = firstManualReference && manualSecondReference
     ? betweenFaces(firstManualReference, manualSecondReference, manualBeamSection.width) : null;
+  const manualBeamInFlight = useRef(false);
   const [viewportToolError, setViewportToolError] = useState<string | null>(null);
   const [viewportToolErrorVersion, setViewportToolErrorVersion] = useState(0);
   const [, setHistoryVersion] = useState(0);
@@ -923,6 +927,7 @@ export function App() {
           if (remaining > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
           if (cancelled) return;
           setStepModel(prepared);
+          setStepModelGeneration((value) => value + 1);
           setFitRequest((value) => value + 1);
         } else {
           if (!cancelled) setStepRestoreError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
@@ -1222,35 +1227,41 @@ export function App() {
     const api = window.pywebview?.api;
     if (!api || !project || manualSupports.length !== 2
         || (manualReferenceMode === "face" && !manualReference)
-        || (manualReferenceMode === "between" && !manualBetween)) return;
-    const response = await api.add_manual_beam(
-      project,
-      manualSupports.map(({ beam }) => ({
-        layerId: beam.layerId,
-        layerIndex: beam.layerIndex,
-      })),
-      {
-        distance: manualReferenceMode === "between" ? manualBetween!.baseDistance : manualDistance,
-        section: manualBeamSection,
-        reference: manualReference ? { layerId: manualReference.layerId, layerIndex: manualReference.layerIndex } : undefined,
-        referenceFace: manualReference ? manualReferenceFace : undefined,
-        secondReference: manualReferenceMode === "between" && manualSecondReference
-          ? { layerId: manualSecondReference.beam.layerId, layerIndex: manualSecondReference.beam.layerIndex } : undefined,
-        secondReferenceFace: manualReferenceMode === "between" ? manualSecondReference?.face : undefined,
-      },
-    );
-    if (!response.ok) {
-      showViewportToolError(response.error ?? "Не удалось добавить брус.");
-      return;
-    }
-    applyCalculation(response);
-    if (response.snapshot) {
-      updateHistory(project, response.snapshot.project);
-      applyProject(response.snapshot.project);
-      setManualSupports([]);
-      setManualReference(null);
-      setManualSecondReference(null);
-      setSelectedBeams([]);
+        || (manualReferenceMode === "between" && !manualBetween)
+        || manualBeamInFlight.current) return;
+    manualBeamInFlight.current = true;
+    try {
+      const response = await api.add_manual_beam(
+        project,
+        manualSupports.map(({ beam }) => ({
+          layerId: beam.layerId,
+          layerIndex: beam.layerIndex,
+        })),
+        {
+          distance: manualReferenceMode === "between" ? manualBetween!.baseDistance : manualDistance,
+          section: manualBeamSection,
+          reference: manualReference ? { layerId: manualReference.layerId, layerIndex: manualReference.layerIndex } : undefined,
+          referenceFace: manualReference ? manualReferenceFace : undefined,
+          secondReference: manualReferenceMode === "between" && manualSecondReference
+            ? { layerId: manualSecondReference.beam.layerId, layerIndex: manualSecondReference.beam.layerIndex } : undefined,
+          secondReferenceFace: manualReferenceMode === "between" ? manualSecondReference?.face : undefined,
+        },
+      );
+      if (!response.ok) {
+        showViewportToolError(response.error ?? "Не удалось добавить брус.");
+        return;
+      }
+      applyCalculation(response);
+      if (response.snapshot) {
+        updateHistory(project, response.snapshot.project);
+        applyProject(response.snapshot.project);
+        setManualSupports([]);
+        setManualReference(null);
+        setManualSecondReference(null);
+        setSelectedBeams([]);
+      }
+    } finally {
+      manualBeamInFlight.current = false;
     }
   }
 
@@ -1264,18 +1275,33 @@ export function App() {
         setSelectedBeams([]);
         return;
       }
-      if (
-        event.key === "Enter" &&
-        !dimensionEditing &&
-        !insertionMode &&
-        !(event.target instanceof HTMLButtonElement)
-      ) {
-        if (beamTool === "delete" && selectedBeams.length > 0) {
-          event.preventDefault();
-          void deleteSelectedBeams();
-        } else if (beamTool === "section" && selectedBeams.length > 0) {
-          event.preventDefault();
-          void changeSelectedBeamSections();
+      if (event.key === "Enter") {
+        // Handled here in the capture phase so confirming works no matter
+        // which element holds focus; the HUD inputs no longer confirm
+        // themselves, which also keeps a focused input from double-firing.
+        const inHud = event.target instanceof HTMLElement
+          && event.target.closest(".manual-hud") !== null
+          && event.target.closest(".scene-settings-panel") === null;
+        const editable = event.target instanceof HTMLInputElement
+          || event.target instanceof HTMLSelectElement
+          || event.target instanceof HTMLTextAreaElement;
+        if (insertionMode && manualSupports.length === 2) {
+          const ready = !(manualReferenceMode === "face" && !manualReference)
+            && !(manualReferenceMode === "between" && !manualBetween);
+          if (ready && !(event.target instanceof HTMLButtonElement) && (inHud || !editable)) {
+            event.preventDefault();
+            void addManualBeam();
+          }
+          return;
+        }
+        if (!dimensionEditing && !(event.target instanceof HTMLButtonElement)) {
+          if (beamTool === "delete" && selectedBeams.length > 0) {
+            event.preventDefault();
+            void deleteSelectedBeams();
+          } else if (beamTool === "section" && selectedBeams.length > 0) {
+            event.preventDefault();
+            void changeSelectedBeamSections();
+          }
         }
         return;
       }
@@ -1497,16 +1523,6 @@ export function App() {
           <option value="between">Между двух граней</option>
         </select>
       </label>
-      {manualReferenceMode === "face" ? (
-        manualReference ? (
-          <span>Опора: {manualReference.layerId} · брус {manualReference.layerIndex + 1}</span>
-        ) : (
-          <span>Выберите боковую грань в 3D-виде</span>
-        )
-      ) : null}
-      {manualReferenceMode === "between" ? (
-        <span>{!manualReference ? "Выберите первую грань" : !manualSecondReference ? "Выберите вторую грань" : manualBetween ? "Выбраны две грани" : "Брус не помещается между гранями"}</span>
-      ) : null}
       <label>
         {manualReferenceMode === "between" ? "От нулевой точки, мм" : "Расстояние, мм"}
         <input
@@ -1514,10 +1530,6 @@ export function App() {
           value={manualReferenceMode === "between" ? (manualBetween ? Number(manualBetween.baseDistance.toFixed(2)) : "") : manualDistance}
           disabled={manualReferenceMode === "between"}
           onChange={(event) => setManualDistance(Number(event.target.value))}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void addManualBeam();
-            if (event.key === "Escape") stopInsertion();
-          }}
         />
       </label>
       <button type="button" onClick={addManualBeam} disabled={(manualReferenceMode === "face" && !manualReference) || (manualReferenceMode === "between" && !manualBetween)}>Добавить брус</button>
@@ -2066,6 +2078,7 @@ export function App() {
                 preset={camera}
                 presetRequest={cameraRequest}
                 fitRequest={fitRequest}
+                stepModelGeneration={stepModelGeneration}
                 stepModel={stepModel && stepPalletBuilt && stepPlacement.current && calculation?.snapshot
                   ? { ...stepModel, transform: stepPlacement.current.transform.map((value, index) => {
                     const current = palletMargins(calculation.snapshot!.project);

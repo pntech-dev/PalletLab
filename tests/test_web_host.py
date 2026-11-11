@@ -1,6 +1,7 @@
 from pathlib import Path
+from urllib.request import urlopen
 
-from palletlab.desktop.web_host import WebApplicationApi, _WebSettings, _frontend_content_type
+from palletlab.desktop.web_host import WebApplicationApi, _StepAssetServer, _WebSettings, _frontend_content_type
 
 
 def test_frontend_mime_types_do_not_depend_on_windows_registry(monkeypatch) -> None:
@@ -10,6 +11,26 @@ def test_frontend_mime_types_do_not_depend_on_windows_registry(monkeypatch) -> N
     assert _frontend_content_type(Path("module.MJS")) == "text/javascript"
     assert _frontend_content_type(Path("style.css")) == "text/css"
     assert _frontend_content_type(Path("other.bin")) == "text/plain"
+
+
+def test_asset_server_forbids_webview_caching_of_frontend_and_step_files(tmp_path) -> None:
+    root = tmp_path / "dist"
+    root.mkdir()
+    (root / "index.html").write_text("<html></html>", encoding="utf-8")
+    step = tmp_path / "model.step"
+    step.write_text("ISO-10303-21;", encoding="utf-8")
+
+    server = _StepAssetServer()
+    base_url = server.set_frontend_root(root)
+    step_url = server.register(step)
+    try:
+        with urlopen(base_url) as frontend:  # noqa: S310 - loopback URL built by the server under test
+            assert frontend.headers["Cache-Control"] == "no-store"
+        with urlopen(step_url) as served_step:  # noqa: S310 - loopback URL built by the server under test
+            assert served_step.headers["Cache-Control"] == "no-store"
+    finally:
+        server._server.shutdown()
+        server._server.server_close()
 
 
 def test_web_application_api_reports_compatible_snapshot_version() -> None:
