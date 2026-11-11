@@ -401,3 +401,34 @@ def test_create_drawings_requests_a_template_when_the_cad_default_is_missing(tmp
     )
 
     assert response == {"ok": False, "error": "Не найден шаблон.", "needsTemplate": True}
+
+
+def test_locked_layers_reject_viewport_edits_and_allow_other_layers() -> None:
+    service = ApplicationService()
+    initial = service.calculate(service.default_project())["snapshot"]
+    project = initial["project"]
+    project["view"]["locked_layer_ids"] = ["length"]
+    selection = {"length": [1]}
+    assert not service.delete_beams(project, selection)["ok"]
+    assert not service.change_beam_sections(project, selection, {"height": 100, "width": 75})["ok"]
+    dimension = next(item for item in initial["pallet"]["dimensions"] if item["editable"])
+    project["view"]["locked_layer_ids"] = [dimension["layerId"]]
+    assert not service.change_beam_distance(project, {"layerId": dimension["layerId"], "beamIndex": dimension["index"]}, dimension["value"] + 100)["ok"]
+    project["view"]["locked_layer_ids"] = ["length"]
+    slot = next(item["slot"] for item in initial["pallet"]["insertionMarkers"] if item["slot"]["layerId"] == "length")
+    assert not service.insert_beam(project, slot, slot["suggestedClearGap"])["ok"]
+    assert service.change_beam_sections(project, {"width": [1]}, {"height": 100, "width": 75})["ok"]
+
+
+def test_locked_physical_layer_rejects_manual_beam_insertion_and_edit() -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    supports = [{"layerId": "length", "layerIndex": 1}, {"layerId": "length", "layerIndex": 2}]
+    options = {"distance": 100, "section": {"height": 70, "width": 50}}
+    project["view"]["locked_layer_ids"] = ["width"]
+    assert not service.add_manual_beam(project, supports, options)["ok"]
+    project["view"]["locked_layer_ids"] = []
+    created = service.add_manual_beam(project, supports, options)["snapshot"]
+    beam = next(item for item in created["pallet"]["beams"] if item["layerId"].startswith("manual-"))
+    created["project"]["view"]["locked_layer_ids"] = ["width"]
+    assert not service.change_beam_sections(created["project"], {beam["layerId"]: [beam["layerIndex"]]}, {"height": 100, "width": 75})["ok"]

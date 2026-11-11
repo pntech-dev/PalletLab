@@ -248,3 +248,16 @@ def test_project_rejects_duplicate_manual_beam_ids():
 
     with pytest.raises(ProjectPersistenceError, match="не должны повторяться"):
         project_from_dict(raw)
+
+
+def test_locked_layers_round_trip_and_old_projects_default_to_unlocked():
+    state = _state()
+    state.locked_layer_ids = ["length"]
+    payload = project_to_dict(state)
+    assert project_from_dict(payload).locked_layer_ids == ["length"]
+    del payload["view"]["locked_layer_ids"]
+    assert project_from_dict(payload).locked_layer_ids == []
+    for invalid in (["missing"], ["length", "length"], "length"):
+        payload["view"]["locked_layer_ids"] = invalid
+        with pytest.raises(ProjectPersistenceError):
+            project_from_dict(payload)

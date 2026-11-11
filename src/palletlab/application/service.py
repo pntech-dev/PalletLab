@@ -11,7 +11,7 @@ from palletlab.controllers.pallet_controller import PalletController
 from palletlab.core.models import BeamSection, DirectionInput, LayerInput
 from palletlab.core.materials import MATERIALS
 from palletlab.core.persistence import ProjectPersistenceError, load_project, project_from_dict, project_to_dict, save_project
-from palletlab.core.project_state import ProjectState
+from palletlab.core.project_state import ProjectState, beam_layer_ids
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
 from palletlab.exporters.solidworks import SolidWorksExportError, export_pallet as export_solidworks_pallet
 from palletlab.exporters.drawings import DrawingExportError, DrawingScope, DrawingTemplateError
@@ -45,6 +45,7 @@ class ApplicationService:
         if error:
             return {"ok": False, "error": error}
 
+        locked_before = _locked_layer_content(state)
         controller, errors = self._controller_for(state)
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
@@ -56,6 +57,8 @@ class ApplicationService:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось удалить выбранные брусья."}
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось пересчитать поддон."}
+        if _locked_layer_content(state) != locked_before:
+            return {"ok": False, "error": "Операция изменяет заблокированный слой. Сначала разблокируйте его."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
     def change_beam_sections(self, project: object, selection: object, section: object) -> dict[str, Any]:
@@ -71,6 +74,7 @@ class ApplicationService:
         if error:
             return {"ok": False, "error": error}
 
+        locked_before = _locked_layer_content(state)
         controller, errors = self._controller_for(state)
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
@@ -79,6 +83,8 @@ class ApplicationService:
                 controller.set_section_selection(layer_id, index, True)
         if controller.apply_section_change(beam_section) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось изменить сечение бруса."}
+        if _locked_layer_content(state) != locked_before:
+            return {"ok": False, "error": "Операция изменяет заблокированный слой. Сначала разблокируйте его."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
     def change_beam_distance(self, project: object, target: object, face_distance: object) -> dict[str, Any]:
@@ -103,6 +109,7 @@ class ApplicationService:
         ):
             return {"ok": False, "error": "Расстояние должно быть конечным числом."}
 
+        locked_before = _locked_layer_content(state)
         controller, errors = self._controller_for(state)
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
@@ -111,6 +118,8 @@ class ApplicationService:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось изменить расстояние."}
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось пересчитать поддон."}
+        if _locked_layer_content(state) != locked_before:
+            return {"ok": False, "error": "Операция изменяет заблокированный слой. Сначала разблокируйте его."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
     def insert_beam(self, project: object, slot: object, clear_gap: object) -> dict[str, Any]:
@@ -124,6 +133,7 @@ class ApplicationService:
             return {"ok": False, "error": error}
         if not isinstance(clear_gap, (int, float)) or isinstance(clear_gap, bool) or not isfinite(clear_gap):
             return {"ok": False, "error": "Зазор должен быть конечным числом."}
+        locked_before = _locked_layer_content(state)
         controller, errors = self._controller_for(state)
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
@@ -133,6 +143,8 @@ class ApplicationService:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось добавить брус."}
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось пересчитать поддон."}
+        if _locked_layer_content(state) != locked_before:
+            return {"ok": False, "error": "Операция изменяет заблокированный слой. Сначала разблокируйте его."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
     def add_manual_beam(self, project: object, supports: object, options: object) -> dict[str, Any]:
@@ -155,6 +167,7 @@ class ApplicationService:
             if error or reference is None or second_reference_face not in {"x_min", "x_max", "y_min", "y_max"}:
                 return {"ok": False, "error": "Некорректная вторая грань точки отсчёта."}
             second_reference = parsed[0]
+        locked_before = _locked_layer_content(state)
         controller, errors = self._controller_for(state)
         if controller.recalculate_from_state(show_error=False) is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось рассчитать поддон."}
@@ -166,6 +179,8 @@ class ApplicationService:
         )
         if result is None:
             return {"ok": False, "error": errors[-1] if errors else "Не удалось добавить брус."}
+        if _locked_layer_content(state) != locked_before:
+            return {"ok": False, "error": "Операция изменяет заблокированный слой. Сначала разблокируйте его."}
         return {"ok": True, "snapshot": project_snapshot(state)}
 
     def default_project(self) -> dict[str, Any]:
@@ -469,3 +484,15 @@ class _HeadlessView:
 
     def show_pallet(self, _result: object, **_kwargs: object) -> None:
         pass
+
+
+def _locked_layer_content(state: ProjectState) -> tuple[object, ...]:
+    """Capture the editable data belonging to locked physical layers."""
+    locked = set(state.locked_layer_ids)
+    physical = beam_layer_ids(state.layers, state.manual_beams)
+    return (
+        tuple(layer for layer in state.layers if layer.layer_id in locked),
+        tuple(sorted((key, value) for key, value in state.layer_sections.items()
+                     if physical.get(key[0], key[0]) in locked)),
+        tuple(beam for beam in state.manual_beams if physical.get(beam.beam_id) in locked),
+    )

@@ -132,6 +132,7 @@ export type Project = {
     show_length_dimensions: boolean;
     show_width_dimensions: boolean;
     hidden_layer_ids: string[];
+    locked_layer_ids: string[];
   };
 };
 type Material = { id: string; name: string };
@@ -328,6 +329,7 @@ export function App() {
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [distanceText, setDistanceText] = useState<Record<string, string>>({});
   const [marginDrafts, setMarginDrafts] = useState<Partial<Record<MarginIndex, string>>>({});
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [expandedLayerId, setExpandedLayerId] = useState<string | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [dropLayerId, setDropLayerId] = useState<string | null>(null);
@@ -482,6 +484,7 @@ export function App() {
         ]),
       ),
     );
+    setSelectedLayerId((current) => nextProject.pallet.layers.some((layer) => layer.id === current) ? current : null);
     setExpandedLayerId((current) =>
       nextProject.pallet.layers.some((layer) => layer.id === current)
         ? current
@@ -1024,7 +1027,15 @@ export function App() {
     return (alongX ? support.point[0] : support.point[2]) * 1000 - manualSectionFor(support.beam).width / 2;
   }
 
+  function isLocked(layerId: string) {
+    return project?.view.locked_layer_ids?.includes(layerId) ?? false;
+  }
+
   function toggleBeam(beam: ViewportBeam, point?: ViewportPoint, normal?: ViewportFaceNormal) {
+    if (!insertionMode && isLocked(beam.physicalLayerId)) {
+      showViewportToolError("Слой заблокирован. Сначала разблокируйте его.");
+      return;
+    }
     if (insertionMode) {
       if ((manualReferenceMode === "face" || manualReferenceMode === "between") && manualSupports.length === 2) {
         const support = manualSupports[0].beam;
@@ -1092,7 +1103,7 @@ export function App() {
 
   async function deleteSelectedBeams() {
     const api = window.pywebview?.api;
-    if (!api || !project || selectedBeams.length === 0) return;
+    if (!api || !project || selectedBeams.length === 0 || selectedBeams.some((beam) => isLocked(beam.physicalLayerId))) return;
     const selection = selectedBeams.reduce<Record<string, number[]>>(
       (byLayer, beam) => {
         (byLayer[beam.layerId] ??= []).push(beam.layerIndex);
@@ -1111,7 +1122,7 @@ export function App() {
 
   async function changeSelectedBeamSections() {
     const api = window.pywebview?.api;
-    if (!api || !project || selectedBeams.length === 0) return;
+    if (!api || !project || selectedBeams.length === 0 || selectedBeams.some((beam) => isLocked(beam.physicalLayerId))) return;
     const selection = selectedBeams.reduce<Record<string, number[]>>(
       (byLayer, beam) => {
         (byLayer[beam.layerId] ??= []).push(beam.layerIndex);
@@ -1134,6 +1145,11 @@ export function App() {
 
   function selectDimension(dimension: ViewportDimension) {
     if (!dimension.editable) return;
+    const beam = calculation?.snapshot?.pallet?.beams.find((item) => item.layerId === dimension.layerId && item.layerIndex === dimension.index);
+    if (isLocked(beam?.physicalLayerId ?? dimension.layerId)) {
+      showViewportToolError("Слой заблокирован. Сначала разблокируйте его.");
+      return;
+    }
     setSelectedDimension(dimension);
     setDistanceValue(dimension.editValue ?? dimension.value);
   }
@@ -1141,6 +1157,8 @@ export function App() {
   async function changeSelectedDistance() {
     const api = window.pywebview?.api;
     if (!api || !project || !selectedDimension) return;
+    const beam = calculation?.snapshot?.pallet?.beams.find((item) => item.layerId === selectedDimension.layerId && item.layerIndex === selectedDimension.index);
+    if (isLocked(beam?.physicalLayerId ?? selectedDimension.layerId)) return;
     const response = await api.change_beam_distance(
       project,
       {
@@ -1222,7 +1240,7 @@ export function App() {
 
   async function insertSelectedBeam() {
     const api = window.pywebview?.api;
-    if (!api || !project || !selectedSlot) return;
+    if (!api || !project || !selectedSlot || isLocked(selectedSlot.layerId)) return;
     const response = await api.insert_beam(project, selectedSlot, insertionGap);
     applyCalculation(response);
     if (response.ok && response.snapshot) {
@@ -1233,6 +1251,10 @@ export function App() {
   }
 
   function selectInsertion(marker: ViewportInsertionMarker) {
+    if (isLocked(marker.slot.layerId)) {
+      showViewportToolError("Слой заблокирован. Сначала разблокируйте его.");
+      return;
+    }
     setSelectedSlot(marker.slot);
     setInsertionGap(marker.slot.suggestedClearGap);
   }
@@ -1243,6 +1265,12 @@ export function App() {
         || (manualReferenceMode === "face" && !manualReference)
         || (manualReferenceMode === "between" && !manualBetween)
         || manualBeamInFlight.current) return;
+    const supportIndex = project.pallet.layers.findIndex((layer) => layer.id === manualSupports[0].beam.physicalLayerId);
+    const targetLayer = project.pallet.layers[supportIndex + 1];
+    if (supportIndex >= 0 && targetLayer && isLocked(targetLayer.id)) {
+      showViewportToolError("Слой для нового бруса заблокирован. Сначала разблокируйте его.");
+      return;
+    }
     manualBeamInFlight.current = true;
     try {
       const response = await api.add_manual_beam(
@@ -1367,9 +1395,15 @@ export function App() {
   function updateLayerDirectionPatch(index: number, patch: Partial<Direction>) {
     if (!project) return;
     const layer = project.pallet.layers[index];
-    if (!layer) return;
+    if (!layer || isLocked(layer.id)) return;
     const updatedDirection = { ...layer.direction, ...patch } as Direction;
     const targetRawSize = rawPalletSize(updatedDirection);
+    if (project.pallet.layers.some((item) => item.id !== layer.id && item.axis === layer.axis && isLocked(item.id)
+      && Math.abs(rawPalletSize(updatedDirection) - rawPalletSize(item.direction)) > 0.000001)) {
+      setDistanceText((current) => ({ ...current, [layer.id]: layer.direction.support_distances.join(" ") }));
+      showViewportToolError("Изменение затрагивает заблокированный слой. Сначала разблокируйте его.");
+      return;
+    }
     const layers = project.pallet.layers.map((item, layerIndex) => {
       if (layerIndex === index) {
         return { ...item, direction: updatedDirection };
@@ -1429,7 +1463,7 @@ export function App() {
   }
 
   function updateLayerAxis(index: number, axis: "length" | "width") {
-    if (!project) return;
+    if (!project || isLocked(project.pallet.layers[index]?.id)) return;
     const layers = project.pallet.layers.map((layer, layerIndex) =>
       layerIndex === index
         ? { ...layer, axis, direction: { ...project.pallet[axis] } }
@@ -1459,6 +1493,7 @@ export function App() {
       },
     });
     setExpandedLayerId(layerId);
+    setSelectedLayerId(layerId);
   }
 
   function layerNumber(layer: Layer, fallbackIndex: number) {
@@ -1487,6 +1522,10 @@ export function App() {
 
   function moveLayer(sourceId: string, targetId: string, insertAfter: boolean) {
     if (!project || sourceId === targetId) return;
+    if ((project.view.locked_layer_ids ?? []).length) {
+      showViewportToolError("Для изменения порядка разблокируйте слои.");
+      return;
+    }
     const source = project.pallet.layers.find((layer) => layer.id === sourceId);
     const layers = project.pallet.layers.filter((layer) => layer.id !== sourceId);
     const targetIndex = layers.findIndex((layer) => layer.id === targetId);
@@ -1498,6 +1537,10 @@ export function App() {
   function removeLayer(index: number) {
     if (!project || project.pallet.layers.length <= 2) return;
     const removedLayerId = project.pallet.layers[index]?.id;
+    if (isLocked(removedLayerId) || (project.view.locked_layer_ids ?? []).length) {
+      showViewportToolError("Для удаления слоя разблокируйте слои.");
+      return;
+    }
     setCustomLayerSectionIds((current) => current.filter((id) => id !== removedLayerId));
     updateProject({
       ...project,
@@ -1869,6 +1912,7 @@ export function App() {
                     name="rounding"
                     value={value}
                     checked={rounding === value}
+                    disabled={(project.view.locked_layer_ids ?? []).length > 0}
                     onChange={() => setRounding(value)}
                   />
                   {value === "none" ? "Без округления" : `${value} мм`}
@@ -1885,13 +1929,28 @@ export function App() {
                   Добавить слой
                 </button>
               </div>
+              <div className="layer-toolbar" role="toolbar" aria-label="Инструменты слоёв">
+                <button type="button" className="secondary" disabled={!selectedLayerId}
+                  aria-pressed={selectedLayerId ? isLocked(selectedLayerId) : false}
+                  onClick={() => {
+                    if (!selectedLayerId) return;
+                    const locked = project.view.locked_layer_ids ?? [];
+                    const next = locked.includes(selectedLayerId) ? locked.filter((id) => id !== selectedLayerId) : [...locked, selectedLayerId];
+                    clearInteractionState();
+                    updateProject({ ...project, view: { ...project.view, locked_layer_ids: next } });
+                  }}>
+                  {selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать" : "Заблокировать"}
+                </button>
+                <span>{selectedLayerId ? `Слой ${layerNumber(project.pallet.layers.find((layer) => layer.id === selectedLayerId)!, project.pallet.layers.findIndex((layer) => layer.id === selectedLayerId))}` : "Выберите слой"}</span>
+              </div>
               <div className="layer-stack-list">
               {[...project.pallet.layers].reverse().map((layer) => {
                 const index = project.pallet.layers.findIndex((item) => item.id === layer.id);
                 return (
                 <section
-                  className={`layer-card${expandedLayerId === layer.id ? " is-expanded" : ""}${draggedLayerId === layer.id ? " is-dragging" : ""}${dropLayerId === layer.id ? (dropAfterLayer ? " is-drop-after" : " is-drop-before") : ""}`}
+                  className={`layer-card${selectedLayerId === layer.id ? " is-selected" : ""}${isLocked(layer.id) ? " is-locked" : ""}${expandedLayerId === layer.id ? " is-expanded" : ""}${draggedLayerId === layer.id ? " is-dragging" : ""}${dropLayerId === layer.id ? (dropAfterLayer ? " is-drop-after" : " is-drop-before") : ""}`}
                   key={layer.id}
+                  onClick={() => setSelectedLayerId(layer.id)}
                   onDragOver={(event) => {
                     event.preventDefault();
                     const bounds = event.currentTarget.getBoundingClientRect();
@@ -1910,7 +1969,7 @@ export function App() {
                   <div className="layer-card-header">
                     <span
                       className="layer-drag-handle"
-                      draggable
+                      draggable={!isLocked(layer.id)}
                       role="img"
                       aria-label={`Перетащить слой ${layerNumber(layer, index)}`}
                       title="Перетащить слой"
@@ -1934,7 +1993,7 @@ export function App() {
                         setExpandedLayerId((current) => current === layer.id ? null : layer.id)
                       }
                     >
-                      <span>Слой {layerNumber(layer, index)}</span>
+                      <span>Слой {layerNumber(layer, index)}{isLocked(layer.id) ? " · Заблокирован" : ""}</span>
                       <small>{layer.axis === "length" ? "Вдоль длины" : "Вдоль ширины"}</small>
                     </button>
                     <button
@@ -1949,14 +2008,14 @@ export function App() {
                       type="button"
                       className="icon-button secondary"
                       aria-label={`Удалить слой ${layerNumber(layer, index)}`}
-                      onClick={() => removeLayer(index)}
-                      disabled={project.pallet.layers.length <= 1}
+                      onClick={(event) => { event.stopPropagation(); removeLayer(index); }}
+                      disabled={project.pallet.layers.length <= 2 || (project.view.locked_layer_ids ?? []).length > 0}
                     >
                       ×
                     </button>
                   </div>
                   {expandedLayerId === layer.id ? (
-                    <div className="layer-card-content">
+                    <fieldset className="layer-card-content" disabled={isLocked(layer.id)}>
                       <label>
                         Направление брусьев
                         <select
@@ -2041,14 +2100,14 @@ export function App() {
                           />
                         </label>
                       ))}
-                    </div>
+                    </fieldset>
                   ) : null}
                 </section>
                 );
               })}
               </div>
             </section>
-              {project ? <section className="pallet-margins">
+              {project ? <fieldset className="pallet-margins" disabled={(project.view.locked_layer_ids ?? []).length > 0}>
                 <h2>Отступы поддона</h2>
                 {MARGIN_PAIRS.map(({ first, second, link, labels: names, description }) => {
                   const linked = marginLinks(project)[link];
@@ -2073,7 +2132,7 @@ export function App() {
                       onChange={(event) => { setMarginDrafts((drafts) => ({ ...drafts, [second]: event.target.value })); updatePalletMargin(second, event.target.value); }} /></label>
                   </div>;
                 })}
-              </section> : null}
+              </fieldset> : null}
               <div className="layer-stack-footer">
                 <button type="button" className="secondary" onClick={() => void resetProject()}>
                   Сбросить проект
