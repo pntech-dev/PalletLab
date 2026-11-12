@@ -21,6 +21,7 @@ import { changePalletMargin, marginLinks, MARGIN_PAIRS, palletMargins, toggleMar
 import { remainingImportFeedback, stepImportPhase } from "./stepImportUi";
 import { betweenFaces, type BeamReference, type BeamReferenceFace } from "./manualBeamBetween";
 import { manualSectionForSupport } from "./manualBeamSection";
+import { SettingsDialog } from "./SettingsDialog";
 
 const startupStartedAt = performance.now();
 
@@ -324,6 +325,8 @@ declare global {
 
 export function App() {
   const [status, setStatus] = useState<ApplicationStatus | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const [calculation, setCalculation] = useState<CalculationResponse | null>(
     null,
   );
@@ -1319,6 +1322,7 @@ export function App() {
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
+      if (settingsOpen) return;
       if (event.key === "Escape") {
         event.preventDefault();
         stopDimensionEditing();
@@ -1801,7 +1805,9 @@ export function App() {
         <button type="button" className="secondary export-settings" onClick={openSolidWorksSetup} disabled={!project || exporting !== null}>
           Настройки экспорта
         </button>
+        <button type="button" className="secondary" onClick={() => setSettingsOpen(true)}>Настройки</button>
       </header>
+      {settingsOpen ? <SettingsDialog version={status?.version} onClose={closeSettings} /> : null}
       <div className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}`}>
         <aside className="editor-panel" aria-label="Редактор поддона">
           <div className="editor-heading">
