@@ -393,6 +393,7 @@ export default function PalletViewport({
   stepFaceSelectionEnabled = false,
   showPallet = true,
   hiddenLayerIds = [],
+  dimensionsVisible, gridVisible, onDimensionsVisibleChange, onGridVisibleChange,
   selectedBeams,
   dimensionEditing,
   hoveredDimension,
@@ -434,6 +435,10 @@ export default function PalletViewport({
     stepFaceSelectionEnabled?: boolean;
     showPallet?: boolean;
   hiddenLayerIds?: string[];
+  dimensionsVisible: boolean;
+  gridVisible: boolean;
+  onDimensionsVisibleChange: (value: boolean) => void;
+  onGridVisibleChange: (value: boolean) => void;
   selectedBeams: string[];
   dimensionEditing: boolean;
   hoveredDimension: string | null;
@@ -469,15 +474,11 @@ export default function PalletViewport({
   const [showDetails, setShowDetails] = useState(false);
   const [modelVisible, setModelVisible] = useState(true);
   const [modelTransparency, setModelTransparency] = useState(DEFAULT_MODEL_TRANSPARENCY);
-  const [dimensionsVisible, setDimensionsVisible] = useState(true);
-  const [gridVisible, setGridVisible] = useState(true);
   // A freshly imported or restored model must show up visible with the
   // default scene display settings, whatever the previous model used.
   useEffect(() => {
     setModelVisible(true);
     setModelTransparency(DEFAULT_MODEL_TRANSPARENCY);
-    setDimensionsVisible(true);
-    setGridVisible(true);
   }, [stepModelGeneration]);
   const [errorPresentation, setErrorPresentation] = useState<{
     message: string;
@@ -922,8 +923,8 @@ export default function PalletViewport({
       <div className="viewport-fit-control">
         <SceneSettings hasModel={!!stepModel} modelVisible={modelVisible} setModelVisible={setModelVisible}
           transparency={modelTransparency} setTransparency={setModelTransparency}
-          dimensionsVisible={dimensionsVisible} setDimensionsVisible={setDimensionsVisible}
-          gridVisible={gridVisible} setGridVisible={setGridVisible} />
+          dimensionsVisible={dimensionsVisible} setDimensionsVisible={onDimensionsVisibleChange}
+          gridVisible={gridVisible} setGridVisible={onGridVisibleChange} />
         {fitViewControl}
         <div className="viewport-zoom-control" aria-label="Масштаб просмотра">
           <button type="button" onClick={() => zoomCommand.current?.(1.2)} aria-label="Уменьшить масштаб">−</button>

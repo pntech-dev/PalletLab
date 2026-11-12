@@ -156,6 +156,7 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
             "camera": state.camera,
             "show_length_dimensions": state.show_length_dimensions,
             "show_width_dimensions": state.show_width_dimensions,
+            "show_grid": state.show_grid,
             "hidden_layer_ids": state.hidden_layer_ids,
             "locked_layer_ids": state.locked_layer_ids,
         },
@@ -329,6 +330,7 @@ def project_from_dict(raw: object) -> ProjectState:
         camera=camera,
         show_length_dimensions=_boolean(view, "show_length_dimensions", True),
         show_width_dimensions=_boolean(view, "show_width_dimensions", True),
+        show_grid=_boolean(view, "show_grid", True),
         hidden_layer_ids=hidden_layer_ids,
         locked_layer_ids=locked_layer_ids,
     )

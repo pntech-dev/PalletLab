@@ -232,3 +232,6 @@ fieldset.layer-card-content { border: 0; border-top: 1px solid #ebeae5; }
 .settings-footer { margin: 0; padding: 14px 24px; border-top: 1px solid #e5e5df; }
 @media (max-width: 720px) { .settings-layout { grid-template-columns: 145px minmax(0, 1fr); } .settings-content { padding: 18px; } .settings-contact { flex-wrap: wrap; } .settings-contact label { flex-basis: 100%; } .settings-update { align-items: start; flex-direction: column; } }
 @media (max-width: 480px) { .settings-layout { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); } .settings-nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid #e5e5df; padding: 8px; } .settings-nav button { flex: 0 0 auto; } }
+.settings-footer .settings-save-error { margin: 0 auto 0 0; font-size: 13px; }
+.settings-group .error { color: #b23d35; }
+.settings-group .success-message { color: #2f7555; }

@@ -22,6 +22,7 @@ import { remainingImportFeedback, stepImportPhase } from "./stepImportUi";
 import { betweenFaces, type BeamReference, type BeamReferenceFace } from "./manualBeamBetween";
 import { manualSectionForSupport } from "./manualBeamSection";
 import { SettingsDialog } from "./SettingsDialog";
+import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
 
 const startupStartedAt = performance.now();
 
@@ -127,6 +128,7 @@ export type Project = {
     width: Direction;
     layers: Layer[];
     upper_layer: "length" | "width";
+    rounding_step?: 0 | 5 | 50;
     material_id: string;
     pallet_margins?: [number, number] | [number, number, number, number];
     pallet_margin_links?: [boolean, boolean];
@@ -137,6 +139,7 @@ export type Project = {
     camera: CameraPreset;
     show_length_dimensions: boolean;
     show_width_dimensions: boolean;
+    show_grid?: boolean;
     hidden_layer_ids: string[];
     locked_layer_ids: string[];
   };
@@ -260,7 +263,14 @@ declare global {
     pywebview?: {
       api?: {
         status: () => Promise<ApplicationStatus>;
+        copy_text: (value: string) => Promise<CommandResponse>;
+        open_contact: (kind: "repository" | "email", value: string) => Promise<CommandResponse>;
         default_project: () => Promise<object>;
+        application_settings: () => Promise<AppSettings>;
+        recovery_project: () => Promise<Project | null>;
+        save_recovery_project: (project: Project) => Promise<{ ok: boolean }>;
+        clear_recovery_project: () => Promise<{ ok: boolean }>;
+        save_application_settings: (settings: AppSettings) => Promise<{ ok: boolean }>;
         calculate: (project: object) => Promise<CalculationResponse>;
         duplicate_layer: (project: object, layerId: string) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;
@@ -326,6 +336,8 @@ declare global {
 export function App() {
   const [status, setStatus] = useState<ApplicationStatus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const projectBaseline = useRef<string | null>(null);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const [calculation, setCalculation] = useState<CalculationResponse | null>(
     null,
@@ -590,12 +602,13 @@ export function App() {
       connectionStarted.current = true;
       try {
         reportStartupStage("мост Python подключён");
-        const [nextStatus, defaultProject] = await Promise.all([
-          api.status(),
-          api.default_project(),
+        const [nextStatus, defaultProject, loadedSettings] = await Promise.all([
+          api.status(), api.default_project(), api.application_settings(),
         ]);
-        const recovered = recoveredProject();
-        const initialProject = recovered ?? (defaultProject as Project);
+        setSettings(loadedSettings);
+        const defaultWithSettings = projectWithDefaults(defaultProject as Project, loadedSettings);
+        const recovered = loadedSettings.autosaveEnabled ? ((await api.recovery_project()) ?? recoveredProject()) : null;
+        const initialProject = recovered ?? defaultWithSettings;
         void restoreProjectStep(initialProject);
         const initialCalculation = await api.calculate(initialProject);
         reportStartupStage("первый расчёт завершён");
@@ -607,15 +620,19 @@ export function App() {
             setRecoveryNotice("Восстановлен последний автосохранённый проект.");
           } else {
             discardRecoveredProject();
-            applyProject(defaultProject as Project);
+            void api.clear_recovery_project();
+            projectBaseline.current = JSON.stringify(defaultWithSettings);
+            applyProject(defaultWithSettings);
           }
         } else {
           if (initialCalculation.ok && initialCalculation.snapshot) {
             calculatedInitialProject.current = initialCalculation.snapshot.project;
+            projectBaseline.current = JSON.stringify(initialCalculation.snapshot.project);
             applyProject(initialCalculation.snapshot.project);
             applyCalculation(initialCalculation);
           } else {
-            applyProject(defaultProject as Project);
+            projectBaseline.current = JSON.stringify(defaultWithSettings);
+            applyProject(defaultWithSettings);
           }
         }
         setStatus(nextStatus);
@@ -664,7 +681,7 @@ export function App() {
   }, [project, status]);
 
   useEffect(() => {
-    if (!status) return undefined;
+    if (!status || !settings.checkUpdates) return undefined;
     const timeout = window.setTimeout(() => {
       void window.pywebview?.api?.check_update().then(setUpdate).catch(() => undefined);
     }, 1500);
@@ -680,16 +697,31 @@ export function App() {
   }, [update.state]);
 
   useEffect(() => {
-    if (!project) return;
-    const timeout = window.setTimeout(() => {
-      try {
-        window.localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(project));
-      } catch {
-        // Recovery must not prevent editing when browser storage is unavailable.
-      }
-    }, 1000);
-    return () => window.clearTimeout(timeout);
-  }, [project]);
+    if (!status || !settings.autosaveEnabled) return;
+    const timer = window.setInterval(() => {
+      if (!currentProject.current) return;
+      const serialized = JSON.stringify(currentProject.current);
+      if (serialized === projectBaseline.current || serialized === savedProject) return;
+      void window.pywebview?.api?.save_recovery_project(currentProject.current).catch(() => undefined);
+    }, settings.autosaveMinutes * 60_000);
+    return () => window.clearInterval(timer);
+  }, [status, settings.autosaveEnabled, settings.autosaveMinutes, savedProject]);
+
+  async function saveApplicationSettings(next: AppSettings): Promise<boolean> {
+    const api = window.pywebview?.api;
+    if (!api) return false;
+    const response = await api.save_application_settings(next);
+    if (!response.ok) return false;
+    setSettings(next);
+    const current = currentProject.current;
+    const updated = current ? applyDefaultsIfUnmodified(current, projectBaseline.current, settings, next) : null;
+    if (current && updated) {
+      projectBaseline.current = JSON.stringify(updated);
+      applyProject(updated);
+      if (current.view.camera !== updated.view.camera) setCameraRequest((value) => value + 1);
+    }
+    return true;
+  }
 
   async function saveProject(saveAs = false) {
     if (!project || saving) return;
@@ -707,6 +739,7 @@ export function App() {
     if (response.ok) {
       setSavedProject(savedVersion);
       discardRecoveredProject();
+      void window.pywebview?.api?.clear_recovery_project();
       setRecoveryNotice(null);
     } else if (!response.cancelled)
       setCalculationError(response.error ?? "Не удалось сохранить проект.");
@@ -715,12 +748,14 @@ export function App() {
     const response = await window.pywebview!.api!.open_project();
     if (response.project) {
       void restoreProjectStep(response.project);
+      projectBaseline.current = JSON.stringify(response.project);
       applyProject(response.project);
       setSavedProject(JSON.stringify(response.project));
       setCalculationError(null);
       undoStack.current = [];
       redoStack.current = [];
       discardRecoveredProject();
+      void window.pywebview?.api?.clear_recovery_project();
       setRecoveryNotice(null);
       setHistoryVersion((value) => value + 1);
     } else if (!response.cancelled) {
@@ -1013,7 +1048,7 @@ export function App() {
   async function resetProject() {
     const api = window.pywebview?.api;
     if (!api || !project) return;
-    const defaultProject = (await api.default_project()) as Project;
+    const defaultProject = projectWithDefaults((await api.default_project()) as Project, settings);
     // The desktop reset restores the example geometry but intentionally keeps
     // the material selection, so both frontends have the same semantics.
     const nextProject = {
@@ -1021,6 +1056,7 @@ export function App() {
       pallet: { ...defaultProject.pallet, material_id: project.pallet.material_id },
     };
     updateProject(nextProject);
+    projectBaseline.current = JSON.stringify(nextProject);
     // The reset recalculation is debounced; the camera command is consumed by
     // the first calculation that lands afterwards.
     resetCameraPending.current = true;
@@ -1805,9 +1841,9 @@ export function App() {
         <button type="button" className="secondary export-settings" onClick={openSolidWorksSetup} disabled={!project || exporting !== null}>
           Настройки экспорта
         </button>
-        <button type="button" className="secondary" onClick={() => setSettingsOpen(true)}>Настройки</button>
+        <button type="button" className="secondary" onClick={() => setSettingsOpen(true)} disabled={!status}>Настройки</button>
       </header>
-      {settingsOpen ? <SettingsDialog version={status?.version} onClose={closeSettings} /> : null}
+      {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
       <div className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}`}>
         <aside className="editor-panel" aria-label="Редактор поддона">
           <div className="editor-heading">
@@ -2230,6 +2266,10 @@ export function App() {
                 stepFaceSelectionEnabled={!stepPalletBuilt && !buildingStepPallet}
                 showPallet={stepModel === null || stepPalletBuilt}
                 hiddenLayerIds={hiddenLayerIds}
+                dimensionsVisible={project?.view.show_length_dimensions ?? true}
+                gridVisible={project?.view.show_grid ?? true}
+                onDimensionsVisibleChange={(value) => { if (project) updateProject({ ...project, view: { ...project.view, show_length_dimensions: value, show_width_dimensions: value } }); }}
+                onGridVisibleChange={(value) => { if (project) updateProject({ ...project, view: { ...project.view, show_grid: value } }); }}
                 selectedBeams={selectedBeams.map(
                   (beam) => `${beam.layerId}:${beam.layerIndex}`,
                 )}

@@ -261,3 +261,12 @@ def test_locked_layers_round_trip_and_old_projects_default_to_unlocked():
         payload["view"]["locked_layer_ids"] = invalid
         with pytest.raises(ProjectPersistenceError):
             project_from_dict(payload)
+
+
+def test_grid_visibility_round_trips_and_defaults_for_old_projects():
+    state = _state()
+    state.show_grid = False
+    payload = project_to_dict(state)
+    assert project_from_dict(payload).show_grid is False
+    del payload["view"]["show_grid"]
+    assert project_from_dict(payload).show_grid is True

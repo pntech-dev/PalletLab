@@ -124,3 +124,71 @@ def test_web_api_creates_drawings_from_a_native_folder_choice(monkeypatch, tmp_p
     response = api.create_drawings(project, "kompas", "assembly", None)
 
     assert response == {"ok": True, "args": (project, "kompas", "assembly", str(tmp_path), None)}
+
+
+def test_application_settings_persist_and_do_not_replace_cad_settings(tmp_path) -> None:
+    store = _WebSettings(tmp_path / "settings.json")
+    assert store.save_drawing_template("kompas", "drawing.cdt")
+    settings = store.application_settings()
+    settings.update({"rounding": "5", "autosaveEnabled": False, "autosaveMinutes": 10,
+                     "showDimensions": False, "showGrid": False, "camera": "top", "checkUpdates": False})
+    assert store.save_application_settings(settings)
+    reloaded = _WebSettings(tmp_path / "settings.json")
+    assert reloaded.application_settings() == settings
+    assert reloaded.drawing_templates() == {"kompas": "drawing.cdt"}
+    assert not store.save_application_settings({**settings, "autosaveMinutes": 0})
+    assert not store.save_application_settings({**settings, "showGrid": "false"})
+    assert store.application_settings() == settings
+
+
+def test_web_autosave_survives_settings_instances_and_is_clearable(tmp_path) -> None:
+    from palletlab.application.service import ApplicationService
+
+    path = tmp_path / "settings.json"
+    project = ApplicationService().default_project()
+    store = _WebSettings(path)
+    assert store.save_recovery_project(project)
+    assert _WebSettings(path).recovery_project() == project
+    assert not store.save_recovery_project({})
+    assert store.recovery_project() == project
+    assert store.clear_recovery_project()
+    assert store.recovery_project() is None
+
+
+def test_open_contact_uses_default_application_and_rejects_unsafe_addresses(monkeypatch) -> None:
+    opened = []
+    monkeypatch.setattr("palletlab.desktop.web_host.webbrowser.open", lambda url: opened.append(url) or True)
+    api = WebApplicationApi()
+    assert api.open_contact("repository", "https://example.com/project")["ok"]
+    assert api.open_contact("email", "user+work@example.com")["ok"]
+    assert opened == ["https://example.com/project", "mailto:user%2Bwork@example.com"]
+    for kind, value in [("repository", "file:///secret"), ("repository", "https://user@host/"),
+                        ("email", "user@example.com?body=hello"), ("email", "user@example.com\nBcc:other@example.com"),
+                        ("invalid", "https://example.com")]:
+        assert not api.open_contact(kind, value)["ok"]
+    monkeypatch.setattr("palletlab.desktop.web_host.webbrowser.open", lambda _url: False)
+    assert not api.open_contact("repository", "https://example.com")["ok"]
+
+
+def test_copy_contact_uses_unicode_clipboard_and_reports_failure(monkeypatch) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    calls = []
+    clipboard = SimpleNamespace(
+        CF_UNICODETEXT=13,
+        OpenClipboard=lambda: calls.append("open"),
+        EmptyClipboard=lambda: calls.append("empty"),
+        SetClipboardText=lambda value, kind: calls.append((value, kind)),
+        CloseClipboard=lambda: calls.append("close"),
+    )
+    monkeypatch.setitem(sys.modules, "win32clipboard", clipboard)
+    api = WebApplicationApi()
+    assert api.copy_text("адрес@example.com")["ok"]
+    assert calls == ["open", "empty", ("адрес@example.com", 13), "close"]
+    assert not api.copy_text("")["ok"]
+    def fail(_value, _kind):
+        raise OSError("clipboard unavailable")
+    clipboard.SetClipboardText = fail
+    assert not api.copy_text("test@example.com")["ok"]
+    assert calls[-1] == "close"

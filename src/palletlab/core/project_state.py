@@ -73,6 +73,7 @@ class ProjectState:
     camera: CameraMode = "isometric"
     show_length_dimensions: bool = True
     show_width_dimensions: bool = True
+    show_grid: bool = True
     hidden_layer_ids: list[str] = field(default_factory=list)
     locked_layer_ids: list[str] = field(default_factory=list)
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import webbrowser
 import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,11 +13,13 @@ import mimetypes
 from pathlib import Path
 from threading import Lock, Thread
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 from palletlab.application.service import ApplicationService
 from palletlab.application.step_import_service import StepImportService
 from palletlab.application.update_manager import UpdateManager
 from palletlab.application.snapshots import SNAPSHOT_VERSION
+from palletlab.core.persistence import ProjectPersistenceError, project_from_dict
 from palletlab.exporters.solidworks import SolidWorksMaterialLibraryError, available_materials
 from palletlab.version import __version__
 
@@ -41,6 +45,48 @@ class WebApplicationApi:
     def status(self) -> dict[str, Any]:
         """Return a dependency-free handshake for the frontend shell."""
         return {"application": "PalletLab", "version": __version__, "snapshotVersion": SNAPSHOT_VERSION}
+
+    def copy_text(self, value: object) -> dict[str, object]:
+        """Copy a contact value through the Windows clipboard."""
+        if not isinstance(value, str) or not value.strip() or len(value) > 2048:
+            return {"ok": False, "error": "Нет данных для копирования."}
+        try:
+            import win32clipboard
+
+            win32clipboard.OpenClipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardText(value, win32clipboard.CF_UNICODETEXT)
+            finally:
+                win32clipboard.CloseClipboard()
+        except Exception:
+            return {"ok": False, "error": "Не удалось скопировать в буфер обмена."}
+        return {"ok": True}
+
+    def open_contact(self, kind: object, value: object) -> dict[str, object]:
+        """Open a configured repository URL or address in the default application."""
+        if not isinstance(value, str) or not value or len(value) > 2048:
+            return {"ok": False, "error": "Адрес не указан."}
+        if kind == "repository":
+            try:
+                parsed = urlsplit(value)
+                if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username is not None or parsed.password is not None or any(char.isspace() for char in value):
+                    raise ValueError
+            except ValueError:
+                return {"ok": False, "error": "Некорректный адрес репозитория."}
+            target = value
+        elif kind == "email":
+            if not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", value):
+                return {"ok": False, "error": "Некорректный адрес электронной почты."}
+            target = "mailto:" + quote(value, safe="@")
+        else:
+            return {"ok": False, "error": "Неизвестный тип адреса."}
+        try:
+            if not webbrowser.open(target):
+                return {"ok": False, "error": "Не удалось открыть приложение для этого адреса."}
+        except Exception:
+            return {"ok": False, "error": "Не удалось открыть приложение для этого адреса."}
+        return {"ok": True}
 
     def check_update(self) -> dict[str, object]:
         return self._updates.check()
@@ -83,6 +129,23 @@ class WebApplicationApi:
 
     def duplicate_layer(self, project: object, layer_id: object) -> dict[str, Any]:
         return ApplicationService().duplicate_layer(project, layer_id)
+
+    def recovery_project(self) -> dict[str, object] | None:
+        return self._settings.recovery_project()
+
+    def save_recovery_project(self, project: object) -> dict[str, bool]:
+        return {"ok": self._settings.save_recovery_project(project)}
+
+    def clear_recovery_project(self) -> dict[str, bool]:
+        return {"ok": self._settings.clear_recovery_project()}
+
+    def application_settings(self) -> dict[str, object]:
+        return self._settings.application_settings()
+
+    def save_application_settings(self, settings: object) -> dict[str, object]:
+        return {"ok": True} if self._settings.save_application_settings(settings) else {
+            "ok": False, "error": "Не удалось сохранить настройки программы."
+        }
 
     def default_project(self) -> dict[str, Any]:
         """Provide the temporary frontend with a valid starting project."""
@@ -250,6 +313,84 @@ class _WebSettings:
         root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "PalletLab"
         self._path = path or root / "web_settings.json"
         self._lock = Lock()
+
+    _DEFAULTS: dict[str, object] = {
+        "rounding": "50", "autosaveEnabled": True, "autosaveMinutes": 1,
+        "showDimensions": True, "showGrid": True, "camera": "isometric", "checkUpdates": True,
+    }
+
+    @classmethod
+    def _valid_settings(cls, value: object) -> bool:
+        return (isinstance(value, dict)
+                and value.get("rounding") in ("50", "5", "none")
+                and value.get("camera") in ("isometric", "top", "front", "side")
+                and all(type(value.get(key)) is bool for key in ("autosaveEnabled", "showDimensions", "showGrid", "checkUpdates"))
+                and type(value.get("autosaveMinutes")) is int and 1 <= value["autosaveMinutes"] <= 1440)
+
+    def application_settings(self) -> dict[str, object]:
+        with self._lock:
+            try:
+                payload = json.loads(self._path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+        value = payload.get("application") if isinstance(payload, dict) else None
+        return {key: value[key] for key in self._DEFAULTS} if self._valid_settings(value) else self._DEFAULTS.copy()
+
+    def save_application_settings(self, value: object) -> bool:
+        if not isinstance(value, dict) or not self._valid_settings(value):
+            return False
+        with self._lock:
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    payload = json.loads(self._path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                payload["application"] = {key: value[key] for key in self._DEFAULTS}
+                self._write(payload)
+            except OSError:
+                return False
+        return True
+
+    def recovery_project(self) -> dict[str, object] | None:
+        with self._lock:
+            try:
+                payload = json.loads(self._path.with_name("web_autosave.json").read_text(encoding="utf-8"))
+                project_from_dict(payload)
+                return payload if isinstance(payload, dict) else None
+            except (OSError, json.JSONDecodeError, ProjectPersistenceError):
+                return None
+
+    def save_recovery_project(self, project: object) -> bool:
+        try:
+            project_from_dict(project)
+        except ProjectPersistenceError:
+            return False
+        with self._lock:
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                path = self._path.with_name("web_autosave.json")
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as stream:
+                    json.dump(project, stream, ensure_ascii=False)
+                    temporary = Path(stream.name)
+                try:
+                    temporary.replace(path)
+                except OSError:
+                    path.write_text(json.dumps(project, ensure_ascii=False), encoding="utf-8")
+                    temporary.unlink(missing_ok=True)
+                return True
+            except OSError:
+                return False
+
+    def clear_recovery_project(self) -> bool:
+        with self._lock:
+            try:
+                self._path.with_name("web_autosave.json").unlink(missing_ok=True)
+                return True
+            except OSError:
+                return False
 
     def solidworks_options(self) -> dict[str, str] | None:
         with self._lock:
