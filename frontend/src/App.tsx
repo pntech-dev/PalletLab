@@ -275,6 +275,7 @@ declare global {
         save_application_settings: (settings: AppSettings) => Promise<{ ok: boolean }>;
         save_program_settings: (settings: AppSettings, solidworks: SolidWorksOptions | null) => Promise<CommandResponse>;
         solidworks_materials: (library: string) => Promise<SolidWorksMaterialsResponse>;
+        discover_cad_templates: (current: SolidWorksOptions) => Promise<{ ok: boolean; partTemplate: string | null; assemblyTemplate: string | null; materialLibrary: string | null; materials: string[]; error?: string }>;
         calculate: (project: object) => Promise<CalculationResponse>;
         duplicate_layer: (project: object, layerId: string) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;

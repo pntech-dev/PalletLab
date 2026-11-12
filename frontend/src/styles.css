@@ -236,3 +236,5 @@ fieldset.layer-card-content { border: 0; border-top: 1px solid #ebeae5; }
 .settings-group .error { color: #b23d35; }
 .settings-group .success-message { color: #2f7555; }
 .settings-cad-group > label:not(.settings-check) { width: 100%; }
+.settings-cad-group input[aria-invalid="true"] { border-color: #b23d35; box-shadow: 0 0 0 1px #b23d35; }
+.settings-cad-group .field-error { color: #b23d35; font-size: 12px; }

@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from palletlab.application.service import ApplicationService
+from palletlab.application.cad_discovery import discover_solidworks_paths
 from palletlab.application.step_import_service import StepImportService
 from palletlab.application.update_manager import UpdateManager
 from palletlab.application.snapshots import SNAPSHOT_VERSION
@@ -185,6 +186,9 @@ class WebApplicationApi:
     def export_kompas(self, project: object) -> dict[str, Any]:
         directory = self._choose_directory("Выберите папку для экспорта КОМПАС-3D")
         return {"ok": False, "cancelled": True} if directory is None else ApplicationService().export_kompas(project, directory)
+
+    def discover_cad_templates(self, current: object) -> dict[str, Any]:
+        return {"ok": True, **discover_solidworks_paths(current)}
 
     def select_solidworks_template(self, kind: object) -> dict[str, Any]:
         """Select exactly one template for the settings modal."""
