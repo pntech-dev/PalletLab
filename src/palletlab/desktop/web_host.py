@@ -192,7 +192,7 @@ class WebApplicationApi:
 
     def select_solidworks_template(self, kind: object) -> dict[str, Any]:
         """Select exactly one template for the settings modal."""
-        if kind not in {"part", "assembly"}:
+        if kind not in {"part", "assembly", "drawing"}:
             return {"ok": False, "error": "Некорректный тип шаблона SolidWorks."}
         path = self._choose_file(f"solidworks_{kind}")
         return {"ok": False, "cancelled": True} if path is None else {"ok": True, "path": path}
@@ -241,19 +241,19 @@ class WebApplicationApi:
         if directory is None:
             return {"ok": False, "cancelled": True}
         service = ApplicationService()
+        if cad == "solidworks" and not template:
+            options = self._settings.solidworks_options()
+            template = options.get("drawingTemplate") if options else None
+        if cad == "kompas":
+            template = None
         response = service.create_drawings(project, cad, scope, directory, template)
         if not response.get("needsTemplate"):
             return response
 
-        selected = self._choose_file(f"{cad}_drawing")
-        if selected is None:
-            if cad == "kompas":
-                # KOMPAS can deliberately use its own configured default.
-                return service.create_drawings(project, cad, scope, directory, None)
-            return {"ok": False, "error": "Создание чертежей SolidWorks отменено: не выбран шаблон."}
-        if not self._settings.save_drawing_template(str(cad), selected):
-            return {"ok": False, "error": "Не удалось сохранить шаблон чертежа."}
-        return service.create_drawings(project, cad, scope, directory, selected)
+        return {
+            "ok": False,
+            "error": "Не найден шаблон чертежа SolidWorks. Укажите его в Параметры → CAD и чертежи.",
+        }
 
     def solidworks_export_settings(self) -> dict[str, Any]:
         """Load web CAD preferences independently of the temporary web origin."""
@@ -329,7 +329,8 @@ class WebApplicationApi:
 class _WebSettings:
     """Small persistent store for preferences that must survive a new webview URL."""
 
-    _KEYS = ("partTemplate", "assemblyTemplate", "materialLibrary", "materialName")
+    _REQUIRED_SOLIDWORKS_KEYS = ("partTemplate", "assemblyTemplate", "materialLibrary", "materialName")
+    _KEYS = (*_REQUIRED_SOLIDWORKS_KEYS, "drawingTemplate")
 
     def __init__(self, path: Path | None = None) -> None:
         root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "PalletLab"
@@ -364,7 +365,9 @@ class _WebSettings:
     def save_program_settings(self, value: object, solidworks: object) -> bool:
         if (not isinstance(value, dict) or not self._valid_settings(value)
                 or (solidworks is not None and (not isinstance(solidworks, dict)
-                    or any(not isinstance(solidworks.get(key), str) or not solidworks[key].strip() for key in self._KEYS)))):
+                    or any(not isinstance(solidworks.get(key), str) or not solidworks[key].strip()
+                           for key in self._REQUIRED_SOLIDWORKS_KEYS)
+                    or not isinstance(solidworks.get("drawingTemplate", ""), str)))):
             return False
         with self._lock:
             try:
@@ -377,7 +380,7 @@ class _WebSettings:
                     payload = {}
                 payload["application"] = {key: value[key] for key in self._DEFAULTS}
                 if isinstance(solidworks, dict):
-                    payload["solidworks"] = {key: solidworks[key] for key in self._KEYS}
+                    payload["solidworks"] = {key: solidworks.get(key, "") for key in self._KEYS}
                 self._write(payload)
             except OSError:
                 return False
@@ -453,14 +456,21 @@ class _WebSettings:
             except (OSError, json.JSONDecodeError):
                 return None
         options = payload.get("solidworks") if isinstance(payload, dict) else None
-        if not isinstance(options, dict) or any(not isinstance(options.get(key), str) for key in self._KEYS):
+        if not isinstance(options, dict) or any(not isinstance(options.get(key), str) for key in self._REQUIRED_SOLIDWORKS_KEYS):
             return None
-        return {key: options[key] for key in self._KEYS}
+        drawing_template = options.get("drawingTemplate")
+        if not isinstance(drawing_template, str):
+            templates = payload.get("drawingTemplates")
+            drawing_template = templates.get("solidworks", "") if isinstance(templates, dict) else ""
+        return {**{key: options[key] for key in self._REQUIRED_SOLIDWORKS_KEYS},
+                "drawingTemplate": drawing_template if isinstance(drawing_template, str) else ""}
 
     def save_solidworks_options(self, options: object) -> bool:
-        if not isinstance(options, dict) or any(not isinstance(options.get(key), str) or not options[key] for key in self._KEYS):
+        if (not isinstance(options, dict)
+                or any(not isinstance(options.get(key), str) or not options[key] for key in self._REQUIRED_SOLIDWORKS_KEYS)
+                or not isinstance(options.get("drawingTemplate", ""), str)):
             return False
-        normalized = {key: options[key] for key in self._KEYS}
+        normalized = {key: options.get(key, "") for key in self._KEYS}
         with self._lock:
             try:
                 self._path.parent.mkdir(parents=True, exist_ok=True)

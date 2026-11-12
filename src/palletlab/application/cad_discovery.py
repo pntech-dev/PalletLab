@@ -23,10 +23,14 @@ def _running_solidworks_templates() -> dict[str, str]:
             api = _load_solidworks_api()
             preferences = api["const"]["user_preferences"]
             convert = api["Convert"]
-            return {
+            result = {
                 "partTemplate": str(app.GetUserPreferenceStringValue(convert.ToInt32(preferences.swDefaultTemplatePart)) or ""),
                 "assemblyTemplate": str(app.GetUserPreferenceStringValue(convert.ToInt32(preferences.swDefaultTemplateAssembly)) or ""),
             }
+            drawing_preference = getattr(preferences, "swDefaultTemplateDrawing", None)
+            if drawing_preference is not None:
+                result["drawingTemplate"] = str(app.GetUserPreferenceStringValue(convert.ToInt32(drawing_preference)) or "")
+            return result
         finally:
             pythoncom.CoUninitialize()
     except Exception:
@@ -55,7 +59,11 @@ def _registry_solidworks_templates() -> dict[str, str]:
             _, newest = max(versions)
             with winreg.OpenKey(root, newest + r"\Document Templates", 0, winreg.KEY_READ) as key:
                 result: dict[str, str] = {}
-                for field, name in (("partTemplate", "Default Part Template"), ("assemblyTemplate", "Default Assy Template")):
+                for field, name in (
+                    ("partTemplate", "Default Part Template"),
+                    ("assemblyTemplate", "Default Assy Template"),
+                    ("drawingTemplate", "Default Drawing Template"),
+                ):
                     try:
                         value, kind = winreg.QueryValueEx(key, name)
                     except OSError:
@@ -97,7 +105,7 @@ def _find_template(folders: list[Path], suffix: str) -> Path | None:
             continue
         # Prefer the standard English file name. Avoid silently choosing between
         # several custom templates when no default is identifiable.
-        standard = "part" if suffix == ".prtdot" else "assembly"
+        standard = {".prtdot": "part", ".asmdot": "assembly", ".drwdot": "drawing"}[suffix]
         preferred = next((p for p in matches if p.stem.casefold() == standard), None)
         if preferred:
             return preferred
@@ -117,7 +125,11 @@ def discover_solidworks_paths(current: object, *, program_data: Path | None = No
     files = program_files or Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
     folders = _template_folders(data, files)
     result: dict[str, Any] = {}
-    for key, suffix in (("partTemplate", ".prtdot"), ("assemblyTemplate", ".asmdot")):
+    for key, suffix in (
+        ("partTemplate", ".prtdot"),
+        ("assemblyTemplate", ".asmdot"),
+        ("drawingTemplate", ".drwdot"),
+    ):
         path = _valid_path(existing.get(key), suffix) or _valid_path(defaults.get(key), suffix) or _valid_path(registry_defaults.get(key), suffix) or _find_template(folders, suffix)
         result[key] = str(path) if path else None
     material_dirs = [files / "SOLIDWORKS Corp" / "SOLIDWORKS" / "lang" / language / "sldmaterials"

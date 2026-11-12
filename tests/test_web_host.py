@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -72,8 +73,16 @@ def test_web_api_returns_one_solidworks_template_path(monkeypatch, tmp_path) -> 
     assert response == {"ok": True, "path": str(part)}
 
 
+def test_web_api_returns_solidworks_drawing_template_path(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    drawing = tmp_path / "drawing.drwdot"
+    monkeypatch.setattr(api, "_choose_file", lambda mode: str(drawing) if mode == "solidworks_drawing" else None)
+
+    assert api.select_solidworks_template("drawing") == {"ok": True, "path": str(drawing)}
+
+
 def test_web_api_rejects_an_unknown_solidworks_template_type() -> None:
-    assert WebApplicationApi().select_solidworks_template("drawing") == {
+    assert WebApplicationApi().select_solidworks_template("invalid") == {
         "ok": False,
         "error": "Некорректный тип шаблона SolidWorks.",
     }
@@ -84,12 +93,34 @@ def test_web_settings_persist_solidworks_options(tmp_path) -> None:
     options = {
         "partTemplate": r"C:\templates\part.prtdot",
         "assemblyTemplate": r"C:\templates\assembly.asmdot",
+        "drawingTemplate": r"C:\templates\drawing.drwdot",
         "materialLibrary": r"C:\materials\solidworks materials.sldmat",
         "materialName": "Pine",
     }
 
     assert _WebSettings(path).save_solidworks_options(options) is True
     assert _WebSettings(path).solidworks_options() == options
+
+
+def test_web_settings_migrate_legacy_solidworks_drawing_template(tmp_path) -> None:
+    path = tmp_path / "web_settings.json"
+    path.write_text(json.dumps({
+        "solidworks": {
+            "partTemplate": "part.prtdot",
+            "assemblyTemplate": "assembly.asmdot",
+            "materialLibrary": "materials.sldmat",
+            "materialName": "Pine",
+        },
+        "drawingTemplates": {"solidworks": "drawing.drwdot"},
+    }), encoding="utf-8")
+
+    assert _WebSettings(path).solidworks_options() == {
+        "partTemplate": "part.prtdot",
+        "assemblyTemplate": "assembly.asmdot",
+        "drawingTemplate": "drawing.drwdot",
+        "materialLibrary": "materials.sldmat",
+        "materialName": "Pine",
+    }
 
 
 def test_web_settings_persist_drawing_templates(tmp_path) -> None:
@@ -121,9 +152,32 @@ def test_web_api_creates_drawings_from_a_native_folder_choice(monkeypatch, tmp_p
         lambda _service, *args: {"ok": True, "args": args},
     )
 
-    response = api.create_drawings(project, "kompas", "assembly", None)
+    response = api.create_drawings(project, "kompas", "assembly", "legacy-template.cdt")
 
     assert response == {"ok": True, "args": (project, "kompas", "assembly", str(tmp_path), None)}
+
+
+def test_web_api_uses_saved_solidworks_drawing_template(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    options = {
+        "partTemplate": "part.prtdot",
+        "assemblyTemplate": "assembly.asmdot",
+        "drawingTemplate": "drawing.drwdot",
+        "materialLibrary": "materials.sldmat",
+        "materialName": "Pine",
+    }
+    assert api._settings.save_solidworks_options(options)
+    monkeypatch.setattr(api, "_choose_directory", lambda _title: str(tmp_path))
+    received = []
+    monkeypatch.setattr(
+        "palletlab.desktop.web_host.ApplicationService.create_drawings",
+        lambda _service, *args: received.append(args) or {"ok": True},
+    )
+
+    response = api.create_drawings({"project": "payload"}, "solidworks", "assembly", None)
+
+    assert response == {"ok": True}
+    assert received == [({"project": "payload"}, "solidworks", "assembly", str(tmp_path), "drawing.drwdot")]
 
 
 def test_application_settings_persist_and_do_not_replace_cad_settings(tmp_path) -> None:
@@ -199,7 +253,7 @@ def test_combined_settings_save_is_atomic_and_preserves_drawing_templates(tmp_pa
     assert store.save_drawing_template("kompas", "drawing.cdt")
     settings = store.application_settings()
     solidworks = {"partTemplate": "part.prtdot", "assemblyTemplate": "assembly.asmdot",
-                  "materialLibrary": "materials.sldmat", "materialName": "Pine"}
+                  "drawingTemplate": "", "materialLibrary": "materials.sldmat", "materialName": "Pine"}
     assert store.save_program_settings(settings, solidworks)
     new_settings = {**settings, "rounding": "5"}
     assert not store.save_program_settings(new_settings, {**solidworks, "materialName": ""})

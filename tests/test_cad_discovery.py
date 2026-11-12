@@ -18,7 +18,7 @@ def test_finds_standard_templates_and_material_library(tmp_path):
     library = files / "SOLIDWORKS Corp" / "SOLIDWORKS" / "lang" / "russian" / "sldmaterials" / "solidworks materials.sldmat"
     _material(library)
     result = discover_solidworks_paths({}, program_data=data, program_files=files, defaults={}, registry_defaults={})
-    assert result == {"partTemplate": str(part), "assemblyTemplate": str(assembly),
+    assert result == {"partTemplate": str(part), "assemblyTemplate": str(assembly), "drawingTemplate": None,
                       "materialLibrary": str(library), "materials": ["Pine", "Oak"]}
 
 
@@ -31,6 +31,7 @@ def test_existing_valid_path_and_solidworks_default_take_priority(tmp_path):
         defaults={"partTemplate": str(default_part), "assemblyTemplate": str(default_assembly)}, registry_defaults={})
     assert result["partTemplate"] == str(own_part)
     assert result["assemblyTemplate"] == str(default_assembly)
+    assert result["drawingTemplate"] is None
     assert result["materialLibrary"] is None
 
 
@@ -45,7 +46,8 @@ def test_missing_invalid_and_ambiguous_files_are_not_guessed(tmp_path):
     invalid.write_text("not xml", encoding="utf-8")
     result = discover_solidworks_paths({"partTemplate": str(folder / "missing.prtdot"),
         "assemblyTemplate": str(folder / "custom1.prtdot")}, program_data=data, program_files=files, defaults={}, registry_defaults={})
-    assert result == {"partTemplate": None, "assemblyTemplate": None, "materialLibrary": None, "materials": []}
+    assert result == {"partTemplate": None, "assemblyTemplate": None, "drawingTemplate": None,
+                      "materialLibrary": None, "materials": []}
 
 
 def test_falls_back_to_english_library_and_newest_version(tmp_path):
@@ -59,6 +61,22 @@ def test_falls_back_to_english_library_and_newest_version(tmp_path):
     result = discover_solidworks_paths({}, program_data=data, program_files=files, defaults={}, registry_defaults={})
     assert "2025" in result["partTemplate"]
     assert result["materialLibrary"] == str(library)
+
+
+def test_discovers_drawing_template_from_default_or_standard_folder(tmp_path):
+    data = tmp_path / "data"
+    folder = data / "SOLIDWORKS" / "SOLIDWORKS 2025" / "templates"
+    folder.mkdir(parents=True)
+    standard = folder / "Drawing.drwdot"
+    default = tmp_path / "default.drwdot"
+    standard.touch()
+    default.touch()
+    args = {"program_data": data, "program_files": tmp_path / "files", "defaults": {},
+            "registry_defaults": {}}
+    assert discover_solidworks_paths({}, **args)["drawingTemplate"] == str(standard)
+    args["defaults"] = {"drawingTemplate": str(default)}
+    assert discover_solidworks_paths({}, **args)["drawingTemplate"] == str(default)
+    assert discover_solidworks_paths({"drawingTemplate": str(standard)}, **args)["drawingTemplate"] == str(standard)
 
 
 def test_registry_reads_latest_version_read_only_and_skips_missing_values(monkeypatch):
