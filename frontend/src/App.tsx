@@ -492,7 +492,7 @@ export function App() {
     showViewportToolError(calculationError);
   }, [calculationError]);
 
-  function applyProject(nextProject: Project) {
+  function applyProject(nextProject: Project, expandTopLayer = false) {
     setProject(nextProject);
     setCamera(nextProject.view.camera);
     setHiddenLayerIds(nextProject.view.hidden_layer_ids);
@@ -510,11 +510,11 @@ export function App() {
       ),
     );
     setSelectedLayerId((current) => nextProject.pallet.layers.some((layer) => layer.id === current) ? current : null);
-    setExpandedLayerId((current) =>
-      nextProject.pallet.layers.some((layer) => layer.id === current)
+    setExpandedLayerId((current) => expandTopLayer
+      ? nextProject.pallet.layers[nextProject.pallet.layers.length - 1]?.id ?? null
+      : nextProject.pallet.layers.some((layer) => layer.id === current)
         ? current
-        : nextProject.pallet.layers[0]?.id ?? null,
-    );
+        : nextProject.pallet.layers[0]?.id ?? null);
   }
 
   function updateHistory(previous: Project, next: Project) {
@@ -617,24 +617,24 @@ export function App() {
         if (recovered) {
           if (initialCalculation.ok && initialCalculation.snapshot) {
             calculatedInitialProject.current = initialCalculation.snapshot.project;
-            applyProject(initialCalculation.snapshot.project);
+            applyProject(initialCalculation.snapshot.project, true);
             applyCalculation(initialCalculation);
             setRecoveryNotice("Восстановлен последний автосохранённый проект.");
           } else {
             discardRecoveredProject();
             void api.clear_recovery_project();
             projectBaseline.current = JSON.stringify(defaultWithSettings);
-            applyProject(defaultWithSettings);
+            applyProject(defaultWithSettings, true);
           }
         } else {
           if (initialCalculation.ok && initialCalculation.snapshot) {
             calculatedInitialProject.current = initialCalculation.snapshot.project;
             projectBaseline.current = JSON.stringify(initialCalculation.snapshot.project);
-            applyProject(initialCalculation.snapshot.project);
+            applyProject(initialCalculation.snapshot.project, true);
             applyCalculation(initialCalculation);
           } else {
             projectBaseline.current = JSON.stringify(defaultWithSettings);
-            applyProject(defaultWithSettings);
+            applyProject(defaultWithSettings, true);
           }
         }
         setStatus(nextStatus);
@@ -761,7 +761,7 @@ export function App() {
     if (response.project) {
       void restoreProjectStep(response.project);
       projectBaseline.current = JSON.stringify(response.project);
-      applyProject(response.project);
+      applyProject(response.project, true);
       setSavedProject(JSON.stringify(response.project));
       setCalculationError(null);
       undoStack.current = [];
