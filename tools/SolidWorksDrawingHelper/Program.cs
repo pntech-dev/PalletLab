@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
@@ -24,6 +25,9 @@ const string AssemblyTechnicalRequirements =
     "5. Общие допуски формы и расположения — ГОСТ 30893.2—К.\n" +
     "6. Остальные ТТ по СТБ 1022-96.\n" +
     "7. Все сварные швы зачистить Rz40.";
+
+// The host decodes redirected helper output as UTF-8, including Russian paths.
+Console.OutputEncoding = new UTF8Encoding(false);
 
 if (args.Length is not 3 and not 4)
 {
@@ -52,9 +56,19 @@ try
     var pallet = args.Length == 4
         ? JsonSerializer.Deserialize<PalletDrawingData>(File.ReadAllText(args[3]), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
         : null;
-    if (sw.NewDocument(Path.GetFullPath(args[0]), 0, 0.0, 0.0) is null)
+    var drawingTemplate = Path.GetFullPath(args[0]);
+    // NewDocument's paper-size argument can replace the sheet setup stored in
+    // the template. Read all three values from the selected .drwdot instead.
+    if (sw.GetTemplateSizes(drawingTemplate) is not Array templateSize || templateSize.Length < 3)
+        throw new InvalidOperationException($"Не удалось прочитать размер листа шаблона чертежа: {drawingTemplate}");
+    var paperSize = Convert.ToInt32(templateSize.GetValue(0));
+    var paperWidth = Convert.ToDouble(templateSize.GetValue(1));
+    var paperHeight = Convert.ToDouble(templateSize.GetValue(2));
+    if (sw.NewDocument(drawingTemplate, paperSize, paperWidth, paperHeight) is null)
         throw new InvalidOperationException("SolidWorks did not create a drawing document.");
     var drawing = (DrawingDoc)(sw.IActiveDoc2 ?? throw new InvalidOperationException("Drawing document is not active."));
+    var sheet = (Sheet)drawing.GetCurrentSheet();
+    EnsureTemplateSheetFormat(drawing, sheet, drawingTemplate);
     var drawingModel = (ModelDoc2)drawing;
     PalletViewLayout? palletViewLayout = null;
     ApplyGostSheetScale(sw, drawing, pallet, hasAssemblyRequirements);
@@ -86,8 +100,47 @@ try
 }
 catch (Exception error)
 {
-    Console.Error.WriteLine(error);
+    Console.Error.WriteLine(error.Message);
     return 1;
+}
+
+static bool HasSheetFormatGeometry(DrawingDoc drawing)
+{
+    var model = (ModelDoc2)drawing;
+    // The active sketch is available in Edit Sheet Format mode. Looking up
+    // the template sketch while editing the sheet can return no geometry even
+    // when the selected template contains a frame.
+    return SheetFormatPolicy.Inspect(
+        () => drawing.EditTemplate(),
+        () =>
+        {
+            if (model.GetActiveSketch2() is not Sketch sketch)
+                return false;
+            return (sketch.GetSketchSegments() is Array segments && segments.Length > 0)
+                || (sketch.GetSketchBlockInstances() is Array blocks && blocks.Length > 0);
+        },
+        () => drawing.EditSheet());
+}
+
+static void EnsureTemplateSheetFormat(DrawingDoc drawing, Sheet sheet, string drawingTemplate)
+{
+    sheet.SheetFormatVisible = true;
+    string ResolveLinkedPath(string linked) => Path.IsPathRooted(linked)
+        ? linked : Path.Combine(Path.GetDirectoryName(drawingTemplate)!, linked);
+    SheetFormatPolicy.Ensure(
+        () => HasSheetFormatGeometry(drawing),
+        () => sheet.GetTemplateName(),
+        linked => File.Exists(ResolveLinkedPath(linked)),
+        () =>
+        {
+            var linked = sheet.GetTemplateName();
+            if (!Path.IsPathRooted(linked))
+                sheet.SetTemplateName(ResolveLinkedPath(linked));
+            return sheet.ReloadTemplate(false);
+        },
+        (int)swReloadTemplateResult_e.swReloadTemplate_Success,
+        drawingTemplate);
+    sheet.SheetFormatVisible = true;
 }
 
 static void ApplyGostSheetScale(SldWorks sw, DrawingDoc drawing, PalletDrawingData? pallet, bool reserveAssemblyRequirements)
@@ -298,6 +351,8 @@ static void AddAssemblyTechnicalRequirements(DrawingDoc drawing, ModelDoc2 drawi
         ?? throw new InvalidOperationException("SolidWorks did not create the assembly technical requirements note.");
     var annotation = note.GetAnnotation() as Annotation
         ?? throw new InvalidOperationException("SolidWorks did not expose the requirements note annotation.");
+    if (!annotation.SetTextFormat(0, true, null))
+        throw new InvalidOperationException("SolidWorks did not apply the template text style to the technical requirements.");
     // A note's position is its upper-left corner, not its lower-left corner.
     // Seed it at the upper edge of the sheet, measure its actual text bounds,
     // then translate those bounds so their lower-left corner has the requested
@@ -368,6 +423,10 @@ static void CreateReferenceLinearDimension(
         new[] { extensionX1, extensionY1, 0d }, new[] { extensionX2, extensionY2, 0d }, center,
         value / 1000d, textAngle, 0.004d) as DisplayDimension
         ?? throw new InvalidOperationException("SolidWorks did not create an overall dimension.");
+    var dimensionAnnotation = result.GetAnnotation() as Annotation
+        ?? throw new InvalidOperationException("SolidWorks did not expose the dimension annotation.");
+    if (!dimensionAnnotation.SetTextFormat(0, true, null))
+        throw new InvalidOperationException("SolidWorks did not apply the template dimension text style.");
     result.SetText((int)swDimensionTextParts_e.swDimensionTextSuffix, "*");
 }
 
@@ -389,6 +448,8 @@ static void AddAssemblySpecification(DrawingDoc drawing, ModelDoc2 drawingModel,
         ?? throw new InvalidOperationException("SolidWorks did not create the assembly specification table.");
     var annotation = table.GetAnnotation()
         ?? throw new InvalidOperationException("SolidWorks did not expose the specification table annotation.");
+    if (!table.SetTextFormat(true, null))
+        throw new InvalidOperationException("SolidWorks did not apply the template text style to the specification table.");
     table.BorderLineWeight = (int)swLineWeights_e.swLW_THIN;
     table.GridLineWeight = (int)swLineWeights_e.swLW_THIN;
     if (!annotation.SetPosition(TitleBlockLeft, TitleBlockTop + tableHeight, 0.0))
@@ -462,6 +523,9 @@ static void AddRotatedSpecificationHeaders(
     {
         var annotation = note.GetAnnotation() as Annotation
             ?? throw new InvalidOperationException("SolidWorks did not expose a rotated specification header.");
+        if (!annotation.SetTextFormat(0, true, null))
+            throw new InvalidOperationException("SolidWorks did not apply the template text style to a specification header.");
+        drawingModel.ForceRebuild3(false);
         var extent = GetNoteExtent(note);
         var position = (Array)annotation.GetPosition();
         var targetX = Convert.ToDouble(position.GetValue(0)) + centerX - (extent.Left + extent.Right) / 2d;

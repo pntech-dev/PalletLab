@@ -35,8 +35,52 @@ def test_export_directory_is_created_inside_chosen_parent_and_does_not_overwrite
 
     assert first.parent == tmp_path
     assert first.is_dir()
+    assert first.name.startswith("Поддон_")
+    assert first.name.endswith("_SolidWorks")
     assert second.is_dir()
     assert second.name == f"{first.name}_2"
+
+
+def test_export_uses_russian_names_for_solidworks_parts_and_assembly(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from palletlab.exporters import solidworks
+    from palletlab.exporters.naming import beam_display_name
+
+    created_parts = []
+    created_assemblies = []
+    monkeypatch.setattr(
+        solidworks,
+        "_resolve_templates",
+        lambda *_args: SimpleNamespace(part=tmp_path / "part.prtdot", assembly=tmp_path / "assembly.asmdot"),
+    )
+    monkeypatch.setattr(solidworks, "_ensure_material_library_is_configured", lambda *_args: None)
+    monkeypatch.setattr(
+        solidworks,
+        "_create_beam",
+        lambda *args: created_parts.append((args[-4], args[-3], args[-2], args[-1])),
+    )
+    monkeypatch.setattr(solidworks, "_create_assembly", lambda *args: created_assemblies.append(args[-1]))
+
+    output = solidworks._export(
+        {"SldWorks": lambda: SimpleNamespace()},
+        _result(),
+        tmp_path,
+        (None, None),
+        get_material("pine"),
+        tmp_path / "materials.sldmat",
+        "Сосна",
+    )
+
+    assert output.name.startswith("Поддон_")
+    assert output.name.endswith("_SolidWorks")
+    assert created_parts
+    for length, width, height, filename in created_parts:
+        assert filename.name == f"{beam_display_name(length, width, height).replace(' ', '_')}.SLDPRT"
+        assert " " not in filename.name
+        assert filename.name.startswith(("Брус_", "Доска_"))
+    assert created_assemblies[0].name.startswith("Поддон_")
+    assert " " not in created_assemblies[0].name
 
 
 def test_drawing_preserves_exported_assembly_metadata(tmp_path, monkeypatch):
@@ -44,7 +88,9 @@ def test_drawing_preserves_exported_assembly_metadata(tmp_path, monkeypatch):
     from palletlab.exporters import solidworks
     from palletlab.exporters.drawings import DrawingScope
 
-    (tmp_path / "Pallet.SLDASM").touch()
+    assembly = tmp_path / "Pallet.SLDASM"
+    assembly.touch()
+    (tmp_path / "~$Pallet.SLDASM").touch()
     metadata = tmp_path / ".palletlab-drawing.json"
     metadata.write_text('{"pallet": {"length": 1234}}', encoding="utf-8")
     captured = []
@@ -57,7 +103,10 @@ def test_drawing_preserves_exported_assembly_metadata(tmp_path, monkeypatch):
 
     solidworks.create_drawings(tmp_path, DrawingScope.ASSEMBLY_ONLY, None, _result())
 
+    assert captured[0][1] == assembly
+    assert captured[0][0] == tmp_path / "drawing.drwdot"
     assert captured[0][3] == metadata
+    assert captured[0][2].parent.name == "Чертежи"
     assert metadata.read_text(encoding="utf-8") == '{"pallet": {"length": 1234}}'
 
 
@@ -89,6 +138,55 @@ def test_new_document_uses_the_active_solidworks_document():
             return document
 
     assert _new_document(_SolidWorks(), Path(__file__), "detail") is document
+
+
+def test_drawing_uses_a3_paper_size_from_solidworks_template(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from palletlab.exporters import solidworks
+
+    calls = []
+
+    class _Drawing:
+        def Create3rdAngleViews2(self, _model):
+            return True
+
+        def NewDocument(self, *args):
+            calls.append(args)
+            return object()
+
+    drawing = _Drawing()
+
+    class _Application:
+        ActiveDoc = drawing
+
+    class _Win32:
+        def GetActiveObject(self, _name):
+            return _Application()
+
+    monkeypatch.setattr(solidworks, "_open_model_for_drawing", lambda *_args: tmp_path / "model.SLDASM")
+    monkeypatch.setattr(solidworks, "_use_sheet_scale_and_fit", lambda *_args: None)
+    monkeypatch.setattr(solidworks, "_remove_surface_finish_symbols", lambda *_args: None)
+    monkeypatch.setattr(solidworks, "_save_drawing", lambda *_args: None)
+
+    class _SolidWorks:
+        @property
+        def IActiveDoc2(self):
+            return drawing
+
+        def NewDocument(self, *args):
+            calls.append(args)
+            return drawing
+
+    _create_drawing(
+        {"win32": _Win32(), "const": {"paper_sizes": SimpleNamespace(swDwgPaperA3size=8)}},
+        _SolidWorks(),
+        tmp_path / "drawing.drwdot",
+        tmp_path / "model.SLDASM",
+        tmp_path / "drawing.SLDDRW",
+    )
+
+    assert calls[0][1] == 8
 
 
 def test_solidworks_coordinates_are_floats_for_com():
@@ -233,6 +331,8 @@ def test_solidworks_part_document_is_obtained_through_dispatch():
 
 
 def test_drawing_uses_the_automation_drawing_document(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
     class _Drawing:
         def __init__(self):
             self.created = []
@@ -284,6 +384,12 @@ def test_drawing_uses_the_automation_drawing_document(monkeypatch, tmp_path):
     monkeypatch.setattr("palletlab.exporters.solidworks._save_drawing", lambda *_args: None)
     model = tmp_path / "part.SLDPRT"
     monkeypatch.setattr("palletlab.exporters.solidworks._open_model_for_drawing", lambda *_args: model)
-    _create_drawing({"win32": _Win32()}, _SolidWorks(), Path(__file__), model, tmp_path / "part.SLDDRW")
+    _create_drawing(
+        {"win32": _Win32(), "const": {"paper_sizes": SimpleNamespace(swDwgPaperA3size=8)}},
+        _SolidWorks(),
+        Path(__file__),
+        model,
+        tmp_path / "part.SLDDRW",
+    )
 
     assert drawing.created == [str(model)]

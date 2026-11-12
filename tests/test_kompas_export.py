@@ -13,12 +13,16 @@ from palletlab.exporters.kompas import (
     _assembly_requirement_text_chunks,
     _apply_material,
     _apply_wood_appearance,
+    _create_beam,
     _create_drawing,
+    _dimensions_from_model_name,
     _drawing_scale,
+    _export,
     _placement,
     create_output_directory,
 )
 from palletlab.exporters.drawings import SpecificationRow
+from palletlab.exporters.naming import beam_display_name
 
 
 def _result():
@@ -33,7 +37,135 @@ def test_kompas_export_directory_is_created_inside_chosen_parent_without_overwri
 
     assert first.parent == tmp_path
     assert first.is_dir()
+    assert first.name.startswith("Поддон_")
+    assert first.name.endswith("_КОМПАС")
     assert second.name == f"{first.name}_2"
+
+
+def test_beam_names_use_russian_part_type_and_real_dimensions():
+    assert beam_display_name(4500, 50, 70) == "Брус 70x50 L=4500"
+    assert beam_display_name(4500, 100, 25) == "Доска 25x100 L=4500"
+
+
+def test_export_uses_russian_names_for_kompas_part_and_assembly_files(tmp_path, monkeypatch):
+    from palletlab.exporters import kompas
+
+    direction = DirectionInput(70, 50, (1000,), 100, 100, 100, 100)
+    square_pallet = build_pallet(calculate_direction(direction), calculate_direction(direction))
+    created_parts = []
+    created_assemblies = []
+
+    def create_beam(_kompas, _constants, _material, length, width, height, name, filename):
+        created_parts.append((name, filename, length, width, height))
+        filename.touch()
+
+    def create_assembly(_kompas, _constants, _result, _parts, filename):
+        created_assemblies.append(filename)
+        filename.touch()
+
+    monkeypatch.setattr(kompas, "_create_beam", create_beam)
+    monkeypatch.setattr(kompas, "_create_assembly", create_assembly)
+    api = {
+        "Dispatch": lambda _name: SimpleNamespace(Visible=False),
+        "constants3d": object(),
+    }
+
+    _export(api, square_pallet, tmp_path, get_material("pine"))
+
+    assert created_parts
+    for name, filename, length, width, height in created_parts:
+        assert name == beam_display_name(length, width, height)
+        filename_base = name.replace(" ", "_")
+        assert filename.stem == filename_base or filename.stem.startswith(f"{filename_base}_")
+        assert " " not in filename.name
+        assert filename.stem.startswith(("Брус_", "Доска_"))
+        assert _dimensions_from_model_name(filename) == [length, width, height]
+    assert len({filename for _name, filename, *_dimensions in created_parts}) == len(created_parts)
+    assert created_assemblies[0].name.startswith("Поддон_")
+    assert " " not in created_assemblies[0].name
+
+
+def test_create_beam_sets_the_actual_kompas_part_name_before_saving(tmp_path, monkeypatch):
+    class _Sketch2D:
+        def ksLineSeg(self, *_args):
+            return True
+
+    class _SketchDefinition:
+        def SetPlane(self, _plane):
+            pass
+
+        def BeginEdit(self):
+            return _Sketch2D()
+
+        def EndEdit(self):
+            pass
+
+    class _ExtrusionDefinition:
+        def SetSketch(self, _sketch):
+            pass
+
+        def ExtrusionParam(self):
+            return SimpleNamespace()
+
+    class _Entity:
+        def __init__(self, definition=None):
+            self.definition = definition
+
+        def GetDefinition(self):
+            return self.definition
+
+        def Create(self):
+            return True
+
+    class _Part:
+        name = "Деталь"
+
+        def __init__(self):
+            self.updated = 0
+
+        def NewEntity(self, entity_type):
+            return _Entity(_SketchDefinition() if entity_type == "sketch" else _ExtrusionDefinition())
+
+        def GetDefaultEntity(self, _entity_type):
+            return object()
+
+        def Update(self):
+            self.updated += 1
+            return True
+
+    class _Document:
+        def __init__(self):
+            self.part = _Part()
+            self.saved_filename = None
+
+        def Create(self, *_args):
+            return True
+
+        def GetPart(self, _part_type):
+            return self.part
+
+        def SaveAs(self, filename):
+            self.saved_filename = filename
+            return True
+
+    document = _Document()
+    kompas = SimpleNamespace(Document3D=document)
+    constants = SimpleNamespace(
+        pTop_Part="root",
+        o3d_sketch="sketch",
+        o3d_planeXOY="plane",
+        o3d_baseExtrusion="extrusion",
+        dtNormal="normal",
+    )
+    monkeypatch.setattr("palletlab.exporters.kompas._apply_material", lambda *_args: None)
+    monkeypatch.setattr("palletlab.exporters.kompas._apply_wood_appearance", lambda *_args: None)
+    filename = tmp_path / "Брус_70x50_L=4500.m3d"
+
+    _create_beam(kompas, constants, get_material("pine"), 4500, 50, 70, "Брус 70x50 L=4500", filename)
+
+    assert document.part.name == "Брус 70x50 L=4500"
+    assert document.part.updated == 1
+    assert document.saved_filename == str(filename)
 
 
 def test_drawing_uses_specification_saved_with_export(tmp_path, monkeypatch):
@@ -50,12 +182,13 @@ def test_drawing_uses_specification_saved_with_export(tmp_path, monkeypatch):
     monkeypatch.setattr(kompas, "_load_kompas_api", lambda: {
         "pythoncom": pythoncom, "Dispatch": lambda _name: SimpleNamespace(Visible=False), "constants": object(),
     })
-    monkeypatch.setattr(kompas, "_create_drawing", lambda *_args, **kwargs: captured.append(kwargs))
+    monkeypatch.setattr(kompas, "_create_drawing", lambda *args, **kwargs: captured.append((args, kwargs)))
 
     kompas.create_drawings(tmp_path, DrawingScope.ASSEMBLY_ONLY, None, _result())
 
-    assert captured[0]["specification_rows"][0].name == "Stored part"
-    assert captured[0]["specification_rows"][0].quantity == 42
+    assert captured[0][0][3].parent.name == "Чертежи"
+    assert captured[0][1]["specification_rows"][0].name == "Stored part"
+    assert captured[0][1]["specification_rows"][0].quantity == 42
 
 
 def test_legacy_specification_finds_actual_part_names_by_dimensions(tmp_path):
@@ -81,9 +214,16 @@ def test_exported_specification_records_actual_part_and_quantity(tmp_path):
     key = ("length", 4200, 50, 70)
     _write_drawing_metadata(tmp_path, _result(), {key: tmp_path / "Beam_7_4200x50x70.m3d"}, {key: [beam, beam]})
     rows = _stored_specification_rows(tmp_path)
-    assert [(row.designation, row.dimensions, row.quantity) for row in rows] == [
-        ("Beam_7_4200x50x70", "4200×50×70", 2),
+
+    assert [(row.name, row.designation, row.dimensions, row.quantity) for row in rows] == [
+        ("Брус 70x50 L=4200", "Beam_7_4200x50x70", "", 2),
     ]
+
+
+def test_drawing_dimensions_parse_russian_part_and_assembly_filenames():
+    assert _dimensions_from_model_name(Path("Брус_70x50_L=4500.m3d")) == [4500.0, 50.0, 70.0]
+    assert _dimensions_from_model_name(Path("Доска_25x100_L=4500_2.m3d")) == [4500.0, 100.0, 25.0]
+    assert _dimensions_from_model_name(Path("Поддон_4500x1500.a3d")) == [4500.0, 1500.0]
 
 
 def test_kompas_placements_share_the_pallet_origin():

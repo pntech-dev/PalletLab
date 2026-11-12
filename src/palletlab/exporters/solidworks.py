@@ -20,6 +20,7 @@ from xml.etree import ElementTree
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
 from palletlab.core.materials import PalletMaterial, get_material
+from palletlab.exporters.naming import beam_display_name
 from palletlab.exporters.drawings import (
     DrawingExportError,
     DrawingScope,
@@ -97,8 +98,11 @@ def create_drawings(
     metadata = _drawing_metadata_path(directory)
     if pallet_result and not metadata.is_file():
         metadata = _write_drawing_metadata(directory, pallet_result)
-    models = sorted(directory.glob("*.SLDPRT"))
-    assembly = next(iter(directory.glob("*.SLDASM")), None)
+    models = sorted(model for model in directory.glob("*.SLDPRT") if not model.name.startswith("~$"))
+    assembly = next(
+        (model for model in directory.glob("*.SLDASM") if not model.name.startswith("~$")),
+        None,
+    )
     if scope is DrawingScope.PARTS_AND_ASSEMBLY:
         models_to_draw = [*models, *([assembly] if assembly else [])]
     else:
@@ -115,7 +119,7 @@ def create_drawings(
             raise DrawingExportError("Не удалось запустить SolidWorks.")
         sw.Visible = True
         template = _resolve_drawing_template(api, sw, configured_template)
-        drawings = directory / "Drawings"
+        drawings = directory / "Чертежи"
         drawings.mkdir(exist_ok=True)
         for model in models_to_draw:
             _create_drawing_with_helper(
@@ -192,7 +196,7 @@ def _resolve_drawing_template(api: dict[str, object], sw, configured_template: s
 def _create_drawing(api: dict[str, object], sw, template: Path, model_path: Path, filename: Path) -> None:
     model_path = _open_model_for_drawing(api, model_path)
     try:
-        _new_document(sw, template, filename.name)
+        _new_document(sw, template, filename.name, api["const"]["paper_sizes"].swDwgPaperA3size)
     except Exception as exc:
         raise DrawingExportError(f"SolidWorks не создал лист чертежа {filename.name}: {exc}") from exc
     # NewDocument returns IModelDoc2 through pythonnet.  Drawing-only methods
@@ -329,7 +333,7 @@ def _metres(value_mm: float) -> float:
 def create_output_directory(parent: str | Path, result: PalletResult) -> Path:
     """Create a new non-conflicting folder for one pallet export."""
     parent_path = Path(parent)
-    base_name = "SolidWorks_Pallet_{}x{}".format(
+    base_name = "Поддон_{}x{}_SolidWorks".format(
         _format_number(result.pallet_length), _format_number(result.pallet_width)
     )
     output = parent_path / base_name
@@ -384,6 +388,7 @@ def _load_solidworks_api() -> dict[str, object]:
             swSaveAsOptions_e,
             swSaveAsVersion_e,
             swStandardViews_e,
+            swDwgPaperSizes_e,
             swUserPreferenceStringValue_e,
         )
     except (ImportError, OSError) as exc:
@@ -396,6 +401,7 @@ def _load_solidworks_api() -> dict[str, object]:
             "save_options": swSaveAsOptions_e,
             "save_version": swSaveAsVersion_e,
             "views": swStandardViews_e,
+            "paper_sizes": swDwgPaperSizes_e,
             "user_preferences": swUserPreferenceStringValue_e,
         },
         "pythoncom": pythoncom,
@@ -417,14 +423,20 @@ def _export(api: dict[str, object], result: PalletResult, parent_directory: Path
             groups[(beam.orientation, beam.size_x, beam.size_y, beam.size_z)].append(beam)
 
         parts: dict[tuple[str, float, float, float], Path] = {}
-        for index, (key, beams) in enumerate(groups.items(), start=1):
+        part_name_counts: dict[str, int] = {}
+        for key, beams in groups.items():
             orientation, size_x, size_y, size_z = key
             length, cross_width = (size_y, size_x) if orientation == "width" else (size_x, size_y)
-            filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(cross_width)}x{_format_number(size_z)}.SLDPRT"
+            part_name = beam_display_name(length, cross_width, size_z)
+            filename_stem = part_name.replace(" ", "_")
+            part_name_counts[filename_stem] = part_name_counts.get(filename_stem, 0) + 1
+            if part_name_counts[filename_stem] > 1:
+                filename_stem += f"_{part_name_counts[filename_stem]}"
+            filename = output / f"{filename_stem}.SLDPRT"
             _create_beam(api, sw, templates.part, material, material_library, material_name, length, cross_width, size_z, filename)
             parts[key] = filename
 
-        assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
+        assembly_file = output / f"Поддон_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
         _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
         _write_drawing_metadata(output, result)
         return output
@@ -461,8 +473,8 @@ def _flag_methods(com_object, *names: str) -> None:
             flag(name)
 
 
-def _new_document(sw, template: Path, name: str):
-    if sw.NewDocument(str(template), 0, 0.0, 0.0) is None:
+def _new_document(sw, template: Path, name: str, paper_size: int = 0):
+    if sw.NewDocument(str(template), paper_size, 0.0, 0.0) is None:
         raise SolidWorksExportError(f"SolidWorks не создал документ: {name}")
     document = sw.IActiveDoc2
     if document is None:

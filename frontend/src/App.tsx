@@ -281,7 +281,7 @@ declare global {
         save_application_settings: (settings: AppSettings) => Promise<{ ok: boolean }>;
         save_program_settings: (settings: AppSettings, solidworks: SolidWorksOptions | null) => Promise<CommandResponse>;
         solidworks_materials: (library: string) => Promise<SolidWorksMaterialsResponse>;
-        discover_cad_templates: (current: SolidWorksOptions) => Promise<{ ok: boolean; partTemplate: string | null; assemblyTemplate: string | null; drawingTemplate: string | null; materialLibrary: string | null; materials: string[]; error?: string }>;
+        discover_cad_templates: (current: SolidWorksOptions) => Promise<{ ok: boolean; partTemplate: string | null; assemblyTemplate: string | null; drawingTemplate: string | null; materialLibrary: string | null; materials: string[]; sources: Record<string, string>; configuredPaths: Record<string, string>; error?: string }>;
         calculate: (project: object) => Promise<CalculationResponse>;
         duplicate_layer: (project: object, layerId: string) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;
@@ -1716,7 +1716,7 @@ export function App() {
       </div>
       {viewportExpanded && calculation?.snapshot?.pallet ? (
         <span className="viewport-toolbar-summary">
-          Длина: {formatMillimetres(calculation.snapshot.pallet.size.length)} мм · Ширина: {formatMillimetres(calculation.snapshot.pallet.size.width)} мм · Высота: {formatMillimetres(calculation.snapshot.pallet.size.height)} мм · {calculation.snapshot.pallet.beams.length} шт.
+          Длина: {formatMillimetres(calculation.snapshot.pallet.size.length)} мм · Ширина: {formatMillimetres(calculation.snapshot.pallet.size.width)} мм · Высота: {formatMillimetres(calculation.snapshot.pallet.size.height)} мм · Масса: {formatKilograms(calculation.snapshot.pallet.massKg)} кг · {calculation.snapshot.pallet.beams.length} шт.
         </span>
       ) : <div className="viewport-tool-spacer" />}
       <label className="viewport-view-select">

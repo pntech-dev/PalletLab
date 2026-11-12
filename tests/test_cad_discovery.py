@@ -19,17 +19,18 @@ def test_finds_standard_templates_and_material_library(tmp_path):
     _material(library)
     result = discover_solidworks_paths({}, program_data=data, program_files=files, defaults={}, registry_defaults={})
     assert result == {"partTemplate": str(part), "assemblyTemplate": str(assembly), "drawingTemplate": None,
-                      "materialLibrary": str(library), "materials": ["Pine", "Oak"]}
+                      "materialLibrary": str(library), "materials": ["Pine", "Oak"],
+                      "sources": {"partTemplate": "standard", "assemblyTemplate": "standard", "drawingTemplate": "not_found"}, "configuredPaths": {}}
 
 
-def test_existing_valid_path_and_solidworks_default_take_priority(tmp_path):
+def test_solidworks_default_takes_priority_over_saved_path(tmp_path):
     data, files = tmp_path / "data", tmp_path / "files"
     own_part, default_part, default_assembly = tmp_path / "custom.prtdot", tmp_path / "default.prtdot", tmp_path / "custom.asmdot"
     for path in (own_part, default_part, default_assembly):
         path.touch()
     result = discover_solidworks_paths({"partTemplate": str(own_part)}, program_data=data, program_files=files,
         defaults={"partTemplate": str(default_part), "assemblyTemplate": str(default_assembly)}, registry_defaults={})
-    assert result["partTemplate"] == str(own_part)
+    assert result["partTemplate"] == str(default_part)
     assert result["assemblyTemplate"] == str(default_assembly)
     assert result["drawingTemplate"] is None
     assert result["materialLibrary"] is None
@@ -47,7 +48,8 @@ def test_missing_invalid_and_ambiguous_files_are_not_guessed(tmp_path):
     result = discover_solidworks_paths({"partTemplate": str(folder / "missing.prtdot"),
         "assemblyTemplate": str(folder / "custom1.prtdot")}, program_data=data, program_files=files, defaults={}, registry_defaults={})
     assert result == {"partTemplate": None, "assemblyTemplate": None, "drawingTemplate": None,
-                      "materialLibrary": None, "materials": []}
+                      "materialLibrary": None, "materials": [],
+                      "sources": {"partTemplate": "not_found", "assemblyTemplate": "not_found", "drawingTemplate": "not_found"}, "configuredPaths": {}}
 
 
 def test_falls_back_to_english_library_and_newest_version(tmp_path):
@@ -76,7 +78,7 @@ def test_discovers_drawing_template_from_default_or_standard_folder(tmp_path):
     assert discover_solidworks_paths({}, **args)["drawingTemplate"] == str(standard)
     args["defaults"] = {"drawingTemplate": str(default)}
     assert discover_solidworks_paths({}, **args)["drawingTemplate"] == str(default)
-    assert discover_solidworks_paths({"drawingTemplate": str(standard)}, **args)["drawingTemplate"] == str(standard)
+    assert discover_solidworks_paths({"drawingTemplate": str(standard)}, **args)["drawingTemplate"] == str(default)
 
 
 def test_registry_reads_latest_version_read_only_and_skips_missing_values(monkeypatch):
@@ -119,7 +121,7 @@ def test_registry_access_denied_falls_back_gracefully(monkeypatch):
     assert _registry_solidworks_templates() == {}
 
 
-def test_registry_paths_precede_standard_folders_but_do_not_override_explicit_or_running(tmp_path):
+def test_registry_paths_precede_saved_and_standard_but_not_running(tmp_path):
     data = tmp_path / "data"
     folder = data / "SOLIDWORKS" / "SOLIDWORKS 2025" / "templates"
     folder.mkdir(parents=True)
@@ -130,9 +132,59 @@ def test_registry_paths_precede_standard_folders_but_do_not_override_explicit_or
     args = {"program_data": data, "program_files": tmp_path / "files", "defaults": {},
             "registry_defaults": {"partTemplate": str(registered)}}
     assert discover_solidworks_paths({}, **args)["partTemplate"] == str(registered)
-    assert discover_solidworks_paths({"partTemplate": str(selected)}, **args)["partTemplate"] == str(selected)
+    assert discover_solidworks_paths({"partTemplate": str(selected)}, **args)["partTemplate"] == str(registered)
     args["defaults"] = {"partTemplate": str(running)}
     assert discover_solidworks_paths({}, **args)["partTemplate"] == str(running)
     args["defaults"] = {}
     registered.unlink()
-    assert discover_solidworks_paths({}, **args)["partTemplate"] == str(standard)
+    result = discover_solidworks_paths({}, **args)
+    assert result["partTemplate"] is None
+    assert result["sources"]["partTemplate"] == "invalid_default"
+
+
+def test_updated_solidworks_defaults_replace_existing_paths_and_missing_is_not_masked(tmp_path):
+    old = {field: tmp_path / f"old{ext}" for field, ext in (("partTemplate", ".prtdot"), ("assemblyTemplate", ".asmdot"), ("drawingTemplate", ".drwdot"))}
+    new = {field: tmp_path / f"new{path.suffix}" for field, path in old.items()}
+    for path in (*old.values(), *new.values()):
+        path.touch()
+    current = {field: str(path) for field, path in old.items()}
+    defaults = {field: str(path) for field, path in new.items()}
+    args = {"program_data": tmp_path / "data", "program_files": tmp_path / "files", "registry_defaults": {}}
+    result = discover_solidworks_paths(current, defaults=defaults, **args)
+    assert {field: result[field] for field in new} == defaults
+    assert all(result["sources"][field] == "solidworks" for field in new)
+    new["drawingTemplate"].unlink()
+    result = discover_solidworks_paths(current, defaults=defaults, **args)
+    assert result["drawingTemplate"] is None
+    assert result["sources"]["drawingTemplate"] == "invalid_default"
+    assert result["configuredPaths"]["drawingTemplate"] == str(new["drawingTemplate"])
+    defaults["partTemplate"] = ""
+    result = discover_solidworks_paths(current, defaults=defaults, **args)
+    assert result["partTemplate"] is None
+
+
+def test_running_solidworks_reads_each_preference_without_installed_interop(monkeypatch):
+    import sys
+    from types import ModuleType, SimpleNamespace
+    from palletlab.application.cad_discovery import _running_solidworks_templates
+
+    calls = []
+    class App:
+        def _FlagAsMethod(self, name):
+            calls.append(("method", name))
+        def GetUserPreferenceStringValue(self, preference):
+            calls.append(("preference", preference))
+            if preference == 9:
+                raise RuntimeError("unavailable")
+            return {8: "part.prtdot", 10: "drawing.drwdot"}[preference]
+    pythoncom = SimpleNamespace(CoInitialize=lambda: calls.append("init"), CoUninitialize=lambda: calls.append("uninit"))
+    client = ModuleType("win32com.client")
+    client.GetActiveObject = lambda name: App()
+    win32com = ModuleType("win32com")
+    win32com.client = client
+    monkeypatch.setitem(sys.modules, "pythoncom", pythoncom)
+    monkeypatch.setitem(sys.modules, "win32com", win32com)
+    monkeypatch.setitem(sys.modules, "win32com.client", client)
+    assert _running_solidworks_templates() == {"partTemplate": "part.prtdot", "drawingTemplate": "drawing.drwdot"}
+    assert calls == ["init", ("method", "GetUserPreferenceStringValue"), ("preference", 8),
+                     ("preference", 9), ("preference", 10), "uninit"]

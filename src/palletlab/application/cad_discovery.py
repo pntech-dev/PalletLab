@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -9,32 +10,38 @@ from typing import Any
 
 from palletlab.exporters.solidworks import SolidWorksMaterialLibraryError, available_materials
 
+LOGGER = logging.getLogger(__name__)
+
 
 def _running_solidworks_templates() -> dict[str, str]:
-    """Read defaults from a running SolidWorks instance, when its API is available."""
+    """Read each default from the running COM instance, without starting CAD.
+
+    These preference IDs are documented by SolidWorks' API example; using
+    COM integers avoids a dependency on interop DLLs at a fixed install path.
+    """
     try:
         import pythoncom
         import win32com.client
-        from palletlab.exporters.solidworks import _load_solidworks_api
 
         pythoncom.CoInitialize()
         try:
             app = win32com.client.GetActiveObject("SldWorks.Application")
-            api = _load_solidworks_api()
-            preferences = api["const"]["user_preferences"]
-            convert = api["Convert"]
-            result = {
-                "partTemplate": str(app.GetUserPreferenceStringValue(convert.ToInt32(preferences.swDefaultTemplatePart)) or ""),
-                "assemblyTemplate": str(app.GetUserPreferenceStringValue(convert.ToInt32(preferences.swDefaultTemplateAssembly)) or ""),
-            }
-            drawing_preference = getattr(preferences, "swDefaultTemplateDrawing", None)
-            if drawing_preference is not None:
-                result["drawingTemplate"] = str(app.GetUserPreferenceStringValue(convert.ToInt32(drawing_preference)) or "")
+            flag = getattr(app, "_FlagAsMethod", None)
+            if flag is not None:
+                flag("GetUserPreferenceStringValue")
+            result: dict[str, str] = {}
+            for field, preference in (("partTemplate", 8), ("assemblyTemplate", 9), ("drawingTemplate", 10)):
+                try:
+                    value = app.GetUserPreferenceStringValue(preference)
+                    result[field] = value if isinstance(value, str) else ""
+                except Exception:
+                    # One unsupported preference must not hide the others.
+                    LOGGER.debug("Unable to read SolidWorks template preference %s", field, exc_info=True)
             return result
         finally:
             pythoncom.CoUninitialize()
     except Exception:
-        # SolidWorks is optional and may not be running or have its API installed.
+        # SolidWorks is optional and may not be running or registered.
         return {}
 
 
@@ -124,14 +131,33 @@ def discover_solidworks_paths(current: object, *, program_data: Path | None = No
     data = program_data or Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
     files = program_files or Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
     folders = _template_folders(data, files)
-    result: dict[str, Any] = {}
+    result: dict[str, Any] = {"configuredPaths": {}}
     for key, suffix in (
         ("partTemplate", ".prtdot"),
         ("assemblyTemplate", ".asmdot"),
         ("drawingTemplate", ".drwdot"),
     ):
-        path = _valid_path(existing.get(key), suffix) or _valid_path(defaults.get(key), suffix) or _valid_path(registry_defaults.get(key), suffix) or _find_template(folders, suffix)
+        # A configured SolidWorks default is authoritative even when it points
+        # to a missing file; do not silently substitute an older saved template.
+        if key in defaults:
+            path = _valid_path(defaults[key], suffix)
+            source = "solidworks" if path else "invalid_default"
+        elif key in registry_defaults:
+            path = _valid_path(registry_defaults[key], suffix)
+            source = "registry" if path else "invalid_default"
+        else:
+            path = _valid_path(existing.get(key), suffix)
+            source = "saved" if path else "not_found"
+            if path is None:
+                path = _find_template(folders, suffix)
+                if path:
+                    source = "standard"
         result[key] = str(path) if path else None
+        if source == "invalid_default":
+            configured = defaults.get(key) if key in defaults else registry_defaults.get(key)
+            if isinstance(configured, str) and configured.strip():
+                result["configuredPaths"][key] = configured
+        result.setdefault("sources", {})[key] = source
     material_dirs = [files / "SOLIDWORKS Corp" / "SOLIDWORKS" / "lang" / language / "sldmaterials"
                      for language in ("russian", "english")]
     candidates = [_valid_path(existing.get("materialLibrary"), ".sldmat")]

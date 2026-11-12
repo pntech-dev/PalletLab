@@ -125,7 +125,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
       const result = await window.pywebview?.api?.discover_cad_templates(cadDraft);
       if (!result?.ok) { setCadError(result?.error ?? "Не удалось выполнить поиск шаблонов."); return; }
       const missing = { partTemplate: !result.partTemplate, assemblyTemplate: !result.assemblyTemplate,
-        drawingTemplate: Boolean(cadDraft.drawingTemplate && !result.drawingTemplate),
+        drawingTemplate: !result.drawingTemplate,
         materialLibrary: !result.materialLibrary };
       setMissingFiles(missing);
       if (result.materialLibrary) {
@@ -134,17 +134,19 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
         setMaterials(result.materials);
       }
       setCadDraft((current) => ({ ...current,
-        partTemplate: result.partTemplate ?? current.partTemplate,
-        assemblyTemplate: result.assemblyTemplate ?? current.assemblyTemplate,
-        drawingTemplate: result.drawingTemplate ?? current.drawingTemplate,
+        partTemplate: result.partTemplate ?? result.configuredPaths?.partTemplate ?? current.partTemplate,
+        assemblyTemplate: result.assemblyTemplate ?? result.configuredPaths?.assemblyTemplate ?? current.assemblyTemplate,
+        drawingTemplate: result.drawingTemplate ?? result.configuredPaths?.drawingTemplate ?? current.drawingTemplate,
         materialLibrary: result.materialLibrary ?? current.materialLibrary,
         materialName: result.materialLibrary
           ? (result.materials.includes(current.materialName) ? current.materialName : result.materials[0] ?? "")
           : current.materialName,
       }));
-      setSearchMessage(Object.values(missing).some(Boolean)
-        ? "Не все файлы найдены. Укажите недостающие пути вручную."
-        : "Файлы найдены. Проверьте пути и сохраните настройки.");
+      const fallbackUsed = Object.values(result.sources ?? {}).some((source) => source === "saved" || source === "standard");
+      const missingMessage = Object.values(missing).some(Boolean)
+        ? "Не все файлы найдены. Проверьте отмеченные пути и укажите их вручную."
+        : "Файлы найдены. Проверьте пути и сохраните настройки.";
+      setSearchMessage(fallbackUsed ? `${missingMessage} Не все настройки SolidWorks удалось прочитать: часть путей взята из сохранённых значений или стандартных папок.` : missingMessage);
     } catch { setCadError("Не удалось выполнить поиск шаблонов."); }
     finally { setSearching(false); setCadBusy(false); }
   }
@@ -169,6 +171,9 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
       setError("Период автосохранения должен быть от 1 до 1440 минут."); return;
     }
     const cadChanged = JSON.stringify(cadDraft) !== initialCad.current;
+    if (cadChanged && (missingFiles.partTemplate || missingFiles.assemblyTemplate || missingFiles.materialLibrary)) {
+      setActive("cad"); setCadError("Укажите действующие пути к шаблонам и библиотеке материалов."); return;
+    }
     if (cadChanged && [cadDraft.partTemplate, cadDraft.assemblyTemplate, cadDraft.materialLibrary, cadDraft.materialName].some((value) => !value.trim())) {
     setActive("cad"); setCadError("Для сохранения настроек SolidWorks выберите шаблоны детали и сборки, библиотеку и материал."); return;
     }

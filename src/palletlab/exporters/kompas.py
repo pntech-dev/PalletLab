@@ -20,6 +20,7 @@ from palletlab.exporters.drawings import (
     SpecificationRow,
     assembly_specification_rows,
 )
+from palletlab.exporters.naming import beam_display_name
 
 
 LOGGER = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ def create_drawings(
         api["pythoncom"].CoInitialize()
         kompas = api["Dispatch"]("KOMPAS.Application.5")
         kompas.Visible = True
-        drawings = directory / "Drawings"
+        drawings = directory / "Чертежи"
         drawings.mkdir(exist_ok=True)
         for model in models:
             _create_drawing(
@@ -354,8 +355,21 @@ def _drawing_scale(model: Path) -> float:
 def _dimensions_from_model_name(model: Path) -> list[float]:
     """Recover dimensions from the native-model names produced by this exporter."""
     stem = model.stem
-    if stem.startswith("Pallet_"):
+    dimensions_text = ""
+    if stem.startswith("Поддон_"):
+        dimensions_text = stem.removeprefix("Поддон_")
+    elif stem.startswith("Pallet_"):
         dimensions_text = stem.removeprefix("Pallet_")
+    elif stem.startswith(("Брус_", "Доска_")):
+        _, beam_name = stem.split("_", 1)
+        if "_L=" in beam_name:
+            section, length = beam_name.split("_L=", 1)
+            length = length.split("_", 1)[0]
+            section_dimensions = section.split("x")
+            dimensions_text = (
+                f"{length}x{section_dimensions[1]}x{section_dimensions[0]}"
+                if len(section_dimensions) == 2 else ""
+            )
     elif stem.startswith("Beam_"):
         parts = stem.split("_", 2)
         dimensions_text = parts[2] if len(parts) == 3 else ""
@@ -375,7 +389,7 @@ def _format_number(value: float) -> str:
 def create_output_directory(parent: str | Path, result: PalletResult) -> Path:
     """Create a new non-conflicting folder for one KOMPAS pallet export."""
     parent_path = Path(parent)
-    base_name = "KOMPAS_Pallet_{}x{}".format(
+    base_name = "Поддон_{}x{}_КОМПАС".format(
         _format_number(result.pallet_length), _format_number(result.pallet_width)
     )
     output = parent_path / base_name
@@ -431,14 +445,20 @@ def _export(api: dict[str, object], result: PalletResult, output: Path, material
         groups[(beam.orientation, beam.size_x, beam.size_y, beam.size_z)].append(beam)
 
     parts: dict[tuple[str, float, float, float], Path] = {}
-    for index, key in enumerate(groups, start=1):
+    part_name_counts: dict[str, int] = {}
+    for key in groups:
         orientation, size_x, size_y, size_z = key
         length, width = (size_x, size_y) if orientation == "length" else (size_y, size_x)
-        filename = output / f"Beam_{index}_{_format_number(length)}x{_format_number(width)}x{_format_number(size_z)}.m3d"
-        _create_beam(kompas, constants3d, material, length, width, size_z, filename)
+        part_name = beam_display_name(length, width, size_z)
+        filename_stem = part_name.replace(" ", "_")
+        part_name_counts[filename_stem] = part_name_counts.get(filename_stem, 0) + 1
+        if part_name_counts[filename_stem] > 1:
+            filename_stem += f"_{part_name_counts[filename_stem]}"
+        filename = output / f"{filename_stem}.m3d"
+        _create_beam(kompas, constants3d, material, length, width, size_z, part_name, filename)
         parts[key] = filename
 
-    assembly_file = output / f"Pallet_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.a3d"
+    assembly_file = output / f"Поддон_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.a3d"
     _create_assembly(kompas, constants3d, result, parts, assembly_file)
     _write_drawing_metadata(output, result, parts, groups)
     return output
@@ -460,14 +480,12 @@ def _write_drawing_metadata(
         "specification": [
             {
                 "position": index,
-                "name": "Брус",
-                "dimensions": "×".join(
-                    f"{value:g}" for value in (
-                        size_x if orientation == "length" else size_y,
-                        size_y if orientation == "length" else size_x,
-                        size_z,
-                    )
+                "name": beam_display_name(
+                    size_x if orientation == "length" else size_y,
+                    size_y if orientation == "length" else size_x,
+                    size_z,
                 ),
+                "dimensions": "",
                 "quantity": len(groups[key]),
                 "designation": path.stem,
             }
@@ -480,7 +498,10 @@ def _write_drawing_metadata(
     )
 
 
-def _create_beam(kompas, constants3d, material: PalletMaterial, length: float, width: float, height: float, filename: Path) -> None:
+def _create_beam(
+    kompas, constants3d, material: PalletMaterial, length: float, width: float, height: float,
+    part_name: str, filename: Path,
+) -> None:
     document = kompas.Document3D
     if not document.Create(False, True):
         raise KompasExportError(f"Не удалось создать деталь {filename.name}.")
@@ -515,8 +536,21 @@ def _create_beam(kompas, constants3d, material: PalletMaterial, length: float, w
         raise KompasExportError("Не удалось выполнить выдавливание детали КОМПАС.")
     _apply_material(part, material)
     _apply_wood_appearance(part)
+    _apply_part_name(part, part_name)
     if not document.SaveAs(str(filename)):
         raise KompasExportError(f"Не удалось сохранить {filename.name}.")
+
+
+def _apply_part_name(part, name: str) -> None:
+    """Set and verify the actual KOMPAS part name, not just its file name."""
+    try:
+        part.name = name
+        updated = part.Update()
+        actual_name = part.name
+    except Exception as exc:
+        raise KompasExportError(f"Не удалось задать наименование детали КОМПАС-3D «{name}».") from exc
+    if updated is False or actual_name != name:
+        raise KompasExportError(f"КОМПАС-3D не сохранил наименование детали «{name}».")
 
 
 def _apply_material(part, material: PalletMaterial) -> None:
