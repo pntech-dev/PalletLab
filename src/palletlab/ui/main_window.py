@@ -18,7 +18,7 @@ from palletlab.core.calculator import calculate_direction
 from palletlab.core.autosave import AutosaveStore
 from palletlab.core.formatting import format_mm
 from palletlab.core.materials import MATERIALS, get_material, pallet_mass_kg
-from palletlab.core.models import BeamSection, DirectionInput, InsertionSlot, LayerInput, PalletAxis
+from palletlab.core.models import BeamSection, DirectionInput, InsertionSlot, LayerInput, PalletAxis, PalletResult
 from palletlab.core.persistence import ProjectPersistenceError
 from palletlab.core.project_state import ProjectHistory, ProjectState
 from palletlab.core.validation import CalculationError
@@ -188,45 +188,65 @@ class ManualBeamDialog(BeamSectionDialog):
         self.pick_reference.clicked.connect(lambda: self.done(2))
 
 
-class DrawingOptionsDialog(QDialog):
-    """Ask for CAD target and document coverage before generating drawings."""
+class ExportOptionsDialog(QDialog):
+    """Collect model and drawing options for one CAD export."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Создание чертежей")
+        self.setWindowTitle("Экспорт CAD")
         self.setModal(True)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Создать чертежи для уже экспортированных моделей."))
+        layout.addWidget(QLabel("Система CAD:"))
+        self.cad = QComboBox()
+        self.cad.addItem("SolidWorks", "solidworks")
+        self.cad.addItem("КОМПАС-3D", "kompas")
+        layout.addWidget(self.cad)
 
-        self.solidworks = QRadioButton("SolidWorks")
-        self.kompas = QRadioButton("КОМПАС-3D")
-        self.solidworks.setChecked(True)
-        cad_group = QButtonGroup(self)
-        cad_group.addButton(self.solidworks)
-        cad_group.addButton(self.kompas)
-        layout.addWidget(self.solidworks)
-        layout.addWidget(self.kompas)
+        self.pallet_model = QCheckBox("Модель поддона")
+        self.parts_model = QCheckBox("Модели деталей")
+        self.pallet_drawing = QCheckBox("Чертёж поддона")
+        self.parts_drawing = QCheckBox("Чертежи деталей")
+        self.pallet_model.setChecked(True)
+        self.parts_model.setChecked(True)
+        self.pallet_drawing.setChecked(True)
+        for checkbox in (self.pallet_model, self.parts_model, self.pallet_drawing, self.parts_drawing):
+            layout.addWidget(checkbox)
 
-        self.assembly_only = QRadioButton("Только сборка")
-        self.parts_and_assembly = QRadioButton("Детали и сборка")
-        self.assembly_only.setChecked(True)
-        scope_group = QButtonGroup(self)
-        scope_group.addButton(self.parts_and_assembly)
-        scope_group.addButton(self.assembly_only)
-        layout.addWidget(QLabel("Какие чертежи создать:"))
-        layout.addWidget(self.assembly_only)
-        layout.addWidget(self.parts_and_assembly)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        self.export_button = buttons.addButton("Экспорт", QDialogButtonBox.AcceptRole)
+        self.export_button.clicked.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.parts_model.toggled.connect(self._sync_dependencies)
+        self.pallet_model.toggled.connect(self._sync_dependencies)
+        self._sync_dependencies()
 
-    def selection(self) -> tuple[str, DrawingScope]:
-        cad = "solidworks" if self.solidworks.isChecked() else "kompas"
-        scope = DrawingScope.PARTS_AND_ASSEMBLY if self.parts_and_assembly.isChecked() else DrawingScope.ASSEMBLY_ONLY
-        return cad, scope
+    def _sync_dependencies(self) -> None:
+        parts_enabled = self.parts_model.isChecked()
+        if not parts_enabled:
+            self.pallet_model.setChecked(False)
+            self.pallet_drawing.setChecked(False)
+            self.parts_drawing.setChecked(False)
+        if not self.pallet_model.isChecked():
+            self.pallet_drawing.setChecked(False)
+        self.pallet_model.setEnabled(parts_enabled)
+        self.pallet_drawing.setEnabled(parts_enabled and self.pallet_model.isChecked())
+        self.parts_drawing.setEnabled(parts_enabled)
+        self.export_button.setEnabled(parts_enabled)
+
+    def selection(self) -> tuple[str, bool, DrawingScope | None]:
+        draw_pallet = self.pallet_drawing.isChecked()
+        draw_parts = self.parts_drawing.isChecked()
+        if draw_pallet and draw_parts:
+            drawing_scope = DrawingScope.PARTS_AND_ASSEMBLY
+        elif draw_pallet:
+            drawing_scope = DrawingScope.ASSEMBLY_ONLY
+        elif draw_parts:
+            drawing_scope = DrawingScope.PARTS_ONLY
+        else:
+            drawing_scope = None
+        return self.cad.currentData(), self.pallet_model.isChecked(), drawing_scope
 
 
 class MainWindow(QMainWindow):
@@ -651,24 +671,15 @@ class MainWindow(QMainWindow):
         self.save_project_button.setObjectName("saveProjectButton")
         self.save_project_button.clicked.connect(self.save_project)
         layout.addWidget(self.save_project_button)
-        self.create_drawings_button = QPushButton("Создать чертежи")
-        self.create_drawings_button.setObjectName("createDrawingsButton")
-        self.create_drawings_button.setToolTip("Создать ассоциативные чертежи деталей и/или сборки из экспортированных моделей.")
-        self.create_drawings_button.clicked.connect(self.create_drawings)
-        layout.addWidget(self.create_drawings_button)
         self.build_from_model_button = QPushButton("Построить по модели")
         self.build_from_model_button.setObjectName("buildFromModelButton")
         self.build_from_model_button.setToolTip("Загрузить STEP-модель и выбрать нижнюю грань одной опоры.")
         self.build_from_model_button.clicked.connect(self.build_from_model)
         layout.addWidget(self.build_from_model_button)
-        self.export_kompas_button = QPushButton("Экспорт в КОМПАС")
-        self.export_kompas_button.setObjectName("exportKompasButton")
-        self.export_kompas_button.clicked.connect(self.export_to_kompas)
-        layout.addWidget(self.export_kompas_button)
-        self.export_solidworks_button = QPushButton("Экспорт в SolidWorks")
-        self.export_solidworks_button.setObjectName("exportSolidWorksButton")
-        self.export_solidworks_button.clicked.connect(self.export_to_solidworks)
-        layout.addWidget(self.export_solidworks_button)
+        self.export_button = QPushButton("Экспорт")
+        self.export_button.setObjectName("exportButton")
+        self.export_button.clicked.connect(self.export)
+        layout.addWidget(self.export_button)
         return header
 
     @staticmethod
@@ -1343,79 +1354,79 @@ class MainWindow(QMainWindow):
             self.toggle_model_button.setEnabled(False)
             self.toggle_model_button.setText("Скрыть 3D модель")
 
-    def export_to_solidworks(self) -> None:
-        """Rebuild the visible pallet and export its exact current geometry."""
+    def export(self) -> None:
+        """Export selected CAD models and drawings in one ordered operation."""
         result = self.calculate(show_error=True)
         if result is None:
             return
-        parent = QFileDialog.getExistingDirectory(self, "Выберите папку для экспорта SolidWorks")
-        if not parent:
-            return
-        self.export_solidworks_button.setEnabled(False)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            templates = self._solidworks_templates()
-            material_library, material_name = self._solidworks_material()
-            if not material_library or not material_name:
-                selected_material = self._select_solidworks_material()
-                if selected_material is None:
-                    self.statusBar().showMessage("Экспорт в SolidWorks отменён: не выбрана библиотека материалов.")
-                    return
-                material_library, material_name = selected_material
-                self._save_solidworks_material(material_library, material_name)
-            try:
-                output = export_pallet(result, parent, templates, self.state.material_id, material_library, material_name)
-            except SolidWorksTemplateError as error:
-                templates = self._select_solidworks_templates(error.missing, templates)
-                if templates is None:
-                    self.statusBar().showMessage("Экспорт в SolidWorks отменён: не выбран шаблон.")
-                    return
-                self._save_solidworks_templates(templates)
-                output = export_pallet(result, parent, templates, self.state.material_id, material_library, material_name)
-        except SolidWorksExportError as exc:
-            QMessageBox.critical(self, "Экспорт в SolidWorks", str(exc))
-            self.statusBar().showMessage("Экспорт в SolidWorks не выполнен.")
-        else:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.information(self, "Экспорт в SolidWorks", f"Детали и сборка сохранены в папке:\n{output}")
-            self.statusBar().showMessage(f"Экспорт в SolidWorks завершён: {output}")
-        finally:
-            if QApplication.overrideCursor() is not None:
-                QApplication.restoreOverrideCursor()
-            self.export_solidworks_button.setEnabled(True)
-
-    def create_drawings(self) -> None:
-        """Generate native associative drawings from an existing CAD export."""
-        options = DrawingOptionsDialog(self)
+        options = ExportOptionsDialog(self)
         if options.exec_() != QDialog.Accepted:
             return
-        cad, scope = options.selection()
-        directory = QFileDialog.getExistingDirectory(self, "Выберите папку экспорта с моделями")
-        if not directory:
+        cad, include_assembly, drawing_scope = options.selection()
+        cad_label = "SolidWorks" if cad == "solidworks" else "КОМПАС-3D"
+        parent = QFileDialog.getExistingDirectory(self, f"Выберите папку для экспорта {cad_label}")
+        if not parent:
             return
-        self.create_drawings_button.setEnabled(False)
+
+        self.export_button.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        error: DrawingExportError | None = None
-        drawings: Path | None = None
         try:
-            if cad == "solidworks":
-                drawings = self._create_solidworks_drawings(directory, scope)
-            else:
-                drawings = self._create_kompas_drawings(directory, scope)
-        except DrawingExportError as exc:
-            error = exc
+            output = self._export_models(cad, result, parent, include_assembly)
+            if output is None:
+                return
+            try:
+                drawings = self._create_export_drawings(cad, output, drawing_scope) if drawing_scope else None
+            except DrawingExportError as exc:
+                QMessageBox.critical(self, "Экспорт CAD", f"Модели сохранены в папке:\n{output}\n\nНе удалось создать чертежи: {exc}")
+                self.statusBar().showMessage("Модели сохранены, но создание чертежей не завершено.")
+                return
+        except (SolidWorksExportError, KompasExportError) as exc:
+            QMessageBox.critical(self, f"Экспорт в {cad_label}", str(exc))
+            self.statusBar().showMessage(f"Экспорт в {cad_label} не выполнен.")
+        else:
+            completed = f"Модели сохранены в папке:\n{output}"
+            if drawings is not None:
+                completed += f"\n\nЧертежи сохранены в папке:\n{drawings}"
+            self.statusBar().showMessage(f"Экспорт в {cad_label} завершён: {output}")
+            QMessageBox.information(self, "Экспорт CAD", completed)
         finally:
             if QApplication.overrideCursor() is not None:
                 QApplication.restoreOverrideCursor()
-            self.create_drawings_button.setEnabled(True)
-        if error is not None:
-            QMessageBox.critical(self, "Создание чертежей", str(error))
-            self.statusBar().showMessage("Создание чертежей не выполнено.")
-        elif drawings is not None:
-            self.statusBar().showMessage(f"Создание чертежей завершено: {drawings}")
-            QMessageBox.information(self, "Создание чертежей", f"Чертежи сохранены в папке:\n{drawings}")
+            self.export_button.setEnabled(True)
 
-    def _create_solidworks_drawings(self, directory: str, scope: DrawingScope) -> Path:
+    def _export_models(self, cad: str, result: PalletResult, parent: str, include_assembly: bool) -> Path | None:
+        if cad == "kompas":
+            return export_kompas_pallet(result, parent, self.state.material_id, include_assembly)
+
+        templates = self._solidworks_templates()
+        material_library, material_name = self._solidworks_material()
+        if not material_library or not material_name:
+            selected_material = self._select_solidworks_material()
+            if selected_material is None:
+                self.statusBar().showMessage("Экспорт в SolidWorks отменён: не выбрана библиотека материалов.")
+                return None
+            material_library, material_name = selected_material
+            self._save_solidworks_material(material_library, material_name)
+        try:
+            return export_pallet(
+                result, parent, templates, self.state.material_id, material_library, material_name, include_assembly
+            )
+        except SolidWorksTemplateError as error:
+            templates = self._select_solidworks_templates(error.missing, templates)
+            if templates is None:
+                self.statusBar().showMessage("Экспорт в SolidWorks отменён: не выбран шаблон.")
+                return None
+            self._save_solidworks_templates(templates)
+            return export_pallet(
+                result, parent, templates, self.state.material_id, material_library, material_name, include_assembly
+            )
+
+    def _create_export_drawings(self, cad: str, directory: Path, scope: DrawingScope) -> Path:
+        if cad == "solidworks":
+            return self._create_solidworks_drawings(directory, scope)
+        return self._create_kompas_drawings(directory, scope)
+
+    def _create_solidworks_drawings(self, directory: str | Path, scope: DrawingScope) -> Path:
         template = self._drawing_template("solidworks")
         try:
             return create_solidworks_drawings(directory, scope, template, self._last_result)
@@ -1426,7 +1437,7 @@ class MainWindow(QMainWindow):
             self._save_drawing_template("solidworks", selected)
             return create_solidworks_drawings(directory, scope, selected, self._last_result)
 
-    def _create_kompas_drawings(self, directory: str, scope: DrawingScope) -> Path:
+    def _create_kompas_drawings(self, directory: str | Path, scope: DrawingScope) -> Path:
         template = self._drawing_template("kompas")
         try:
             return create_kompas_drawings(directory, scope, template, self._last_result)
@@ -1511,8 +1522,10 @@ class MainWindow(QMainWindow):
         prompt = QMessageBox(self)
         prompt.setIcon(QMessageBox.Warning)
         prompt.setWindowTitle("Нужны шаблоны SolidWorks")
-        prompt.setText("Не настроены шаблоны для экспорта в SolidWorks.")
-        prompt.setInformativeText("Выберите шаблоны детали и сборки сейчас или отмените экспорт.")
+        missing_labels = {"part": "детали", "assembly": "сборки"}
+        required = " и ".join(missing_labels[kind] for kind in missing)
+        prompt.setText(f"Не настроен шаблон {required} для экспорта в SolidWorks.")
+        prompt.setInformativeText("Выберите недостающие шаблоны сейчас или отмените экспорт.")
         choose_button = prompt.addButton("Выбрать шаблоны", QMessageBox.AcceptRole)
         prompt.addButton("Отмена", QMessageBox.RejectRole)
         prompt.exec_()
@@ -1592,30 +1605,6 @@ class MainWindow(QMainWindow):
         self._history.clear()
         MainWindow._discard_history_transaction(self)
         self.statusBar().showMessage(f"Проект открыт: {path}")
-
-    def export_to_kompas(self) -> None:
-        """Rebuild the visible pallet and export its exact current geometry."""
-        result = self.calculate(show_error=True)
-        if result is None:
-            return
-        parent = QFileDialog.getExistingDirectory(self, "Выберите папку для экспорта КОМПАС-3D")
-        if not parent:
-            return
-        self.export_kompas_button.setEnabled(False)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            output = export_kompas_pallet(result, parent, self.state.material_id)
-        except KompasExportError as exc:
-            QMessageBox.critical(self, "Экспорт в КОМПАС-3D", str(exc))
-            self.statusBar().showMessage("Экспорт в КОМПАС-3D не выполнен.")
-        else:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.information(self, "Экспорт в КОМПАС-3D", f"Детали и сборка сохранены в папке:\n{output}")
-            self.statusBar().showMessage(f"Экспорт в КОМПАС-3D завершён: {output}")
-        finally:
-            if QApplication.overrideCursor() is not None:
-                QApplication.restoreOverrideCursor()
-            self.export_kompas_button.setEnabled(True)
 
     def _schedule_recalculation(self, *_args) -> None:
         """Queue one rebuild after the user pauses editing a parameter."""

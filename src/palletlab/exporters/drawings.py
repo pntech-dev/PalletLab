@@ -22,6 +22,7 @@ class DrawingScope(str, Enum):
     """Which documents receive drawings in one export run."""
 
     ASSEMBLY_ONLY = "assembly"
+    PARTS_ONLY = "parts"
     PARTS_AND_ASSEMBLY = "parts_and_assembly"
 
 

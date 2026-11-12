@@ -290,8 +290,8 @@ def test_kompas_export_recalculates_the_project_before_calling_the_exporter(tmp_
     output = tmp_path / "pallet"
     captured = {}
 
-    def export(result, parent, material_id):
-        captured.update(result=result, parent=parent, material_id=material_id)
+    def export(result, parent, material_id, include_assembly):
+        captured.update(result=result, parent=parent, material_id=material_id, include_assembly=include_assembly)
         return output
 
     monkeypatch.setattr("palletlab.application.service.export_kompas_pallet", export)
@@ -301,6 +301,7 @@ def test_kompas_export_recalculates_the_project_before_calling_the_exporter(tmp_
     assert response == {"ok": True, "output": str(output)}
     assert captured["parent"] == tmp_path
     assert captured["material_id"] == "pine"
+    assert captured["include_assembly"] is True
     assert captured["result"].beams_3d
 
 
@@ -314,7 +315,7 @@ def test_solidworks_export_passes_explicit_web_resources(tmp_path, monkeypatch) 
     output = tmp_path / "pallet"
     captured = {}
 
-    def export(result, parent, templates, material_id, material_library, material_name):
+    def export(result, parent, templates, material_id, material_library, material_name, include_assembly):
         captured.update(
             result=result,
             parent=parent,
@@ -322,6 +323,7 @@ def test_solidworks_export_passes_explicit_web_resources(tmp_path, monkeypatch) 
             material_id=material_id,
             material_library=material_library,
             material_name=material_name,
+            include_assembly=include_assembly,
         )
         return output
 
@@ -342,7 +344,38 @@ def test_solidworks_export_passes_explicit_web_resources(tmp_path, monkeypatch) 
     assert captured["templates"] == (str(part), str(assembly))
     assert captured["material_library"] == str(library)
     assert captured["material_name"] == "Pine"
+    assert captured["include_assembly"] is True
     assert captured["result"].beams_3d
+
+
+def test_solidworks_parts_only_export_does_not_require_assembly_template(tmp_path, monkeypatch) -> None:
+    service = ApplicationService()
+    part = tmp_path / "part.prtdot"
+    library = tmp_path / "materials.sldmat"
+    part.touch()
+    library.touch()
+    captured = {}
+
+    def export(_result, _parent, templates, _material_id, _material_library, _material_name, include_assembly):
+        captured.update(templates=templates, include_assembly=include_assembly)
+        return tmp_path / "pallet"
+
+    monkeypatch.setattr("palletlab.application.service.export_solidworks_pallet", export)
+
+    response = service.export_solidworks(
+        service.default_project(),
+        str(tmp_path),
+        {
+            "partTemplate": str(part),
+            "assemblyTemplate": "",
+            "materialLibrary": str(library),
+            "materialName": "Pine",
+        },
+        include_assembly=False,
+    )
+
+    assert response == {"ok": True, "output": str(tmp_path / "pallet")}
+    assert captured == {"templates": (str(part), None), "include_assembly": False}
 
 
 def test_solidworks_export_rejects_missing_web_resources(tmp_path) -> None:

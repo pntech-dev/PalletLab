@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from urllib.request import urlopen
 
+import pytest
+
 from palletlab.desktop.web_host import WebApplicationApi, _StepAssetServer, _WebSettings, _frontend_content_type
 
 
@@ -55,12 +57,93 @@ def test_web_api_uses_a_native_folder_choice_for_kompas_export(monkeypatch, tmp_
     monkeypatch.setattr(api, "_choose_directory", lambda _title: str(tmp_path))
     monkeypatch.setattr(
         "palletlab.desktop.web_host.ApplicationService.export_kompas",
-        lambda _service, received_project, directory: {"ok": True, "project": received_project, "directory": directory},
+        lambda _service, received_project, directory, include_assembly: {
+            "ok": True, "project": received_project, "directory": directory, "include_assembly": include_assembly,
+        },
     )
 
     response = api.export_kompas(project)
 
-    assert response == {"ok": True, "project": project, "directory": str(tmp_path)}
+    assert response == {
+        "ok": True, "project": project, "directory": str(tmp_path), "include_assembly": True,
+    }
+
+
+def test_web_api_selects_export_directory(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    monkeypatch.setattr(api, "_choose_directory", lambda _title: str(tmp_path))
+
+    assert api.choose_export_directory() == {"ok": True, "path": str(tmp_path)}
+
+
+def test_web_api_uses_the_export_directory_from_the_modal(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    project = {"project": "payload"}
+    monkeypatch.setattr(api, "_choose_directory", lambda _title: pytest.fail("unexpected directory dialog"))
+    received = []
+    monkeypatch.setattr(
+        "palletlab.desktop.web_host.ApplicationService.export_kompas",
+        lambda _service, received_project, directory, include_assembly: received.append(
+            (received_project, directory, include_assembly)
+        ) or {"ok": True},
+    )
+
+    response = api.export_kompas(project, False, str(tmp_path))
+
+    assert response == {"ok": True}
+    assert received == [(project, str(tmp_path), False)]
+
+
+def test_web_api_passes_pallet_model_selection_to_kompas_export(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    monkeypatch.setattr(api, "_choose_directory", lambda _title: str(tmp_path))
+    received = []
+    monkeypatch.setattr(
+        "palletlab.desktop.web_host.ApplicationService.export_kompas",
+        lambda _service, _project, _directory, include_assembly: received.append(include_assembly) or {"ok": True},
+    )
+
+    response = api.export_kompas({"project": "payload"}, include_assembly=False)
+
+    assert response == {"ok": True}
+    assert received == [False]
+
+
+def test_web_api_passes_pallet_model_selection_to_solidworks_export(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    options = {"partTemplate": "part.prtdot"}
+    monkeypatch.setattr(api, "_choose_directory", lambda _title: str(tmp_path))
+    received = []
+    monkeypatch.setattr(
+        "palletlab.desktop.web_host.ApplicationService.export_solidworks",
+        lambda _service, _project, _directory, _options, include_assembly: (
+            received.append(include_assembly) or {"ok": True}
+        ),
+    )
+
+    response = api.export_solidworks({"project": "payload"}, options, include_assembly=False)
+
+    assert response == {"ok": True}
+    assert received == [False]
+
+
+def test_web_api_uses_the_modal_directory_for_solidworks(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    project = {"project": "payload"}
+    options = {"partTemplate": "part.prtdot"}
+    monkeypatch.setattr(api, "_choose_directory", lambda _title: pytest.fail("unexpected directory dialog"))
+    received = []
+    monkeypatch.setattr(
+        "palletlab.desktop.web_host.ApplicationService.export_solidworks",
+        lambda _service, received_project, directory, received_options, include_assembly: received.append(
+            (received_project, directory, received_options, include_assembly)
+        ) or {"ok": True},
+    )
+
+    response = api.export_solidworks(project, options, False, str(tmp_path))
+
+    assert response == {"ok": True}
+    assert received == [(project, str(tmp_path), options, False)]
 
 
 def test_web_api_returns_one_solidworks_template_path(monkeypatch, tmp_path) -> None:
@@ -155,6 +238,24 @@ def test_web_api_creates_drawings_from_a_native_folder_choice(monkeypatch, tmp_p
     response = api.create_drawings(project, "kompas", "assembly", "legacy-template.cdt")
 
     assert response == {"ok": True, "args": (project, "kompas", "assembly", str(tmp_path), None)}
+
+
+def test_web_api_creates_drawings_in_the_just_exported_folder(monkeypatch, tmp_path) -> None:
+    api = WebApplicationApi()
+    project = {"project": "payload"}
+    choose_directory_calls = []
+    monkeypatch.setattr(api, "_choose_directory", lambda title: choose_directory_calls.append(title))
+    received = []
+    monkeypatch.setattr(
+        "palletlab.desktop.web_host.ApplicationService.create_drawings",
+        lambda _service, *args: received.append(args) or {"ok": True},
+    )
+
+    response = api.create_drawings(project, "kompas", "parts", None, str(tmp_path))
+
+    assert response == {"ok": True}
+    assert received == [(project, "kompas", "parts", str(tmp_path), None)]
+    assert choose_directory_calls == []
 
 
 def test_web_api_uses_saved_solidworks_drawing_template(monkeypatch, tmp_path) -> None:

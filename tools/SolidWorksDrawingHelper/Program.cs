@@ -10,9 +10,9 @@ const double WorkingUpperMargin = 0.020;
 const double ProjectedViewGap = 0.015;
 const double ManualAnnotationReserve = 0.035;
 // Coordinates are in metres in the active drawing sheet.
-const double AssemblyRequirementsLeftMargin = 0.025;
-const double AssemblyRequirementsBottomMargin = 0.010;
-const double AssemblyRequirementsLowerReserve = 0.135;
+const double TechnicalRequirementsLeftMargin = 0.025;
+const double TechnicalRequirementsBottomMargin = 0.010;
+const double TechnicalRequirementsLowerReserve = 0.135;
 const double TitleBlockLeft = 0.230;
 const double TitleBlockTop = 0.060;
 const double SpecificationHeaderHeight = 0.012;
@@ -25,6 +25,12 @@ const string AssemblyTechnicalRequirements =
     "5. Общие допуски формы и расположения — ГОСТ 30893.2—К.\n" +
     "6. Остальные ТТ по СТБ 1022-96.\n" +
     "7. Все сварные швы зачистить Rz40.";
+const string PartTechnicalRequirements =
+    "1. *Размеры для справок.\n" +
+    "2. Острые кромки притупить.\n" +
+    "3. Общие допуски по ГОСТ 30893.1: Н14, h14, ±IТ14/2.\n" +
+    "4. Общие допуски формы и расположения — ГОСТ 30893.2—К.\n" +
+    "5. Остальные ТТ по СТБ 1014-95.";
 
 // The host decodes redirected helper output as UTF-8, including Russian paths.
 Console.OutputEncoding = new UTF8Encoding(false);
@@ -47,6 +53,8 @@ try
     var documentType = Path.GetExtension(modelPath).Equals(".sldasm", StringComparison.OrdinalIgnoreCase)
         ? (int)swDocumentTypes_e.swDocASSEMBLY : (int)swDocumentTypes_e.swDocPART;
     var hasAssemblyRequirements = documentType == (int)swDocumentTypes_e.swDocASSEMBLY;
+    var hasPartRequirements = documentType == (int)swDocumentTypes_e.swDocPART;
+    var hasTechnicalRequirements = hasAssemblyRequirements || hasPartRequirements;
     var errors = 0;
     var warnings = 0;
     var model = sw.OpenDoc6(modelPath, documentType, (int)swOpenDocOptions_e.swOpenDocOptions_Silent, "", ref errors, ref warnings);
@@ -71,14 +79,20 @@ try
     EnsureTemplateSheetFormat(drawing, sheet, drawingTemplate);
     var drawingModel = (ModelDoc2)drawing;
     PalletViewLayout? palletViewLayout = null;
-    ApplyGostSheetScale(sw, drawing, pallet, hasAssemblyRequirements);
     if (pallet?.Pallet is not null)
-        palletViewLayout = CreatePalletOrthographicViews(drawing, model, modelPath, pallet, hasAssemblyRequirements);
-    else if (!drawing.Create3rdAngleViews2(modelPath))
-        throw new InvalidOperationException("SolidWorks did not create standard views.");
-    // View insertion can apply the user's automatic-scale preference.  Apply
-    // the selected GOST scale again after the three views are present.
-    ApplyGostSheetScale(sw, drawing, pallet, hasAssemblyRequirements);
+    {
+        ApplyGostSheetScale(sw, drawing, pallet, hasTechnicalRequirements);
+        palletViewLayout = CreatePalletOrthographicViews(drawing, model, modelPath, pallet, hasTechnicalRequirements);
+        ApplyGostSheetScale(sw, drawing, pallet, hasTechnicalRequirements);
+    }
+    else if (hasPartRequirements)
+        CreatePartOrthographicViews(drawing, drawingModel, model, modelPath, hasTechnicalRequirements);
+    else
+    {
+        if (!drawing.Create3rdAngleViews2(modelPath))
+            throw new InvalidOperationException("SolidWorks did not create standard views.");
+        ApplyGostSheetScale(sw, drawing, pallet, hasTechnicalRequirements);
+    }
     drawingModel.ForceRebuild3(false);
     RemoveSurfaceFinishSymbols(drawing, drawingModel);
     // Assembly views have an explicitly controlled layout, so the three
@@ -89,6 +103,10 @@ try
     {
         AddAssemblySpecification(drawing, drawingModel, pallet?.Specification);
         AddAssemblyTechnicalRequirements(drawing, drawingModel);
+    }
+    else if (hasPartRequirements)
+    {
+        AddPartTechnicalRequirements(drawing, drawingModel);
     }
     drawingModel.ForceRebuild3(false);
     drawingModel.GraphicsRedraw2();
@@ -143,21 +161,15 @@ static void EnsureTemplateSheetFormat(DrawingDoc drawing, Sheet sheet, string dr
     sheet.SheetFormatVisible = true;
 }
 
-static void ApplyGostSheetScale(SldWorks sw, DrawingDoc drawing, PalletDrawingData? pallet, bool reserveAssemblyRequirements)
+static void ApplyGostSheetScale(SldWorks sw, DrawingDoc drawing, PalletDrawingData? pallet, bool reserveTechnicalRequirements)
 {
     var sheet = (Sheet)drawing.GetCurrentSheet();
-    (double Numerator, double Denominator)[] allowed =
-    {
-        (Numerator: 1d, Denominator: 1d), (1d, 2d), (1d, 2.5d), (1d, 4d),
-        (1d, 5d), (1d, 10d), (1d, 15d), (1d, 20d), (1d, 25d), (1d, 40d),
-        (1d, 50d), (1d, 75d), (1d, 100d), (1d, 200d), (1d, 400d),
-        (1d, 500d), (1d, 800d), (1d, 1000d),
-    };
+    var allowed = AllowedDrawingScales();
     var properties = (Array)sheet.GetProperties2();
     var sheetWidth = Convert.ToDouble(properties.GetValue(5));
     var sheetHeight = Convert.ToDouble(properties.GetValue(6));
     var views = GetModelViews(drawing).ToArray();
-    var lowerReserve = reserveAssemblyRequirements ? AssemblyRequirementsLowerReserve : WorkingLowerReserve;
+    var lowerReserve = reserveTechnicalRequirements ? TechnicalRequirementsLowerReserve : WorkingLowerReserve;
     var chosen = allowed.FirstOrDefault(scale => pallet is not null
         ? PalletLayoutFits(pallet.Pallet, scale.Numerator / scale.Denominator, sheetWidth, sheetHeight, lowerReserve)
         : ViewsFitOnSheet(views, scale.Numerator / scale.Denominator, sheetWidth, sheetHeight, lowerReserve));
@@ -172,6 +184,14 @@ static void ApplyGostSheetScale(SldWorks sw, DrawingDoc drawing, PalletDrawingDa
     if (pallet?.Pallet is null)
         CenterProjectedViewGroup(views, sheetWidth, sheetHeight, lowerReserve);
 }
+
+static (double Numerator, double Denominator)[] AllowedDrawingScales() =>
+[
+    (1d, 1d), (1d, 2d), (1d, 2.5d), (1d, 4d),
+    (1d, 5d), (1d, 10d), (1d, 15d), (1d, 20d), (1d, 25d), (1d, 40d),
+    (1d, 50d), (1d, 75d), (1d, 100d), (1d, 200d), (1d, 400d),
+    (1d, 500d), (1d, 800d), (1d, 1000d),
+];
 
 static bool PalletLayoutFits(PalletEnvelope? pallet, double scale, double sheetWidth, double sheetHeight, double lowerReserve)
 {
@@ -209,8 +229,93 @@ static void CenterProjectedViewGroup(
     };
 }
 
+static void CreatePartOrthographicViews(
+    DrawingDoc drawing, ModelDoc2 drawingModel, ModelDoc2 model, string modelPath, bool reserveTechnicalRequirements)
+{
+    var sheet = (Sheet)drawing.GetCurrentSheet();
+    var properties = (Array)sheet.GetProperties2();
+    var sheetWidth = Convert.ToDouble(properties.GetValue(5));
+    var sheetHeight = Convert.ToDouble(properties.GetValue(6));
+    var lowerReserve = reserveTechnicalRequirements ? TechnicalRequirementsLowerReserve : WorkingLowerReserve;
+    sheet.SetScale(1d, 1d, true, false);
+
+    var frontName = ResolveStandardViewName(model, "front", "сперед");
+    var topName = ResolveStandardViewName(model, "top", "сверх");
+    var rightName = ResolveStandardViewName(model, "right", "справ");
+    var front = drawing.CreateDrawViewFromModelView3(modelPath, frontName, 0d, 0d, 0d)
+        ?? throw new InvalidOperationException("SolidWorks did not create the front part view.");
+    var top = drawing.CreateDrawViewFromModelView3(modelPath, topName, 0d, 0d, 0d)
+        ?? throw new InvalidOperationException("SolidWorks did not create the top part view.");
+    var right = drawing.CreateDrawViewFromModelView3(modelPath, rightName, 0d, 0d, 0d)
+        ?? throw new InvalidOperationException("SolidWorks did not create the right part view.");
+    front.UseSheetScale = 1;
+    top.UseSheetScale = 1;
+    right.UseSheetScale = 1;
+    drawingModel.ForceRebuild3(false);
+
+    var frontSize = GetUnscaledViewSize(front);
+    var topSize = GetUnscaledViewSize(top);
+    var rightSize = GetUnscaledViewSize(right);
+    var availableWidth = sheetWidth - WorkingLeftMargin - WorkingRightMargin;
+    var availableHeight = sheetHeight - lowerReserve - WorkingUpperMargin;
+    var scale = AllowedDrawingScales().FirstOrDefault(candidate =>
+    {
+        var factor = candidate.Numerator / candidate.Denominator;
+        var columnWidth = Math.Max(frontSize.Width, topSize.Width) * factor;
+        var rowHeight = Math.Max(frontSize.Height, rightSize.Height) * factor;
+        var groupWidth = columnWidth + ProjectedViewGap + rightSize.Width * factor;
+        var groupHeight = rowHeight + ProjectedViewGap + topSize.Height * factor;
+        return groupWidth <= availableWidth && groupHeight <= availableHeight;
+    });
+    if (scale == default)
+        throw new InvalidOperationException("No standard drawing scale fits the part views and technical requirements.");
+
+    sheet.SetScale(scale.Numerator, scale.Denominator, true, false);
+    front.UseSheetScale = 1;
+    top.UseSheetScale = 1;
+    right.UseSheetScale = 1;
+    drawingModel.ForceRebuild3(false);
+
+    var factorAtScale = scale.Numerator / scale.Denominator;
+    var frontWidth = frontSize.Width * factorAtScale;
+    var frontHeight = frontSize.Height * factorAtScale;
+    var topWidth = topSize.Width * factorAtScale;
+    var topHeight = topSize.Height * factorAtScale;
+    var rightWidth = rightSize.Width * factorAtScale;
+    var rightHeight = rightSize.Height * factorAtScale;
+    var columnWidthAtScale = Math.Max(frontWidth, topWidth);
+    var rowHeightAtScale = Math.Max(frontHeight, rightHeight);
+    var groupWidthAtScale = columnWidthAtScale + ProjectedViewGap + rightWidth;
+    var groupHeightAtScale = rowHeightAtScale + ProjectedViewGap + topHeight;
+    var groupLeft = WorkingLeftMargin + (availableWidth - groupWidthAtScale) / 2d;
+    var groupBottom = lowerReserve + (availableHeight - groupHeightAtScale) / 2d;
+    var frontX = groupLeft + columnWidthAtScale / 2d;
+    var frontY = groupBottom + rowHeightAtScale / 2d;
+    var topY = groupBottom + rowHeightAtScale + ProjectedViewGap + topHeight / 2d;
+    var rightX = groupLeft + columnWidthAtScale + ProjectedViewGap + rightWidth / 2d;
+
+    front.Position = new[] { frontX, frontY };
+    top.Position = new[] { frontX, topY };
+    right.Position = new[] { rightX, frontY };
+    if (!top.AlignWithView((int)swAlignViewTypes_e.swAlignViewVerticalCenter, front)
+        || !right.AlignWithView((int)swAlignViewTypes_e.swAlignViewHorizontalCenter, front))
+        throw new InvalidOperationException("SolidWorks did not preserve the part-view projection alignment.");
+    drawingModel.ForceRebuild3(false);
+}
+
+static (double Width, double Height) GetUnscaledViewSize(SolidWorks.Interop.sldworks.View view)
+{
+    var outline = (Array)view.GetOutline();
+    var viewScale = view.ScaleDecimal;
+    if (viewScale <= 0d)
+        throw new InvalidOperationException("SolidWorks returned an invalid scale for a part view.");
+    var width = Convert.ToDouble(outline.GetValue(2)) - Convert.ToDouble(outline.GetValue(0));
+    var height = Convert.ToDouble(outline.GetValue(3)) - Convert.ToDouble(outline.GetValue(1));
+    return (width / viewScale, height / viewScale);
+}
+
 static PalletViewLayout CreatePalletOrthographicViews(
-    DrawingDoc drawing, ModelDoc2 model, string modelPath, PalletDrawingData pallet, bool reserveAssemblyRequirements)
+    DrawingDoc drawing, ModelDoc2 model, string modelPath, PalletDrawingData pallet, bool reserveTechnicalRequirements)
 {
     var sheet = (Sheet)drawing.GetCurrentSheet();
     var properties = (Array)sheet.GetProperties2();
@@ -226,7 +331,7 @@ static PalletViewLayout CreatePalletOrthographicViews(
     var groupWidth = sideWidth + ProjectedViewGap + endWidth;
     var groupHeight = sideHeight + ManualAnnotationReserve + ProjectedViewGap + topHeight;
     var workingWidth = sheetWidth - WorkingLeftMargin - WorkingRightMargin;
-    var lowerReserve = reserveAssemblyRequirements ? AssemblyRequirementsLowerReserve : WorkingLowerReserve;
+    var lowerReserve = reserveTechnicalRequirements ? TechnicalRequirementsLowerReserve : WorkingLowerReserve;
     var workingHeight = sheetHeight - lowerReserve - WorkingUpperMargin;
     if (groupWidth > workingWidth || groupHeight > workingHeight)
         throw new InvalidOperationException("The selected GOST scale does not leave space for the projected views.");
@@ -343,12 +448,22 @@ static void RemoveSurfaceFinishSymbols(DrawingDoc drawing, ModelDoc2 drawingMode
 
 static void AddAssemblyTechnicalRequirements(DrawingDoc drawing, ModelDoc2 drawingModel)
 {
+    AddTechnicalRequirements(drawing, drawingModel, AssemblyTechnicalRequirements);
+}
+
+static void AddPartTechnicalRequirements(DrawingDoc drawing, ModelDoc2 drawingModel)
+{
+    AddTechnicalRequirements(drawing, drawingModel, PartTechnicalRequirements);
+}
+
+static void AddTechnicalRequirements(DrawingDoc drawing, ModelDoc2 drawingModel, string requirements)
+{
     // Insert a free-standing native note, rather than an annotation tied to a
     // projected view.  It therefore survives view edits and remains directly
     // editable in the drawing, as technical requirements should be.
     drawingModel.ClearSelection2(true);
-    var note = drawingModel.InsertNote(AssemblyTechnicalRequirements) as Note
-        ?? throw new InvalidOperationException("SolidWorks did not create the assembly technical requirements note.");
+    var note = drawingModel.InsertNote(requirements) as Note
+        ?? throw new InvalidOperationException("SolidWorks did not create the technical requirements note.");
     var annotation = note.GetAnnotation() as Annotation
         ?? throw new InvalidOperationException("SolidWorks did not expose the requirements note annotation.");
     if (!annotation.SetTextFormat(0, true, null))
@@ -363,8 +478,8 @@ static void AddAssemblyTechnicalRequirements(DrawingDoc drawing, ModelDoc2 drawi
     var properties = (Array)sheet.GetProperties2();
     var sheetHeight = Convert.ToDouble(properties.GetValue(6));
     if (!annotation.SetPosition2(
-            AssemblyRequirementsLeftMargin,
-            sheetHeight - AssemblyRequirementsBottomMargin,
+            TechnicalRequirementsLeftMargin,
+            sheetHeight - TechnicalRequirementsBottomMargin,
             0.0))
         throw new InvalidOperationException("SolidWorks did not set the initial position of the technical requirements.");
 
@@ -372,9 +487,9 @@ static void AddAssemblyTechnicalRequirements(DrawingDoc drawing, ModelDoc2 drawi
     var initialExtent = GetNoteExtent(note);
     var initialPosition = (Array)annotation.GetPosition();
     var targetX = Convert.ToDouble(initialPosition.GetValue(0))
-        + AssemblyRequirementsLeftMargin - initialExtent.Left;
+        + TechnicalRequirementsLeftMargin - initialExtent.Left;
     var targetY = Convert.ToDouble(initialPosition.GetValue(1))
-        + AssemblyRequirementsBottomMargin - initialExtent.Bottom;
+        + TechnicalRequirementsBottomMargin - initialExtent.Bottom;
     if (!annotation.SetPosition2(targetX, targetY, 0.0))
         throw new InvalidOperationException("SolidWorks did not position the technical requirements on the sheet.");
 

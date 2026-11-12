@@ -110,6 +110,59 @@ def test_drawing_preserves_exported_assembly_metadata(tmp_path, monkeypatch):
     assert metadata.read_text(encoding="utf-8") == '{"pallet": {"length": 1234}}'
 
 
+def test_export_can_create_parts_without_an_assembly(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from palletlab.exporters import solidworks
+    from palletlab.exporters.solidworks import TemplatePaths
+
+    assemblies = []
+    monkeypatch.setattr(
+        solidworks,
+        "_resolve_templates",
+        lambda *_args: TemplatePaths(tmp_path / "part.prtdot", None),
+    )
+    monkeypatch.setattr(solidworks, "_ensure_material_library_is_configured", lambda *_args: None)
+    monkeypatch.setattr(solidworks, "_create_beam", lambda *_args: None)
+    monkeypatch.setattr(solidworks, "_create_assembly", lambda *args: assemblies.append(args))
+
+    output = solidworks._export(
+        {"SldWorks": lambda: SimpleNamespace()},
+        _result(),
+        tmp_path,
+        (None, None),
+        get_material("pine"),
+        tmp_path / "materials.sldmat",
+        "Сосна",
+        include_assembly=False,
+    )
+
+    assert output.is_dir()
+    assert assemblies == []
+    assert not (output / ".palletlab-drawing.json").exists()
+
+
+def test_parts_only_drawing_scope_excludes_assembly(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from palletlab.exporters import solidworks
+    from palletlab.exporters.drawings import DrawingScope
+
+    part = tmp_path / "Part.SLDPRT"
+    assembly = tmp_path / "Pallet.SLDASM"
+    part.touch()
+    assembly.touch()
+    captured = []
+    pythoncom = SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)
+    monkeypatch.setattr(solidworks, "_load_solidworks_api", lambda: {
+        "pythoncom": pythoncom, "SldWorks": lambda: SimpleNamespace(Visible=False),
+    })
+    monkeypatch.setattr(solidworks, "_resolve_drawing_template", lambda *_args: tmp_path / "drawing.drwdot")
+    monkeypatch.setattr(solidworks, "_create_drawing_with_helper", lambda _template, model, *_args: captured.append(model))
+
+    solidworks.create_drawings(tmp_path, DrawingScope.PARTS_ONLY)
+
+    assert captured == [part]
+
+
 def test_drawing_helper_runs_without_opening_a_console(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from palletlab.exporters import solidworks
@@ -246,6 +299,29 @@ def test_missing_templates_request_user_selection(tmp_path):
         _resolve_templates({"const": {"user_preferences": _Preferences}}, _SolidWorks(), (None, None))
 
     assert error.value.missing == ("part", "assembly")
+
+
+def test_parts_only_export_does_not_require_an_assembly_template(tmp_path):
+    part = tmp_path / "part.prtdot"
+    part.touch()
+
+    class _Preferences:
+        swDefaultTemplatePart = "part"
+        swDefaultTemplateAssembly = "assembly"
+
+    class _SolidWorks:
+        def GetUserPreferenceStringValue(self, preference):
+            return str(part) if preference == "part" else ""
+
+    templates = _resolve_templates(
+        {"const": {"user_preferences": _Preferences}},
+        _SolidWorks(),
+        (None, None),
+        include_assembly=False,
+    )
+
+    assert templates.part == part
+    assert templates.assembly is None
 
 
 def test_solidworks_material_is_assigned_through_part_document_api():

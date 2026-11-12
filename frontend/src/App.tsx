@@ -213,7 +213,7 @@ export type SolidWorksOptions = {
 };
 type SolidWorksSettingsResponse = CommandResponse & { options?: SolidWorksOptions | null };
 type DrawingCad = "solidworks" | "kompas";
-type DrawingScope = "assembly" | "parts_and_assembly";
+type DrawingScope = "assembly" | "parts" | "parts_and_assembly";
 type ExportResult = {
   target: "КОМПАС-3D" | "SolidWorks" | "Чертежи SolidWorks" | "Чертежи КОМПАС-3D";
   ok: boolean;
@@ -323,13 +323,29 @@ declare global {
           error?: string;
           project?: Project;
         }>;
-        export_kompas: (project: Project) => Promise<CommandResponse>;
+        choose_export_directory: () => Promise<CommandResponse & { path?: string }>;
+        export_kompas: (
+          project: Project,
+          includeAssembly?: boolean,
+          parentDirectory?: string,
+        ) => Promise<CommandResponse>;
         select_solidworks_template: (kind: "part" | "assembly" | "drawing") => Promise<SolidWorksTemplateResponse>;
         select_solidworks_material_library: () => Promise<SolidWorksMaterialsResponse>;
         solidworks_export_settings: () => Promise<SolidWorksSettingsResponse>;
         save_solidworks_export_settings: (options: SolidWorksOptions) => Promise<CommandResponse>;
-        export_solidworks: (project: Project, options: SolidWorksOptions) => Promise<CommandResponse>;
-        create_drawings: (project: Project, cad: DrawingCad, scope: DrawingScope, template: string | null) => Promise<CommandResponse>;
+        export_solidworks: (
+          project: Project,
+          options: SolidWorksOptions,
+          includeAssembly?: boolean,
+          parentDirectory?: string,
+        ) => Promise<CommandResponse>;
+        create_drawings: (
+          project: Project,
+          cad: DrawingCad,
+          scope: DrawingScope,
+          template: string | null,
+          modelDirectory?: string,
+        ) => Promise<CommandResponse>;
         import_step_model: () => Promise<StepImportOperation>;
         restore_step_model: (path: string) => Promise<StepImportOperation>;
         step_import_status: (operationId: string) => Promise<StepImportOperation>;
@@ -383,13 +399,16 @@ export function App() {
   const [selectedStepFace, setSelectedStepFace] = useState<number | null>(null);
   const [stepPalletBuilt, setStepPalletBuilt] = useState(false);
   const [solidWorksOptions, setSolidWorksOptions] = useState<SolidWorksOptions | null>(storedSolidWorksOptions);
-  const [exporting, setExporting] = useState<"kompas" | "solidworks" | "drawings" | null>(null);
+  const [exporting, setExporting] = useState<DrawingCad | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
-  const [exportChoiceOpen, setExportChoiceOpen] = useState(false);
-  const [drawingsSetupOpen, setDrawingsSetupOpen] = useState(false);
-  const [drawingCad, setDrawingCad] = useState<DrawingCad>("solidworks");
-  const [drawingScope, setDrawingScope] = useState<DrawingScope>("assembly");
-  const [drawingSetupError, setDrawingSetupError] = useState<string | null>(null);
+  const [exportSetupOpen, setExportSetupOpen] = useState(false);
+  const [exportCadSystem, setExportCadSystem] = useState<DrawingCad>("solidworks");
+  const [exportDirectory, setExportDirectory] = useState("");
+  const [exportDirectoryError, setExportDirectoryError] = useState<string | null>(null);
+  const [includePalletModel, setIncludePalletModel] = useState(true);
+  const [includePartModels, setIncludePartModels] = useState(true);
+  const [includePalletDrawing, setIncludePalletDrawing] = useState(true);
+  const [includePartDrawings, setIncludePartDrawings] = useState(false);
   const [buildingStepPallet, setBuildingStepPallet] = useState(false);
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
   const [beamTool, setBeamTool] = useState<"none" | "delete" | "section">("none");
@@ -780,82 +799,130 @@ export function App() {
     }
   }
 
-  async function exportKompas() {
-    const api = window.pywebview?.api;
-    if (!api || !project) return;
-    setExporting("kompas");
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    try {
-      const response = await api.export_kompas(project);
-      if (!response.cancelled) {
-        setExportResult({
-          target: "КОМПАС-3D",
-          ok: response.ok,
-          message: response.ok
-            ? `Экспорт завершён. Файлы сохранены в папке:\n${response.output}`
-            : response.error ?? "Экспорт в КОМПАС-3D не выполнен.",
-        });
-      }
-    } finally {
-      setExporting(null);
+  function openExportSetup() {
+    setExportSetupOpen(true);
+  }
+
+  function changePartModels(enabled: boolean) {
+    setIncludePartModels(enabled);
+    if (!enabled) {
+      setIncludePalletModel(false);
+      setIncludePalletDrawing(false);
+      setIncludePartDrawings(false);
     }
   }
 
-  async function exportSolidWorks(options: SolidWorksOptions) {
+  function changePalletModel(enabled: boolean) {
+    setIncludePalletModel(enabled);
+    if (!enabled) setIncludePalletDrawing(false);
+  }
+
+  async function browseExportDirectory() {
     const api = window.pywebview?.api;
-    if (!api || !project) return;
-    setExporting("solidworks");
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (!api) return;
+    setExportDirectoryError(null);
     try {
-      const response = await api.export_solidworks(project, options);
-      if (!response.cancelled) {
-        setExportResult({
-          target: "SolidWorks",
-          ok: response.ok,
-          message: response.ok
-            ? `Экспорт завершён. Файлы сохранены в папке:\n${response.output}`
-            : response.error ?? "Экспорт в SolidWorks не выполнен.",
-        });
+      const response = await api.choose_export_directory();
+      if (response.cancelled) return;
+      if (!response.ok || !response.path) {
+        setExportDirectoryError(response.error ?? "Не удалось выбрать папку экспорта.");
+        return;
       }
-    } finally {
-      setExporting(null);
+      setExportDirectory(response.path);
+    } catch (error) {
+      setExportDirectoryError(error instanceof Error ? error.message : "Не удалось выбрать папку экспорта.");
     }
   }
 
-  function beginSolidWorksExport() {
-    if (!solidWorksOptions || [solidWorksOptions.partTemplate, solidWorksOptions.assemblyTemplate,
-      solidWorksOptions.materialLibrary, solidWorksOptions.materialName].some((value) => !value)) {
+  async function exportCad() {
+    const api = window.pywebview?.api;
+    if (!api || !project || !includePartModels) return;
+    if (!exportDirectory.trim()) {
+      setExportDirectoryError("Укажите папку для сохранения экспорта.");
+      return;
+    }
+    const cad = exportCadSystem;
+    const options = solidWorksOptions;
+    if (cad === "solidworks" && (!options
+      || !options.partTemplate
+      || (includePalletModel && !options.assemblyTemplate)
+      || !options.materialLibrary
+      || !options.materialName)) {
+      setExportSetupOpen(false);
       setSettingsInitialSection("cad");
       setSettingsOpen(true);
       return;
     }
-    void exportSolidWorks(solidWorksOptions);
-  }
 
-  function openDrawingsSetup() {
-    setDrawingSetupError(null);
-    setDrawingsSetupOpen(true);
-  }
-
-  async function createDrawings() {
-    const api = window.pywebview?.api;
-    if (!api || !project) return;
-    setDrawingsSetupOpen(false);
-    setExporting("drawings");
+    setExportSetupOpen(false);
+    setExporting(cad);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const target = cad === "kompas" ? "КОМПАС-3D" : "SolidWorks";
+    let modelOutput: string | null = null;
     try {
-      const response = await api.create_drawings(project, drawingCad, drawingScope,
-        drawingCad === "solidworks" ? solidWorksOptions?.drawingTemplate || null : null);
-      if (!response.cancelled) {
-        const target = drawingCad === "solidworks" ? "Чертежи SolidWorks" : "Чертежи КОМПАС-3D";
+      let models: CommandResponse;
+      if (cad === "kompas") {
+        models = await api.export_kompas(project, includePalletModel, exportDirectory.trim());
+      } else if (options) {
+        models = await api.export_solidworks(project, options, includePalletModel, exportDirectory.trim());
+      } else {
+        throw new Error("Сначала настройте экспорт SolidWorks.");
+      }
+      if (models.cancelled) return;
+      if (!models.ok || !models.output) {
         setExportResult({
           target,
-          ok: response.ok,
-          message: response.ok
-            ? `Чертежи сохранены в папке:\n${response.output}`
-            : response.error ?? "Создание чертежей не выполнено.",
+          ok: false,
+          message: models.error ?? "Экспорт моделей не выполнен.",
         });
+        return;
       }
+      modelOutput = models.output;
+
+      const drawingScope: DrawingScope | null = includePalletDrawing && includePartDrawings
+        ? "parts_and_assembly"
+        : includePalletDrawing
+          ? "assembly"
+          : includePartDrawings
+            ? "parts"
+            : null;
+      if (drawingScope) {
+        const drawings = await api.create_drawings(
+          project,
+          cad,
+          drawingScope,
+          cad === "solidworks" ? options?.drawingTemplate || null : null,
+          models.output,
+        );
+        if (drawings.cancelled || !drawings.ok) {
+          setExportResult({
+            target,
+            ok: false,
+            message: `Модели сохранены в папке:\n${models.output}\n\nЧертежи не созданы: ${drawings.error ?? "операция отменена."}`,
+          });
+          return;
+        }
+        setExportResult({
+          target,
+          ok: true,
+          message: `Модели сохранены в папке:\n${models.output}\n\nЧертежи сохранены в папке:\n${drawings.output}`,
+        });
+        return;
+      }
+
+      setExportResult({
+        target,
+        ok: true,
+        message: `Модели сохранены в папке:\n${models.output}`,
+      });
+    } catch (error) {
+      setExportResult({
+        target,
+        ok: false,
+        message: modelOutput
+          ? `Модели сохранены в папке:\n${modelOutput}\n\nНе удалось создать чертежи: ${error instanceof Error ? error.message : "ошибка CAD-экспорта."}`
+          : error instanceof Error ? error.message : "Не удалось выполнить экспорт CAD.",
+      });
     } finally {
       setExporting(null);
     }
@@ -1759,11 +1826,8 @@ export function App() {
           >
             Импорт
           </button>
-          <button type="button" onClick={() => setExportChoiceOpen(true)} disabled={!project || exporting !== null}>
+          <button type="button" onClick={openExportSetup} disabled={!project || exporting !== null}>
             Экспорт
-          </button>
-          <button type="button" className="secondary" onClick={openDrawingsSetup} disabled={!project || exporting !== null}>
-            Создать чертёж
           </button>
         </nav>
         {updateDismissed && ["available", "ready", "failed"].includes(update.state) ? (
@@ -1804,43 +1868,83 @@ export function App() {
             </section>
           </div>
         ) : null}
-        {exportChoiceOpen ? (
+        {exportSetupOpen ? (
           <div className="modal-backdrop" role="presentation">
-            <section className="modal export-choice-modal" role="dialog" aria-modal="true" aria-labelledby="export-choice-title">
-              <h2 id="export-choice-title">Экспорт модели</h2>
-              <p>Выберите CAD-систему для экспорта поддона.</p>
-              <div className="export-choice-actions">
-                <button type="button" onClick={() => { setExportChoiceOpen(false); void exportKompas(); }}>КОМПАС-3D</button>
-                <button type="button" onClick={() => { setExportChoiceOpen(false); beginSolidWorksExport(); }}>SolidWorks</button>
-              </div>
-              <footer className="modal-actions"><button type="button" className="secondary" onClick={() => setExportChoiceOpen(false)}>Отмена</button></footer>
-            </section>
-          </div>
-        ) : null}
-        {drawingsSetupOpen ? (
-          <div className="modal-backdrop" role="presentation">
-            <section className="modal drawing-modal" role="dialog" aria-modal="true" aria-labelledby="drawings-title">
-              <h2 id="drawings-title">Создание CAD-чертежей</h2>
-              <p>Выберите CAD-систему и состав чертежей. Затем укажите папку ранее экспортированных моделей.</p>
-              <label>
+            <section className="modal export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
+              <h2 id="export-title">Экспорт CAD</h2>
+              <label className="export-cad-field">
                 CAD-система
-                <select value={drawingCad} onChange={(event) => setDrawingCad(event.target.value as DrawingCad)}>
+                <select value={exportCadSystem} onChange={(event) => setExportCadSystem(event.target.value as DrawingCad)}>
                   <option value="solidworks">SolidWorks</option>
                   <option value="kompas">КОМПАС-3D</option>
                 </select>
               </label>
-              <label>
-                Состав чертежей
-                <select value={drawingScope} onChange={(event) => setDrawingScope(event.target.value as DrawingScope)}>
-                  <option value="assembly">Только сборка</option>
-                  <option value="parts_and_assembly">Детали и сборка</option>
-                </select>
+              <fieldset className="export-options">
+                <legend>Состав экспорта</legend>
+                <label className="export-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={includePalletModel}
+                    disabled={!includePartModels}
+                    onChange={(event) => changePalletModel(event.target.checked)}
+                  />
+                  Модель поддона
+                </label>
+                <label className="export-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={includePartModels}
+                    onChange={(event) => changePartModels(event.target.checked)}
+                  />
+                  Модели деталей
+                </label>
+                <label className="export-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={includePalletDrawing}
+                    disabled={!includePartModels || !includePalletModel}
+                    onChange={(event) => setIncludePalletDrawing(event.target.checked)}
+                  />
+                  Чертёж поддона
+                </label>
+                <label className="export-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={includePartDrawings}
+                    disabled={!includePartModels}
+                    onChange={(event) => setIncludePartDrawings(event.target.checked)}
+                  />
+                  Чертежи деталей
+                </label>
+              </fieldset>
+              <label className="file-field export-directory-field">
+                Папка сохранения
+                <div className="file-field-control">
+                  <input
+                    type="text"
+                    value={exportDirectory}
+                    placeholder="Путь к папке экспорта"
+                    aria-label="Путь сохранения экспорта"
+                    onChange={(event) => {
+                      setExportDirectory(event.target.value);
+                      setExportDirectoryError(null);
+                    }}
+                  />
+                  <button type="button" className="secondary" onClick={() => void browseExportDirectory()}>
+                    Обзор
+                  </button>
+                </div>
               </label>
-              {drawingCad === "solidworks" ? <p className="modal-hint">Шаблон чертежа SolidWorks задаётся в Параметры → CAD и чертежи.</p> : null}
-              {drawingSetupError ? <p className="error">{drawingSetupError}</p> : null}
+              {exportDirectoryError ? <p className="error" role="alert">{exportDirectoryError}</p> : null}
               <footer className="modal-actions">
-                <button type="button" onClick={() => void createDrawings()}>Выбрать папку и создать</button>
-                <button type="button" className="secondary" onClick={() => setDrawingsSetupOpen(false)}>Отмена</button>
+                <button
+                  type="button"
+                  disabled={!includePartModels || !exportDirectory.trim() || exporting !== null}
+                  onClick={() => void exportCad()}
+                >
+                  Экспорт
+                </button>
+                <button type="button" className="secondary" onClick={() => setExportSetupOpen(false)}>Отмена</button>
               </footer>
             </section>
           </div>
@@ -1849,7 +1953,7 @@ export function App() {
           <div className="modal-backdrop" role="presentation">
             <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite">
               <h2>Экспорт выполняется</h2>
-              <p>{exporting === "drawings" ? "CAD-система создаёт чертежи…" : exporting === "solidworks" ? "SolidWorks создаёт детали и сборку…" : "КОМПАС-3D создаёт детали и сборку…"}</p>
+              <p>{exporting === "solidworks" ? "SolidWorks создаёт выбранные модели и чертежи…" : "КОМПАС-3D создаёт выбранные модели и чертежи…"}</p>
               <progress aria-label="Процесс экспорта" />
               <p className="modal-hint">Не закрывайте PalletLab и CAD-систему до завершения операции.</p>
             </section>

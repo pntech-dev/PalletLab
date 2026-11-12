@@ -47,6 +47,13 @@ _ASSEMBLY_TECHNICAL_REQUIREMENTS = (
     "Остальные ТТ по СТБ 1022-96.",
     "Все сварные швы зачистить Rz40.",
 )
+_PART_TECHNICAL_REQUIREMENTS = (
+    "*Размеры для справок.",
+    "Острые кромки притупить.",
+    "Общие допуски по ГОСТ 30893.1: Н14, h14, ±IТ14/2.",
+    "Общие допуски формы и расположения - ГОСТ 30893.2-К.",
+    "Остальные ТТ по СТБ 1014-95.",
+)
 _KOMPAS_TEXT_ITEM_LIMIT = 100
 # The main title block of an A3 landscape sheet is 185×55 mm, aligned to the
 # bottom-right frame.  The specification is joined to its upper edge.
@@ -78,7 +85,12 @@ def create_drawings(
     directory = Path(model_directory)
     parts = sorted(directory.glob("*.m3d"))
     assembly = next(iter(directory.glob("*.a3d")), None)
-    models = [*parts, *([assembly] if assembly else [])] if scope is DrawingScope.PARTS_AND_ASSEMBLY else ([assembly] if assembly else [])
+    if scope is DrawingScope.PARTS_AND_ASSEMBLY:
+        models = [*parts, *([assembly] if assembly else [])]
+    elif scope is DrawingScope.PARTS_ONLY:
+        models = parts
+    else:
+        models = [assembly] if assembly else []
     if not models:
         raise DrawingExportError("В выбранной папке не найдены модели КОМПАС-3D для создания чертежей.")
     template = Path(configured_template) if configured_template else None
@@ -186,15 +198,26 @@ def _create_drawing(
     if include_assembly_requirements:
         _add_assembly_technical_requirements(document, kompas, constants)
         _add_assembly_specification(document, specification_rows)
+    elif model.suffix.casefold() == ".m3d":
+        _add_part_technical_requirements(document)
     if not document.ksSaveDocument(str(filename)):
         raise DrawingExportError(f"КОМПАС-3D не сохранил {filename.name}.")
 
 
 def _add_assembly_technical_requirements(document, kompas, constants) -> None:
     """Place requirements at the fixed lower-left ESKD sheet position."""
+    _add_technical_requirements(document, _ASSEMBLY_TECHNICAL_REQUIREMENTS)
+
+
+def _add_part_technical_requirements(document) -> None:
+    """Place part requirements at the fixed lower-left ESKD sheet position."""
+    _add_technical_requirements(document, _PART_TECHNICAL_REQUIREMENTS)
+
+
+def _add_technical_requirements(document, requirements: tuple[str, ...]) -> None:
     lines = tuple(
         f"{number}. {requirement.replace('—', '-')}"
-        for number, requirement in enumerate(_ASSEMBLY_TECHNICAL_REQUIREMENTS, start=1)
+        for number, requirement in enumerate(requirements, start=1)
     )
     for line_index, text in enumerate(reversed(lines)):
         y = _TECHNICAL_REQUIREMENTS_BOTTOM + line_index * _TECHNICAL_REQUIREMENTS_LINE_HEIGHT
@@ -401,13 +424,18 @@ def create_output_directory(parent: str | Path, result: PalletResult) -> Path:
     return output
 
 
-def export_pallet(result: PalletResult, parent_directory: str | Path, material_id: str = "pine") -> Path:
-    """Create KOMPAS M3D parts and an A3D assembly from the current pallet."""
+def export_pallet(
+    result: PalletResult,
+    parent_directory: str | Path,
+    material_id: str = "pine",
+    include_assembly: bool = True,
+) -> Path:
+    """Create KOMPAS M3D parts and optionally an A3D assembly."""
     api = _load_kompas_api()
     output = create_output_directory(parent_directory, result)
     api["pythoncom"].CoInitialize()
     try:
-        return _export(api, result, output, get_material(material_id))
+        return _export(api, result, output, get_material(material_id), include_assembly)
     except Exception as exc:
         shutil.rmtree(output, ignore_errors=True)
         raise KompasExportError(str(exc)) from exc
@@ -432,7 +460,13 @@ def _load_kompas_api() -> dict[str, object]:
     return {"pythoncom": pythoncom, "Dispatch": Dispatch, "constants": constants, "constants3d": constants3d}
 
 
-def _export(api: dict[str, object], result: PalletResult, output: Path, material: PalletMaterial) -> Path:
+def _export(
+    api: dict[str, object],
+    result: PalletResult,
+    output: Path,
+    material: PalletMaterial,
+    include_assembly: bool = True,
+) -> Path:
     try:
         kompas = api["Dispatch"]("KOMPAS.Application.5")
         kompas.Visible = True
@@ -458,9 +492,10 @@ def _export(api: dict[str, object], result: PalletResult, output: Path, material
         _create_beam(kompas, constants3d, material, length, width, size_z, part_name, filename)
         parts[key] = filename
 
-    assembly_file = output / f"Поддон_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.a3d"
-    _create_assembly(kompas, constants3d, result, parts, assembly_file)
-    _write_drawing_metadata(output, result, parts, groups)
+    if include_assembly:
+        assembly_file = output / f"Поддон_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.a3d"
+        _create_assembly(kompas, constants3d, result, parts, assembly_file)
+        _write_drawing_metadata(output, result, parts, groups)
     return output
 
 

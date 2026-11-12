@@ -50,8 +50,8 @@ input:disabled { cursor: default; background: #ecece8; color: #7d8583; }
 .modal h2, .modal p { margin: 0; overflow-wrap: anywhere; }
 .modal h2 { font-size: 20px; }
 .modal label { min-width: 0; }
-.material-field, .drawing-modal > label:not(.file-field) { display: flex; flex-direction: column; width: calc(100% - 24px); max-width: calc(100% - 24px); gap: 4px; }
-.material-field select, .drawing-modal > label:not(.file-field) select { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
+.material-field, .export-modal > label:not(.file-field) { display: flex; flex-direction: column; width: calc(100% - 24px); max-width: calc(100% - 24px); gap: 4px; }
+.material-field select, .export-modal > label:not(.file-field) select { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
 .material-field { width: 100%; max-width: 100%; }
 .modal-hint, .cad-export-note, .export-status { color: #65706f; font-size: 13px; line-height: 1.45; }
 .modal-hint code { word-break: break-all; }
@@ -63,8 +63,13 @@ input:disabled { cursor: default; background: #ecece8; color: #7d8583; }
 .progress-modal { width: min(420px, 100%); }
 .progress-modal progress { width: 100%; height: 16px; accent-color: #b86131; }
 .result-modal { width: min(500px, 100%); }
-.export-choice-modal { width: min(420px, 100%); }
-.export-choice-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.export-modal { width: min(480px, 100%); }
+.export-modal > label.export-cad-field, .export-modal > label.export-directory-field { width: 100%; max-width: 100%; }
+.export-modal .export-cad-field select { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
+.export-options { gap: 12px; }
+.export-checkbox { display: flex; align-items: center; gap: 8px; color: #3f4d4d; }
+.export-checkbox input { width: 16px; height: 16px; margin: 0; accent-color: #b86131; }
+.export-checkbox input:disabled { opacity: 0.55; }
 .success-message { color: #2f7555; white-space: pre-line; }
 
 .viewport { position: relative; height: min(58vh, 680px); margin-top: 16px; overflow: hidden; border: 1px solid #42585a; border-radius: 14px; background: #dfe7e3; }

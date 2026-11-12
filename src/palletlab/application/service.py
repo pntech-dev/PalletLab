@@ -288,7 +288,9 @@ class ApplicationService:
         except (OSError, ProjectPersistenceError) as exc:
             return {"ok": False, "error": str(exc)}
 
-    def export_kompas(self, project: object, parent_directory: object) -> dict[str, Any]:
+    def export_kompas(
+        self, project: object, parent_directory: object, include_assembly: bool = True
+    ) -> dict[str, Any]:
         """Recalculate and export the current project through KOMPAS-3D.
 
         The bridge receives a persisted project rather than a viewport snapshot so
@@ -297,21 +299,27 @@ class ApplicationService:
         state, directory, error = self._export_input(project, parent_directory)
         if error:
             return {"ok": False, "error": error}
+        if not isinstance(include_assembly, bool):
+            return {"ok": False, "error": "Некорректный выбор модели поддона."}
         result, error = self._calculate_result(state)
         if error:
             return {"ok": False, "error": error}
         try:
-            output = export_kompas_pallet(result, directory, state.material_id)
+            output = export_kompas_pallet(result, directory, state.material_id, include_assembly)
         except KompasExportError as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "output": str(output)}
 
-    def export_solidworks(self, project: object, parent_directory: object, options: object) -> dict[str, Any]:
+    def export_solidworks(
+        self, project: object, parent_directory: object, options: object, include_assembly: bool = True
+    ) -> dict[str, Any]:
         """Recalculate and export the current project through SolidWorks."""
         state, directory, error = self._export_input(project, parent_directory)
         if error:
             return {"ok": False, "error": error}
-        templates, material_library, material_name, error = _solidworks_options(options)
+        if not isinstance(include_assembly, bool):
+            return {"ok": False, "error": "Некорректный выбор модели поддона."}
+        templates, material_library, material_name, error = _solidworks_options(options, include_assembly)
         if error:
             return {"ok": False, "error": error}
         result, error = self._calculate_result(state)
@@ -325,6 +333,7 @@ class ApplicationService:
                 state.material_id,
                 material_library,
                 material_name,
+                include_assembly=include_assembly,
             )
         except SolidWorksExportError as exc:
             return {"ok": False, "error": str(exc)}
@@ -508,7 +517,9 @@ def _manual_options(value: object):
     return float(distance), beam_section, parsed[0], reference_face, start_point, None
 
 
-def _solidworks_options(value: object) -> tuple[tuple[str, str] | None, str | None, str | None, str | None]:
+def _solidworks_options(
+    value: object, include_assembly: bool = True
+) -> tuple[tuple[str | None, str | None] | None, str | None, str | None, str | None]:
     """Validate the explicit SolidWorks resources selected in the web UI."""
     if not isinstance(value, dict):
         return None, None, None, "Некорректные параметры экспорта SolidWorks."
@@ -516,13 +527,22 @@ def _solidworks_options(value: object) -> tuple[tuple[str, str] | None, str | No
     assembly_template = value.get("assemblyTemplate")
     material_library = value.get("materialLibrary")
     material_name = value.get("materialName")
-    values = (part_template, assembly_template, material_library, material_name)
+    values = (part_template, material_library, material_name)
+    if include_assembly:
+        values += (assembly_template,)
     if any(not isinstance(item, str) or not item.strip() for item in values):
         return None, None, None, "Выберите шаблоны и материал SolidWorks перед экспортом."
-    paths = (Path(part_template), Path(assembly_template), Path(material_library))
+    paths = [Path(part_template), Path(material_library)]
+    if include_assembly:
+        paths.append(Path(assembly_template))
     if any(not path.is_file() for path in paths):
         return None, None, None, "Выбранный файл SolidWorks больше не существует."
-    return (part_template, assembly_template), material_library, material_name, None
+    return (
+        (part_template, assembly_template if isinstance(assembly_template, str) and assembly_template.strip() else None),
+        material_library,
+        material_name,
+        None,
+    )
 
 
 class _Signal:

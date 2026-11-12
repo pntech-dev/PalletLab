@@ -79,7 +79,7 @@ class SolidWorksMaterialLibraryError(SolidWorksExportError):
 @dataclass(frozen=True)
 class TemplatePaths:
     part: Path
-    assembly: Path
+    assembly: Path | None
 
 
 def create_drawings(
@@ -105,6 +105,8 @@ def create_drawings(
     )
     if scope is DrawingScope.PARTS_AND_ASSEMBLY:
         models_to_draw = [*models, *([assembly] if assembly else [])]
+    elif scope is DrawingScope.PARTS_ONLY:
+        models_to_draw = models
     else:
         models_to_draw = [assembly] if assembly else []
     if not models_to_draw:
@@ -352,14 +354,17 @@ def export_pallet(
     material_id: str = "pine",
     material_library: str | Path | None = None,
     material_name: str | None = None,
+    include_assembly: bool = True,
 ) -> Path:
-    """Create the native parts and assembly; return the newly-created folder."""
+    """Create native parts and optionally an assembly; return the new folder."""
     api = _load_solidworks_api()
     api["pythoncom"].CoInitialize()
     try:
         material = get_material(material_id)
         library = _validate_material_library(material_library, material_name)
-        return _export(api, result, Path(parent_directory), configured_templates, material, library, material_name)
+        return _export(
+            api, result, Path(parent_directory), configured_templates, material, library, material_name, include_assembly
+        )
     except SolidWorksExportError:
         raise
     except Exception as exc:
@@ -409,12 +414,21 @@ def _load_solidworks_api() -> dict[str, object]:
     }
 
 
-def _export(api: dict[str, object], result: PalletResult, parent_directory: Path, configured_templates, material: PalletMaterial, material_library: Path, material_name: str) -> Path:
+def _export(
+    api: dict[str, object],
+    result: PalletResult,
+    parent_directory: Path,
+    configured_templates,
+    material: PalletMaterial,
+    material_library: Path,
+    material_name: str,
+    include_assembly: bool = True,
+) -> Path:
     sw = api["SldWorks"]()
     if sw is None:
         raise SolidWorksExportError("Не удалось запустить SolidWorks.")
     sw.Visible = True
-    templates = _resolve_templates(api, sw, configured_templates)
+    templates = _resolve_templates(api, sw, configured_templates, include_assembly)
     _ensure_material_library_is_configured(api, sw, material_library)
     output = create_output_directory(parent_directory, result)
     try:
@@ -436,23 +450,27 @@ def _export(api: dict[str, object], result: PalletResult, parent_directory: Path
             _create_beam(api, sw, templates.part, material, material_library, material_name, length, cross_width, size_z, filename)
             parts[key] = filename
 
-        assembly_file = output / f"Поддон_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
-        _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
-        _write_drawing_metadata(output, result)
+        if include_assembly:
+            if templates.assembly is None:
+                raise SolidWorksExportError("Не настроен шаблон сборки SolidWorks.")
+            assembly_file = output / f"Поддон_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
+            _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
+            _write_drawing_metadata(output, result)
         return output
     except Exception:
         shutil.rmtree(output, ignore_errors=True)
         raise
 
 
-def _resolve_templates(api: dict[str, object], sw, configured_templates) -> TemplatePaths:
+def _resolve_templates(api: dict[str, object], sw, configured_templates, include_assembly: bool = True) -> TemplatePaths:
     configured_part, configured_assembly = (Path(path) if path else None for path in configured_templates)
     preferences = api["const"]["user_preferences"]
     default_part = _solidworks_template(sw, preferences.swDefaultTemplatePart)
     default_assembly = _solidworks_template(sw, preferences.swDefaultTemplateAssembly)
     part = configured_part if configured_part and configured_part.is_file() else default_part
     assembly = configured_assembly if configured_assembly and configured_assembly.is_file() else default_assembly
-    missing = tuple(name for name, path in (("part", part), ("assembly", assembly)) if path is None or not path.is_file())
+    required = (("part", part), ("assembly", assembly)) if include_assembly else (("part", part),)
+    missing = tuple(name for name, path in required if path is None or not path.is_file())
     if missing:
         raise SolidWorksTemplateError(missing)
     return TemplatePaths(part=part, assembly=assembly)

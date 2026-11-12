@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from palletlab.core.calculator import build_pallet, calculate_direction
 from palletlab.core.models import Beam3D, DirectionInput
 from palletlab.core.materials import get_material
@@ -10,6 +12,7 @@ from types import SimpleNamespace
 from palletlab.exporters.kompas import (
     _add_assembly_specification,
     _add_assembly_technical_requirements,
+    _add_part_technical_requirements,
     _assembly_requirement_text_chunks,
     _apply_material,
     _apply_wood_appearance,
@@ -83,6 +86,26 @@ def test_export_uses_russian_names_for_kompas_part_and_assembly_files(tmp_path, 
     assert len({filename for _name, filename, *_dimensions in created_parts}) == len(created_parts)
     assert created_assemblies[0].name.startswith("Поддон_")
     assert " " not in created_assemblies[0].name
+
+
+def test_kompas_export_can_create_parts_without_an_assembly(tmp_path, monkeypatch):
+    from palletlab.exporters import kompas
+
+    created_parts = []
+    created_assemblies = []
+    monkeypatch.setattr(kompas, "_create_beam", lambda *_args: created_parts.append(True))
+    monkeypatch.setattr(kompas, "_create_assembly", lambda *_args: created_assemblies.append(True))
+    monkeypatch.setattr(kompas, "_write_drawing_metadata", lambda *_args: pytest.fail("unexpected assembly metadata"))
+    api = {
+        "Dispatch": lambda _name: SimpleNamespace(Visible=False),
+        "constants3d": object(),
+    }
+
+    output = kompas._export(api, _result(), tmp_path, get_material("pine"), include_assembly=False)
+
+    assert output == tmp_path
+    assert created_parts
+    assert not created_assemblies
 
 
 def test_create_beam_sets_the_actual_kompas_part_name_before_saving(tmp_path, monkeypatch):
@@ -189,6 +212,26 @@ def test_drawing_uses_specification_saved_with_export(tmp_path, monkeypatch):
     assert captured[0][0][3].parent.name == "Чертежи"
     assert captured[0][1]["specification_rows"][0].name == "Stored part"
     assert captured[0][1]["specification_rows"][0].quantity == 42
+
+
+def test_parts_only_drawing_scope_excludes_assembly(tmp_path, monkeypatch):
+    from palletlab.exporters import kompas
+    from palletlab.exporters.drawings import DrawingScope
+
+    part = tmp_path / "Part.m3d"
+    assembly = tmp_path / "Pallet.a3d"
+    part.touch()
+    assembly.touch()
+    captured = []
+    pythoncom = SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)
+    monkeypatch.setattr(kompas, "_load_kompas_api", lambda: {
+        "pythoncom": pythoncom, "Dispatch": lambda _name: SimpleNamespace(Visible=False), "constants": object(),
+    })
+    monkeypatch.setattr(kompas, "_create_drawing", lambda _app, _constants, model, *_args, **_kwargs: captured.append(model))
+
+    kompas.create_drawings(tmp_path, DrawingScope.PARTS_ONLY)
+
+    assert captured == [part]
 
 
 def test_legacy_specification_finds_actual_part_names_by_dimensions(tmp_path):
@@ -441,6 +484,76 @@ def test_kompas_assembly_requirements_use_the_fixed_lower_left_esqd_position():
     ]
     assert document.texts[-1][-1] == "1. *Размеры для справок."
     assert document.texts[0][-1] == "7. Все сварные швы зачистить Rz40."
+
+
+def test_kompas_part_requirements_use_assembly_positioning_and_part_text():
+    class _Document:
+        def __init__(self):
+            self.texts = []
+
+        def ksText(self, *args):
+            self.texts.append(args)
+            return True
+
+    document = _Document()
+
+    _add_part_technical_requirements(document)
+
+    assert [text[0:2] for text in document.texts] == [
+        (25.0, 10.0), (25.0, 15.0), (25.0, 20.0), (25.0, 25.0), (25.0, 30.0),
+    ]
+    assert [text[-1] for text in document.texts] == [
+        "5. Остальные ТТ по СТБ 1014-95.",
+        "4. Общие допуски формы и расположения - ГОСТ 30893.2-К.",
+        "3. Общие допуски по ГОСТ 30893.1: Н14, h14, ±IТ14/2.",
+        "2. Острые кромки притупить.",
+        "1. *Размеры для справок.",
+    ]
+
+
+def test_kompas_part_drawing_adds_only_part_requirements(monkeypatch, tmp_path):
+    from palletlab.exporters import kompas
+
+    class _Parameters:
+        def Init(self):
+            pass
+
+        def GetViewParam(self):
+            return self
+
+    class _Document:
+        def ksCreateDocument(self, _parameters):
+            return True
+
+        def ksCreateSheetStandartViews(self, *_args):
+            return True
+
+        def ksRebuildDocument(self):
+            return True
+
+        def ksOpenView(self, _number):
+            return True
+
+        def ksSaveDocument(self, _filename):
+            return True
+
+    class _Kompas:
+        Document2D = _Document()
+
+        def GetParamStruct(self, _parameter_type):
+            return _Parameters()
+
+    added = []
+    monkeypatch.setattr(kompas, "_configure_standard_sheet", lambda *_args: None)
+    monkeypatch.setattr(kompas, "_drawing_scale", lambda _model: 1 / 4)
+    monkeypatch.setattr(kompas, "_add_part_technical_requirements", lambda _document: added.append("part"))
+    monkeypatch.setattr(kompas, "_add_assembly_technical_requirements", lambda *_args: added.append("assembly"))
+    monkeypatch.setattr(kompas, "_add_assembly_specification", lambda *_args: added.append("specification"))
+    constants = SimpleNamespace(ko_DocumentParam="document", ko_AssociationViewParam="association-view")
+
+    _create_drawing(_Kompas(), constants, tmp_path / "Part.m3d", tmp_path / "Part.cdw", None)
+
+    assert added == ["part"]
 
 
 def test_kompas_technical_requirement_chunks_preserve_every_line_break():

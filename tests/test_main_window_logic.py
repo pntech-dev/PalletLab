@@ -11,11 +11,14 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from PyQt5.QtWidgets import QApplication, QDialog
 
 from palletlab.core.calculator import build_pallet, calculate_direction, insertion_slots
 from palletlab.core.models import BeamSection, DirectionInput, LayerInput
 from palletlab.core.project_state import ProjectHistory, ProjectState
-from palletlab.ui.main_window import MainWindow, _model_pallet_layers
+from palletlab.exporters.drawings import DrawingScope
+from palletlab.ui import main_window
+from palletlab.ui.main_window import ExportOptionsDialog, MainWindow, _model_pallet_layers
 
 
 LENGTH_INPUT = DirectionInput(70, 50, (1070, 460, 1300, 499), 123, 552, 100, 100)
@@ -110,6 +113,13 @@ class _StatusBar:
 
     def showMessage(self, message: str) -> None:
         self.messages.append(message)
+
+
+@pytest.fixture
+def qapp(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
+    return app
 
 
 def _pallet_result():
@@ -300,6 +310,71 @@ def test_save_project_delegates_current_state_to_controller():
     assert saved_paths == ["C:/projects/pallet.palletlab.json"]
     assert autosave_calls == ["clear", "C:/projects/pallet.palletlab.json", "save"]
     assert status_bar.messages[-1].endswith("pallet.palletlab.json")
+
+
+def test_export_options_enforce_model_and_drawing_dependencies(qapp):
+    dialog = ExportOptionsDialog()
+
+    assert dialog.pallet_model.isChecked()
+    assert dialog.parts_model.isChecked()
+    assert dialog.pallet_drawing.isChecked()
+    assert not dialog.parts_drawing.isChecked()
+    assert dialog.export_button.isEnabled()
+    assert dialog.selection() == ("solidworks", True, DrawingScope.ASSEMBLY_ONLY)
+
+    dialog.parts_drawing.setChecked(True)
+    dialog.pallet_model.setChecked(False)
+    assert not dialog.pallet_drawing.isChecked()
+    assert not dialog.pallet_drawing.isEnabled()
+    assert dialog.selection() == ("solidworks", False, DrawingScope.PARTS_ONLY)
+
+    dialog.parts_model.setChecked(False)
+    assert not dialog.pallet_model.isChecked()
+    assert not dialog.pallet_drawing.isChecked()
+    assert not dialog.parts_drawing.isChecked()
+    assert not dialog.pallet_model.isEnabled()
+    assert not dialog.export_button.isEnabled()
+
+    dialog.parts_model.setChecked(True)
+    assert dialog.export_button.isEnabled()
+
+
+def test_export_creates_models_before_selected_drawings(monkeypatch, tmp_path):
+    events = []
+    status_bar = _StatusBar()
+    export_button = SimpleNamespace(setEnabled=lambda _enabled: None)
+    output = tmp_path / "export"
+    drawings = output / "Чертежи"
+
+    class _Options:
+        def __init__(self, _parent):
+            pass
+
+        def exec_(self):
+            return QDialog.Accepted
+
+        def selection(self):
+            return "kompas", True, DrawingScope.ASSEMBLY_ONLY
+
+    window = SimpleNamespace(
+        calculate=lambda **_kwargs: object(),
+        export_button=export_button,
+        _export_models=lambda *args: events.append(("models", args)) or output,
+        _create_export_drawings=lambda *args: events.append(("drawings", args)) or drawings,
+        statusBar=lambda: status_bar,
+    )
+    monkeypatch.setattr(main_window, "ExportOptionsDialog", _Options)
+    monkeypatch.setattr(main_window.QFileDialog, "getExistingDirectory", lambda *_args: str(tmp_path))
+    monkeypatch.setattr(main_window.QApplication, "setOverrideCursor", lambda *_args: None)
+    monkeypatch.setattr(main_window.QApplication, "overrideCursor", lambda: None)
+    monkeypatch.setattr(main_window.QApplication, "restoreOverrideCursor", lambda: None)
+    monkeypatch.setattr(main_window.QMessageBox, "information", lambda *_args: None)
+
+    MainWindow.export(window)
+
+    assert [event[0] for event in events] == ["models", "drawings"]
+    assert events[0][1][0] == "kompas"
+    assert events[1][1] == ("kompas", output, DrawingScope.ASSEMBLY_ONLY)
 
 
 def test_confirm_insertion_updates_the_input_panel_then_recalculates():
