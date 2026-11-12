@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "./appSettings";
+import type { SolidWorksOptions } from "./App";
 
 type Section = "general" | "view" | "cad" | "about";
 
@@ -10,10 +11,91 @@ const SECTIONS: { id: Section; title: string; description: string }[] = [
   { id: "about", title: "О программе", description: "Версия PalletLab, связь с разработчиком и обновления." },
 ];
 
-export function SettingsDialog({ version, settings, onSave, onClose }: {
-  version?: string; settings: AppSettings; onSave: (settings: AppSettings) => Promise<boolean>; onClose: () => void;
+export function SettingsDialog({ version, settings, solidworks, initialSection = "general", onSave, onClose }: {
+  version?: string; settings: AppSettings; solidworks: SolidWorksOptions | null; initialSection?: Section;
+  onSave: (settings: AppSettings, solidworks: SolidWorksOptions | null) => Promise<boolean>; onClose: () => void;
 }) {
   const [draft, setDraft] = useState(settings);
+  const [cadDraft, setCadDraft] = useState<SolidWorksOptions>(solidworks ?? {
+    partTemplate: "", assemblyTemplate: "", materialLibrary: "", materialName: "",
+  });
+  const [materials, setMaterials] = useState<string[]>([]);
+  const [cadError, setCadError] = useState<string | null>(null);
+  const [cadBusy, setCadBusy] = useState(false);
+  const initialCad = useRef(JSON.stringify(cadDraft));
+  const materialLoadVersion = useRef(0);
+  const loadedLibraryPath = useRef<string | null>(null);
+  useEffect(() => {
+    if (!solidworks?.materialLibrary) return;
+    let cancelled = false;
+    const version = ++materialLoadVersion.current;
+    void window.pywebview?.api?.solidworks_materials(solidworks.materialLibrary).then((result) => {
+      if (cancelled || version !== materialLoadVersion.current) return;
+      if (result.ok && result.materials?.length) { loadedLibraryPath.current = solidworks.materialLibrary; setMaterials(result.materials); }
+      else setCadError(result.error ?? "Не удалось прочитать сохранённую библиотеку материалов SolidWorks.");
+    }).catch(() => { if (!cancelled && version === materialLoadVersion.current) setCadError("Не удалось прочитать сохранённую библиотеку материалов SolidWorks."); });
+    return () => { cancelled = true; };
+  }, []);
+  async function selectTemplate(kind: "part" | "assembly") {
+    setCadBusy(true);
+    try {
+      const result = await window.pywebview?.api?.select_solidworks_template(kind);
+      if (result?.cancelled) return;
+      if (!result?.ok || !result.path) { setCadError(result?.error ?? "Не удалось выбрать шаблон SolidWorks."); return; }
+      setCadDraft((current) => ({ ...current, [kind === "part" ? "partTemplate" : "assemblyTemplate"]: result.path! }));
+      setCadError(null);
+    } catch { setCadError("Не удалось выбрать шаблон SolidWorks."); }
+    finally { setCadBusy(false); }
+  }
+  function changeLibraryPath(value: string) {
+    materialLoadVersion.current += 1;
+    setCadBusy(false);
+    loadedLibraryPath.current = null;
+    setMaterials([]);
+    setCadError(null);
+    setCadDraft((current) => ({ ...current, materialLibrary: value, materialName: "" }));
+  }
+  async function loadTypedLibrary(value: string) {
+    const path = value.trim();
+    if (!path || path === loadedLibraryPath.current) return;
+    const version = ++materialLoadVersion.current;
+    setCadBusy(true);
+    try {
+      const result = await window.pywebview?.api?.solidworks_materials(path);
+      if (version !== materialLoadVersion.current) return;
+      if (!result?.ok || !result.materials?.length) {
+        setCadError(result?.error ?? "Не удалось прочитать библиотеку материалов SolidWorks."); return;
+      }
+      const names = result.materials;
+      loadedLibraryPath.current = path;
+      setMaterials(names);
+      setCadDraft((current) => ({ ...current, materialLibrary: path,
+        materialName: names.includes(current.materialName) ? current.materialName : names[0] }));
+      setCadError(null);
+    } catch {
+      if (version === materialLoadVersion.current) setCadError("Не удалось прочитать библиотеку материалов SolidWorks.");
+    } finally {
+      if (version === materialLoadVersion.current) setCadBusy(false);
+    }
+  }
+  async function selectLibrary() {
+    setCadBusy(true);
+    try {
+      const result = await window.pywebview?.api?.select_solidworks_material_library();
+      if (result?.cancelled) { await loadTypedLibrary(cadDraft.materialLibrary); return; }
+      if (!result?.ok || !result.materialLibrary || !result.materials?.length) {
+        setCadError(result?.error ?? "Не удалось прочитать библиотеку материалов SolidWorks."); return;
+      }
+      materialLoadVersion.current += 1;
+      const names = result.materials;
+      loadedLibraryPath.current = result.materialLibrary;
+      setMaterials(names);
+      setCadDraft((current) => ({ ...current, materialLibrary: result.materialLibrary!,
+        materialName: names.includes(current.materialName) ? current.materialName : names[0] }));
+      setCadError(null);
+    } catch { setCadError("Не удалось прочитать библиотеку материалов SolidWorks."); }
+    finally { setCadBusy(false); }
+  }
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [contactMessage, setContactMessage] = useState<{ text: string; ok: boolean } | null>(null);
@@ -34,12 +116,16 @@ export function SettingsDialog({ version, settings, onSave, onClose }: {
     if (!Number.isInteger(draft.autosaveMinutes) || draft.autosaveMinutes < 1 || draft.autosaveMinutes > 1440) {
       setError("Период автосохранения должен быть от 1 до 1440 минут."); return;
     }
+    const cadChanged = JSON.stringify(cadDraft) !== initialCad.current;
+    if (cadChanged && Object.values(cadDraft).some((value) => !value.trim())) {
+      setActive("cad"); setCadError("Для сохранения настроек SolidWorks выберите оба шаблона, библиотеку и материал."); return;
+    }
     setSaving(true);
-    try { if (await onSave(draft)) onClose(); else setError("Не удалось сохранить настройки программы."); }
+    try { if (await onSave(draft, cadChanged ? cadDraft : null)) onClose(); else setError("Не удалось сохранить настройки программы."); }
     catch { setError("Не удалось сохранить настройки программы."); }
     finally { setSaving(false); }
   };
-  const [active, setActive] = useState<Section>("general");
+  const [active, setActive] = useState<Section>(initialSection);
   const dialog = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -106,8 +192,27 @@ export function SettingsDialog({ version, settings, onSave, onClose }: {
                 <p>Поиск файлов шаблонов установленных CAD-систем.</p>
                 <button type="button" className="secondary" disabled>Найти шаблоны</button>
               </section>
-              <section className="settings-group"><h4>SolidWorks</h4>
-                <p>Настройки экспорта будут перенесены в этот раздел.</p>
+              <section className="settings-group settings-cad-group"><h4>SolidWorks</h4>
+                <p>Выберите шаблоны детали и сборки, библиотеку материалов и материал для экспорта.</p>
+                {initialSection === "cad" && !solidworks ? <p>Для экспорта в SolidWorks сначала заполните и сохраните эти настройки.</p> : null}
+                <label className="file-field">Шаблон детали (.prtdot)
+                  <div className="file-field-control"><input value={cadDraft.partTemplate} placeholder="Не выбран" onChange={(event) => setCadDraft((current) => ({ ...current, partTemplate: event.target.value }))} /><button type="button" className="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("part")}>Обзор…</button></div>
+                </label>
+                <label className="file-field">Шаблон сборки (.asmdot)
+                  <div className="file-field-control"><input value={cadDraft.assemblyTemplate} placeholder="Не выбран" onChange={(event) => setCadDraft((current) => ({ ...current, assemblyTemplate: event.target.value }))} /><button type="button" className="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("assembly")}>Обзор…</button></div>
+                </label>
+                <label className="file-field">Библиотека материалов (.sldmat)
+                  <div className="file-field-control"><input value={cadDraft.materialLibrary} placeholder="Не выбрана" onChange={(event) => changeLibraryPath(event.target.value)} onBlur={(event) => { if (!(event.relatedTarget instanceof HTMLElement && event.relatedTarget.dataset.libraryBrowse)) void loadTypedLibrary(event.target.value); }} /><button type="button" className="secondary" disabled={cadBusy || saving} data-library-browse="true" onClick={() => void selectLibrary()}>Обзор…</button></div>
+                </label>
+                <p className="modal-hint">Стандартный путь: <code>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\russian\sldmaterials\solidworks materials.sldmat</code></p>
+                <label className="material-field">Материал SolidWorks
+                  <select value={cadDraft.materialName} disabled={materials.length === 0 || cadBusy || saving} onChange={(event) => setCadDraft({ ...cadDraft, materialName: event.target.value })}>
+                    {cadDraft.materialName && !materials.includes(cadDraft.materialName) ? <option value={cadDraft.materialName}>{cadDraft.materialName}</option> : null}
+                    {!cadDraft.materialName ? <option value="">Сначала выберите библиотеку</option> : null}
+                    {materials.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                </label>
+                {cadError ? <p className="error" role="alert">{cadError}</p> : null}
               </section>
             </>}
             {active === "about" && <>
@@ -132,7 +237,7 @@ export function SettingsDialog({ version, settings, onSave, onClose }: {
         <footer className="modal-actions settings-footer">
           {error ? <p className="error settings-save-error" role="alert">{error}</p> : null}
           <button type="button" className="secondary" onClick={onClose} disabled={saving}>Отмена</button>
-          <button type="button" onClick={() => void save()} disabled={saving}>Сохранить</button>
+          <button type="button" onClick={() => void save()} disabled={saving || cadBusy}>Сохранить</button>
         </footer>
       </section>
     </div>

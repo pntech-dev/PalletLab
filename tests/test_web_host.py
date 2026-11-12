@@ -192,3 +192,28 @@ def test_copy_contact_uses_unicode_clipboard_and_reports_failure(monkeypatch) ->
     clipboard.SetClipboardText = fail
     assert not api.copy_text("test@example.com")["ok"]
     assert calls[-1] == "close"
+
+
+def test_combined_settings_save_is_atomic_and_preserves_drawing_templates(tmp_path) -> None:
+    store = _WebSettings(tmp_path / "settings.json")
+    assert store.save_drawing_template("kompas", "drawing.cdt")
+    settings = store.application_settings()
+    solidworks = {"partTemplate": "part.prtdot", "assemblyTemplate": "assembly.asmdot",
+                  "materialLibrary": "materials.sldmat", "materialName": "Pine"}
+    assert store.save_program_settings(settings, solidworks)
+    new_settings = {**settings, "rounding": "5"}
+    assert not store.save_program_settings(new_settings, {**solidworks, "materialName": ""})
+    assert store.application_settings() == settings
+    assert store.solidworks_options() == solidworks
+    assert store.save_program_settings(new_settings, None)
+    reloaded = _WebSettings(tmp_path / "settings.json")
+    assert reloaded.application_settings() == new_settings
+    assert reloaded.solidworks_options() == solidworks
+    assert reloaded.drawing_templates() == {"kompas": "drawing.cdt"}
+
+
+def test_solidworks_materials_load_saved_library(monkeypatch) -> None:
+    monkeypatch.setattr("palletlab.desktop.web_host.available_materials", lambda path: ("Pine", "Oak"))
+    api = WebApplicationApi()
+    assert api.solidworks_materials("materials.sldmat") == {"ok": True, "materials": ["Pine", "Oak"]}
+    assert not api.solidworks_materials("")["ok"]

@@ -197,7 +197,7 @@ type UpdateStatus = {
 };
 type SolidWorksTemplateResponse = CommandResponse & { path?: string };
 type SolidWorksMaterialsResponse = CommandResponse & { materialLibrary?: string; materials?: string[] };
-type SolidWorksOptions = {
+export type SolidWorksOptions = {
   partTemplate: string;
   assemblyTemplate: string;
   materialLibrary: string;
@@ -271,6 +271,8 @@ declare global {
         save_recovery_project: (project: Project) => Promise<{ ok: boolean }>;
         clear_recovery_project: () => Promise<{ ok: boolean }>;
         save_application_settings: (settings: AppSettings) => Promise<{ ok: boolean }>;
+        save_program_settings: (settings: AppSettings, solidworks: SolidWorksOptions | null) => Promise<CommandResponse>;
+        solidworks_materials: (library: string) => Promise<SolidWorksMaterialsResponse>;
         calculate: (project: object) => Promise<CalculationResponse>;
         duplicate_layer: (project: object, layerId: string) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;
@@ -336,6 +338,7 @@ declare global {
 export function App() {
   const [status, setStatus] = useState<ApplicationStatus | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<"general" | "cad">("general");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const projectBaseline = useRef<string | null>(null);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
@@ -373,13 +376,9 @@ export function App() {
   const [selectedStepFace, setSelectedStepFace] = useState<number | null>(null);
   const [stepPalletBuilt, setStepPalletBuilt] = useState(false);
   const [solidWorksOptions, setSolidWorksOptions] = useState<SolidWorksOptions | null>(storedSolidWorksOptions);
-  const [solidWorksMaterials, setSolidWorksMaterials] = useState<string[]>([]);
   const [exporting, setExporting] = useState<"kompas" | "solidworks" | "drawings" | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exportChoiceOpen, setExportChoiceOpen] = useState(false);
-  const [solidWorksSetupOpen, setSolidWorksSetupOpen] = useState(false);
-  const [solidWorksDraft, setSolidWorksDraft] = useState<SolidWorksOptions | null>(null);
-  const [solidWorksSetupError, setSolidWorksSetupError] = useState<string | null>(null);
   const [drawingsSetupOpen, setDrawingsSetupOpen] = useState(false);
   const [drawingCad, setDrawingCad] = useState<DrawingCad>("solidworks");
   const [drawingScope, setDrawingScope] = useState<DrawingScope>("assembly");
@@ -707,11 +706,15 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [status, settings.autosaveEnabled, settings.autosaveMinutes, savedProject]);
 
-  async function saveApplicationSettings(next: AppSettings): Promise<boolean> {
+  async function saveApplicationSettings(next: AppSettings, solidworks: SolidWorksOptions | null): Promise<boolean> {
     const api = window.pywebview?.api;
     if (!api) return false;
-    const response = await api.save_application_settings(next);
+    const response = await api.save_program_settings(next, solidworks);
     if (!response.ok) return false;
+    if (solidworks) {
+      setSolidWorksOptions(solidworks);
+      try { window.localStorage.setItem(SOLIDWORKS_OPTIONS_KEY, JSON.stringify(solidworks)); } catch { /* Optional cache. */ }
+    }
     setSettings(next);
     const current = currentProject.current;
     const updated = current ? applyDefaultsIfUnmodified(current, projectBaseline.current, settings, next) : null;
@@ -763,68 +766,6 @@ export function App() {
     }
   }
 
-  async function rememberSolidWorksOptions(options: SolidWorksOptions): Promise<boolean> {
-    setSolidWorksOptions(options);
-    try {
-      window.localStorage.setItem(SOLIDWORKS_OPTIONS_KEY, JSON.stringify(options));
-    } catch {
-      // Export configuration is optional when embedded storage is unavailable.
-    }
-    const response = await window.pywebview?.api?.save_solidworks_export_settings(options);
-    if (!response?.ok) {
-      setSolidWorksSetupError(response?.error ?? "Не удалось сохранить настройки экспорта SolidWorks.");
-      return false;
-    }
-    return true;
-  }
-
-  async function selectSolidWorksTemplate(kind: "part" | "assembly") {
-    const response = await window.pywebview?.api?.select_solidworks_template(kind);
-    if (!response || response.cancelled) return;
-    if (!response.ok || !response.path) {
-      setSolidWorksSetupError(response?.error ?? "Не удалось выбрать шаблоны SolidWorks.");
-      return;
-    }
-    const previous = solidWorksDraft ?? solidWorksOptions ?? storedSolidWorksOptions();
-    setSolidWorksDraft({
-      partTemplate: kind === "part" ? response.path : previous?.partTemplate ?? "",
-      assemblyTemplate: kind === "assembly" ? response.path : previous?.assemblyTemplate ?? "",
-      materialLibrary: previous?.materialLibrary ?? "",
-      materialName: previous?.materialName ?? "",
-    });
-  }
-
-  async function selectSolidWorksMaterialLibrary() {
-    const response = await window.pywebview?.api?.select_solidworks_material_library();
-    if (!response || response.cancelled) return;
-    if (!response.ok || !response.materialLibrary || !response.materials?.length) {
-      setSolidWorksSetupError(response?.error ?? "Не удалось прочитать библиотеку материалов SolidWorks.");
-      return;
-    }
-    const previous = solidWorksDraft ?? solidWorksOptions ?? storedSolidWorksOptions();
-    const materialName = response.materials.includes(previous?.materialName ?? "")
-      ? previous!.materialName
-      : response.materials[0];
-    setSolidWorksMaterials(response.materials);
-    setSolidWorksDraft({
-      partTemplate: previous?.partTemplate ?? "",
-      assemblyTemplate: previous?.assemblyTemplate ?? "",
-      materialLibrary: response.materialLibrary,
-      materialName,
-    });
-  }
-
-  function openSolidWorksSetup() {
-    setSolidWorksSetupError(null);
-    setSolidWorksDraft(solidWorksOptions ?? storedSolidWorksOptions() ?? {
-      partTemplate: "",
-      assemblyTemplate: "",
-      materialLibrary: "",
-      materialName: "",
-    });
-    setSolidWorksSetupOpen(true);
-  }
-
   async function exportKompas() {
     const api = window.pywebview?.api;
     if (!api || !project) return;
@@ -869,19 +810,11 @@ export function App() {
 
   function beginSolidWorksExport() {
     if (!solidWorksOptions || Object.values(solidWorksOptions).some((value) => !value)) {
-      openSolidWorksSetup();
+      setSettingsInitialSection("cad");
+      setSettingsOpen(true);
       return;
     }
     void exportSolidWorks(solidWorksOptions);
-  }
-
-  function saveSolidWorksSetup() {
-    if (!solidWorksDraft || Object.values(solidWorksDraft).some((value) => !value)) return;
-    void (async () => {
-      if (!await rememberSolidWorksOptions(solidWorksDraft)) return;
-      setSolidWorksSetupError(null);
-      setSolidWorksSetupOpen(false);
-    })();
   }
 
   async function selectDrawingTemplate() {
@@ -1838,12 +1771,9 @@ export function App() {
         {updateDismissed && ["available", "ready", "failed"].includes(update.state) ? (
           <button type="button" className="secondary" onClick={() => setUpdateDismissed(false)}>Доступно обновление</button>
         ) : null}
-        <button type="button" className="secondary export-settings" onClick={openSolidWorksSetup} disabled={!project || exporting !== null}>
-          Настройки экспорта
-        </button>
-        <button type="button" className="secondary" onClick={() => setSettingsOpen(true)} disabled={!status}>Настройки</button>
+        <button type="button" className="secondary app-settings-button" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}>Настройки</button>
       </header>
-      {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
+      {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} solidworks={solidWorksOptions} initialSection={settingsInitialSection} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
       <div className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}`}>
         <aside className="editor-panel" aria-label="Редактор поддона">
           <div className="editor-heading">
@@ -1886,42 +1816,6 @@ export function App() {
                 <button type="button" onClick={() => { setExportChoiceOpen(false); beginSolidWorksExport(); }}>SolidWorks</button>
               </div>
               <footer className="modal-actions"><button type="button" className="secondary" onClick={() => setExportChoiceOpen(false)}>Отмена</button></footer>
-            </section>
-          </div>
-        ) : null}
-        {solidWorksSetupOpen && solidWorksDraft ? (
-          <div className="modal-backdrop" role="presentation">
-            <section className="modal" role="dialog" aria-modal="true" aria-labelledby="solidworks-settings-title">
-              <h2 id="solidworks-settings-title">Настройка экспорта SolidWorks</h2>
-              <p>Выберите шаблоны и библиотеку материалов. Настройка сохранится для следующих запусков.</p>
-              <label className="file-field">
-                Шаблон детали (.prtdot)
-                <div className="file-field-control"><input value={solidWorksDraft.partTemplate} readOnly /><button type="button" onClick={() => void selectSolidWorksTemplate("part")}>Обзор…</button></div>
-              </label>
-              <label className="file-field">
-                Шаблон сборки (.asmdot)
-                <div className="file-field-control"><input value={solidWorksDraft.assemblyTemplate} readOnly /><button type="button" onClick={() => void selectSolidWorksTemplate("assembly")}>Обзор…</button></div>
-              </label>
-              <label className="file-field">
-                Библиотека материалов (.sldmat)
-                <div className="file-field-control"><input value={solidWorksDraft.materialLibrary} readOnly /><button type="button" onClick={() => void selectSolidWorksMaterialLibrary()}>Обзор…</button></div>
-              </label>
-              <p className="modal-hint">Стандартный путь: <code>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\russian\sldmaterials\solidworks materials.sldmat</code></p>
-              <label className="material-field">
-                Материал SolidWorks
-                <select
-                  value={solidWorksDraft.materialName}
-                  disabled={solidWorksMaterials.length === 0}
-                  onChange={(event) => setSolidWorksDraft({ ...solidWorksDraft, materialName: event.target.value })}
-                >
-                  {solidWorksMaterials.length ? solidWorksMaterials.map((name) => <option key={name} value={name}>{name}</option>) : <option>{solidWorksDraft.materialName || "Сначала выберите библиотеку"}</option>}
-                </select>
-              </label>
-              {solidWorksSetupError ? <p className="error">{solidWorksSetupError}</p> : null}
-              <footer className="modal-actions">
-                <button type="button" onClick={saveSolidWorksSetup} disabled={Object.values(solidWorksDraft).some((value) => !value)}>Сохранить</button>
-                <button type="button" className="secondary" onClick={() => { setSolidWorksSetupError(null); setSolidWorksSetupOpen(false); }}>Отмена</button>
-              </footer>
             </section>
           </div>
         ) : null}

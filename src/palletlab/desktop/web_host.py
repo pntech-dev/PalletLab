@@ -147,6 +147,11 @@ class WebApplicationApi:
             "ok": False, "error": "Не удалось сохранить настройки программы."
         }
 
+    def save_program_settings(self, settings: object, solidworks: object) -> dict[str, object]:
+        return {"ok": True} if self._settings.save_program_settings(settings, solidworks) else {
+            "ok": False, "error": "Не удалось сохранить настройки программы."
+        }
+
     def default_project(self) -> dict[str, Any]:
         """Provide the temporary frontend with a valid starting project."""
         return ApplicationService().default_project()
@@ -192,6 +197,14 @@ class WebApplicationApi:
         except SolidWorksMaterialLibraryError as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "materialLibrary": library, "materials": list(names)}
+
+    def solidworks_materials(self, library: object) -> dict[str, Any]:
+        if not isinstance(library, str) or not library:
+            return {"ok": False, "error": "Не указана библиотека материалов."}
+        try:
+            return {"ok": True, "materials": list(available_materials(library))}
+        except SolidWorksMaterialLibraryError as exc:
+            return {"ok": False, "error": str(exc)}
 
     def export_solidworks(self, project: object, options: object) -> dict[str, Any]:
         directory = self._choose_directory("Выберите папку для экспорта SolidWorks")
@@ -337,7 +350,12 @@ class _WebSettings:
         return {key: value[key] for key in self._DEFAULTS} if self._valid_settings(value) else self._DEFAULTS.copy()
 
     def save_application_settings(self, value: object) -> bool:
-        if not isinstance(value, dict) or not self._valid_settings(value):
+        return self.save_program_settings(value, None)
+
+    def save_program_settings(self, value: object, solidworks: object) -> bool:
+        if (not isinstance(value, dict) or not self._valid_settings(value)
+                or (solidworks is not None and (not isinstance(solidworks, dict)
+                    or any(not isinstance(solidworks.get(key), str) or not solidworks[key].strip() for key in self._KEYS)))):
             return False
         with self._lock:
             try:
@@ -349,6 +367,8 @@ class _WebSettings:
                 if not isinstance(payload, dict):
                     payload = {}
                 payload["application"] = {key: value[key] for key in self._DEFAULTS}
+                if isinstance(solidworks, dict):
+                    payload["solidworks"] = {key: solidworks[key] for key in self._KEYS}
                 self._write(payload)
             except OSError:
                 return False
