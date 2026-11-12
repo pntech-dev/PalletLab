@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import stat
 import subprocess
@@ -58,18 +59,28 @@ class UpdateManager:
         self._status: dict[str, object] = {"state": "idle"}
         self._release: Release | None = None
         self._package: Path | None = None
+        self._last_check_at: str | None = None
+        self._manual_only = False
 
     def status(self) -> dict[str, object]:
         with self._lock:
             return dict(self._status)
 
-    def check(self) -> dict[str, object]:
+    @property
+    def last_check_at(self) -> str | None:
         with self._lock:
-            if not installed_application():
+            return self._last_check_at
+
+    def check(self, *, manual: bool = False) -> dict[str, object]:
+        with self._lock:
+            installed = installed_application()
+            if not installed and not manual:
                 self._status = {"state": "unavailable"}
                 return dict(self._status)
             if self._status["state"] in {"checking", "downloading", "ready", "installing"}:
                 return dict(self._status)
+            self._manual_only = not installed
+            self._last_check_at = datetime.now(timezone.utc).isoformat()
             self._status = {"state": "checking"}
         Thread(target=self._check, daemon=True).start()
         return self.status()
@@ -80,6 +91,8 @@ class UpdateManager:
             with self._lock:
                 self._release = release
                 self._status = {"state": "available", "version": release.version} if release else {"state": "current"}
+                if release and self._manual_only:
+                    self._status["manualOnly"] = True
         except Exception:
             with self._lock:
                 self._status = {"state": "check_failed"}

@@ -188,9 +188,11 @@ type StepPalletResponse = CalculationResponse & {
   referenceFace?: number;
 };
 type CommandResponse = { ok: boolean; cancelled?: boolean; error?: string; output?: string };
-type UpdateStatus = {
+export type UpdateStatus = {
   state: "idle" | "unavailable" | "checking" | "current" | "check_failed" | "available" | "downloading" | "ready" | "installing" | "failed";
   version?: string;
+  lastCheckedAt?: string | null;
+  manualOnly?: boolean;
   received?: number;
   total?: number;
   error?: string;
@@ -276,7 +278,7 @@ declare global {
         calculate: (project: object) => Promise<CalculationResponse>;
         duplicate_layer: (project: object, layerId: string) => Promise<CalculationResponse>;
         materials: () => Promise<Material[]>;
-        check_update: () => Promise<UpdateStatus>;
+        check_update: (manual?: boolean) => Promise<UpdateStatus>;
         update_status: () => Promise<UpdateStatus>;
         download_update: () => Promise<UpdateStatus>;
         install_update: () => Promise<UpdateStatus>;
@@ -355,6 +357,7 @@ export function App() {
   const [saving, setSaving] = useState(false);
   const [update, setUpdate] = useState<UpdateStatus>({ state: "idle" });
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [lastUpdateCheck, setLastUpdateCheck] = useState<string | null>(null);
   const [distanceText, setDistanceText] = useState<Record<string, string>>({});
   const [marginDrafts, setMarginDrafts] = useState<Partial<Record<MarginIndex, string>>>({});
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
@@ -601,9 +604,11 @@ export function App() {
       connectionStarted.current = true;
       try {
         reportStartupStage("мост Python подключён");
-        const [nextStatus, defaultProject, loadedSettings] = await Promise.all([
-          api.status(), api.default_project(), api.application_settings(),
+        const [nextStatus, defaultProject, loadedSettings, updateState] = await Promise.all([
+          api.status(), api.default_project(), api.application_settings(), api.update_status(),
         ]);
+        setUpdate(updateState);
+        setLastUpdateCheck(updateState.lastCheckedAt ?? null);
         setSettings(loadedSettings);
         const defaultWithSettings = projectWithDefaults(defaultProject as Project, loadedSettings);
         const recovered = loadedSettings.autosaveEnabled ? ((await api.recovery_project()) ?? recoveredProject()) : null;
@@ -679,10 +684,23 @@ export function App() {
     return () => window.clearTimeout(timeout);
   }, [project, status]);
 
+  async function checkForUpdates(manual: boolean) {
+    const api = window.pywebview?.api;
+    if (!api) return;
+    try {
+      const result = await api.check_update(manual);
+      setUpdate(result);
+      if (result.lastCheckedAt) setLastUpdateCheck(result.lastCheckedAt);
+      if (manual) setUpdateDismissed(false);
+    } catch {
+      setUpdate({ state: "check_failed" });
+    }
+  }
+
   useEffect(() => {
     if (!status || !settings.checkUpdates) return undefined;
     const timeout = window.setTimeout(() => {
-      void window.pywebview?.api?.check_update().then(setUpdate).catch(() => undefined);
+      void checkForUpdates(false);
     }, 1500);
     return () => window.clearTimeout(timeout);
   }, [status]);
@@ -690,7 +708,7 @@ export function App() {
   useEffect(() => {
     if (update.state !== "checking" && update.state !== "downloading") return undefined;
     const timer = window.setInterval(() => {
-      void window.pywebview?.api?.update_status().then(setUpdate).catch(() => undefined);
+      void window.pywebview?.api?.update_status().then((result) => { setUpdate(result); if (result.lastCheckedAt) setLastUpdateCheck(result.lastCheckedAt); }).catch(() => undefined);
     }, 500);
     return () => window.clearInterval(timer);
   }, [update.state]);
@@ -1773,7 +1791,7 @@ export function App() {
         ) : null}
         <button type="button" className="secondary app-settings-button" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}>Настройки</button>
       </header>
-      {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} solidworks={solidWorksOptions} initialSection={settingsInitialSection} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
+      {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} solidworks={solidWorksOptions} initialSection={settingsInitialSection} update={update} lastUpdateCheck={lastUpdateCheck} onCheckUpdates={() => checkForUpdates(true)} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
       <div className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}`}>
         <aside className="editor-panel" aria-label="Редактор поддона">
           <div className="editor-heading">
@@ -1782,11 +1800,11 @@ export function App() {
               {status ? `${status.application} ${status.version}` : "Подключение…"}
             </p>
           </div>
-        {!updateDismissed && ["available", "downloading", "ready", "failed", "installing"].includes(update.state) ? (
+        {!settingsOpen && !updateDismissed && ["available", "downloading", "ready", "failed", "installing"].includes(update.state) ? (
           <div className="modal-backdrop">
             <section className="modal progress-modal" role="dialog" aria-modal="true" aria-labelledby="update-title" aria-live="polite">
               <h2 id="update-title">Обновление PalletLab</h2>
-              {update.state === "available" ? <p>Доступна версия {update.version}.</p> : null}
+              {update.state === "available" ? <p>Доступна версия {update.version}.{update.manualOnly ? " Для этой версии приложения скачайте обновление вручную со страницы релизов." : ""}</p> : null}
               {update.state === "downloading" ? <>
                 <p>Скачивание и проверка обновления…</p>
                 {update.total ? <progress max={update.total} value={update.received ?? 0} /> : <progress />}
@@ -1799,7 +1817,7 @@ export function App() {
               {update.error ? <p className="error">{update.error}</p> : null}
               <footer className="modal-actions">
                 {update.state !== "downloading" && update.state !== "installing" ? <button type="button" className="secondary" onClick={() => setUpdateDismissed(true)}>Позже</button> : null}
-                {update.state === "available" || update.state === "failed" ? <button type="button" onClick={() => void window.pywebview?.api?.download_update().then(setUpdate)}>Скачать</button> : null}
+                {(update.state === "available" && !update.manualOnly) || update.state === "failed" ? <button type="button" onClick={() => void window.pywebview?.api?.download_update().then(setUpdate)}>Скачать</button> : null}
                 {update.state === "ready" && project && JSON.stringify(project) !== savedProject ? <button type="button" disabled={saving} onClick={() => void saveProject()}>Сохранить проект</button> : null}
                 {update.state === "ready" ? <button type="button" disabled={saving} onClick={() => void window.pywebview?.api?.install_update().then(setUpdate)}>{project && JSON.stringify(project) !== savedProject ? "Установить без сохранения" : "Установить"}</button> : null}
               </footer>

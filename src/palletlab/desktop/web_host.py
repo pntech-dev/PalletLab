@@ -88,11 +88,16 @@ class WebApplicationApi:
             return {"ok": False, "error": "Не удалось открыть приложение для этого адреса."}
         return {"ok": True}
 
-    def check_update(self) -> dict[str, object]:
-        return self._updates.check()
+    def check_update(self, manual: bool = False) -> dict[str, object]:
+        previous = self._updates.last_check_at
+        result = self._updates.check(manual=manual is True)
+        current = self._updates.last_check_at
+        if current and current != previous:
+            self._settings.save_last_update_check(current)
+        return {**result, "lastCheckedAt": current or self._settings.last_update_check()}
 
     def update_status(self) -> dict[str, object]:
-        return self._updates.status()
+        return {**self._updates.status(), "lastCheckedAt": self._updates.last_check_at or self._settings.last_update_check()}
 
     def download_update(self) -> dict[str, object]:
         return self._updates.download()
@@ -373,6 +378,31 @@ class _WebSettings:
             except OSError:
                 return False
         return True
+
+    def last_update_check(self) -> str | None:
+        with self._lock:
+            try:
+                payload = json.loads(self._path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+        value = payload.get("lastUpdateCheck") if isinstance(payload, dict) else None
+        return value if isinstance(value, str) else None
+
+    def save_last_update_check(self, timestamp: str) -> bool:
+        with self._lock:
+            try:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    payload = json.loads(self._path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                payload["lastUpdateCheck"] = timestamp
+                self._write(payload)
+                return True
+            except OSError:
+                return False
 
     def recovery_project(self) -> dict[str, object] | None:
         with self._lock:

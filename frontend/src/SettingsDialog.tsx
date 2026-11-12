@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "./appSettings";
-import type { SolidWorksOptions } from "./App";
+import type { SolidWorksOptions, UpdateStatus } from "./App";
 
 type Section = "general" | "view" | "cad" | "about";
 
@@ -11,11 +11,21 @@ const SECTIONS: { id: Section; title: string; description: string }[] = [
   { id: "about", title: "О программе", description: "Версия PalletLab, связь с разработчиком и обновления." },
 ];
 
-export function SettingsDialog({ version, settings, solidworks, initialSection = "general", onSave, onClose }: {
+export function SettingsDialog({ version, settings, solidworks, initialSection = "general", update, lastUpdateCheck, onCheckUpdates, onSave, onClose }: {
   version?: string; settings: AppSettings; solidworks: SolidWorksOptions | null; initialSection?: Section;
+  update: UpdateStatus; lastUpdateCheck: string | null; onCheckUpdates: () => Promise<void>;
   onSave: (settings: AppSettings, solidworks: SolidWorksOptions | null) => Promise<boolean>; onClose: () => void;
 }) {
   const [draft, setDraft] = useState(settings);
+  const [checking, setChecking] = useState(false);
+  const parsedCheck = lastUpdateCheck ? new Date(lastUpdateCheck) : null;
+  const checkLabel = parsedCheck && !Number.isNaN(parsedCheck.getTime())
+    ? `Последняя проверка ${parsedCheck.toLocaleDateString("ru-RU")} в ${parsedCheck.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`
+    : "Проверка ещё не выполнялась";
+  async function checkUpdates() {
+    setChecking(true);
+    try { await onCheckUpdates(); } finally { setChecking(false); }
+  }
   const [cadDraft, setCadDraft] = useState<SolidWorksOptions>(solidworks ?? {
     partTemplate: "", assemblyTemplate: "", materialLibrary: "", materialName: "",
   });
@@ -228,7 +238,17 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
               </section>
               <section className="settings-group"><h4>Обновление PalletLab</h4>
                 <label className="settings-check"><input type="checkbox" checked={draft.checkUpdates} onChange={(event) => setDraft({ ...draft, checkUpdates: event.target.checked })} /> Проверять обновления при каждом запуске программы</label>
-                <div className="settings-update"><span>Последняя проверка: информация недоступна</span><button type="button" className="secondary" disabled>Проверить обновления</button></div>
+                <div className="settings-update"><span>{checkLabel}</span><button type="button" className="secondary" onClick={() => void checkUpdates()} disabled={checking || ["checking", "downloading", "ready", "installing"].includes(update.state)}>Проверить обновления</button></div>
+                <p role="status">{update.state === "checking" ? "Проверка обновлений…"
+                  : update.state === "current" ? "Установлена последняя версия."
+                  : update.state === "check_failed" ? "Не удалось проверить обновления. Проверьте подключение и повторите попытку."
+                  : update.state === "available" ? `Доступна версия ${update.version}.${update.manualOnly ? " Для portable-версии скачайте её вручную." : ""}`
+                  : update.state === "unavailable" ? "Автоматические обновления доступны для установленной версии."
+                  : update.state === "ready" ? "Обновление готово к установке."
+                  : update.state === "downloading" ? "Обновление скачивается…"
+                  : update.state === "failed" ? "Не удалось скачать обновление."
+                  : null}</p>
+                {["available", "downloading", "ready", "failed"].includes(update.state) ? <p>Закройте настройки, чтобы перейти к обновлению.</p> : null}
               </section>
             </>}
             <p className="settings-default-hint">Все изменённые параметры «по умолчанию» будут применяться к новым проектам.</p>

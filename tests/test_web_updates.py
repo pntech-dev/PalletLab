@@ -96,3 +96,75 @@ def test_web_bridge_closes_window_only_after_successful_handoff():
     api._updates = SimpleNamespace(install=lambda: {"state": "installing"})
     api.install_update()
     assert closed == [True]
+
+
+def test_manual_check_works_for_portable_but_cannot_install(monkeypatch):
+    release = Release("9.9.9", "https://example.test/update", "https://example.test/hash", "")
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon):
+            self.target, self.args = target, args
+        def start(self):
+            self.target(*self.args)
+    monkeypatch.setattr(update_manager, "installed_application", lambda: False)
+    monkeypatch.setattr(update_manager, "Thread", ImmediateThread)
+    monkeypatch.setattr(update_manager, "fetch_newer_release", lambda _version: release)
+    manager = update_manager.UpdateManager()
+    assert manager.check() == {"state": "unavailable"}
+    assert manager.last_check_at is None
+    assert manager.check(manual=True) == {"state": "available", "version": "9.9.9", "manualOnly": True}
+    assert manager.last_check_at is not None
+    assert manager.download()["state"] == "failed"
+
+
+def test_check_time_changes_only_when_a_check_starts(monkeypatch):
+    class DelayedThread:
+        def __init__(self, *, target, args=(), daemon):
+            pass
+        def start(self):
+            pass
+    monkeypatch.setattr(update_manager, "installed_application", lambda: True)
+    monkeypatch.setattr(update_manager, "Thread", DelayedThread)
+    manager = update_manager.UpdateManager()
+    assert manager.check()["state"] == "checking"
+    timestamp = manager.last_check_at
+    assert timestamp is not None
+    assert manager.check(manual=True)["state"] == "checking"
+    assert manager.last_check_at == timestamp
+
+
+def test_web_bridge_persists_actual_last_check_and_preserves_settings(tmp_path, monkeypatch):
+    from palletlab.desktop.web_host import WebApplicationApi, _WebSettings
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon):
+            self.target, self.args = target, args
+        def start(self):
+            self.target(*self.args)
+    monkeypatch.setattr(update_manager, "installed_application", lambda: True)
+    monkeypatch.setattr(update_manager, "Thread", ImmediateThread)
+    monkeypatch.setattr(update_manager, "fetch_newer_release", lambda _version: None)
+    api = WebApplicationApi()
+    api._settings = _WebSettings(tmp_path / "settings.json")
+    assert api._settings.save_drawing_template("kompas", "drawing.cdt")
+    response = api.check_update()
+    assert response["state"] == "current"
+    assert response["lastCheckedAt"]
+    assert api.update_status()["lastCheckedAt"] == response["lastCheckedAt"]
+    api._updates = update_manager.UpdateManager()
+    assert api.update_status()["lastCheckedAt"] == response["lastCheckedAt"]
+    assert api._settings.drawing_templates() == {"kompas": "drawing.cdt"}
+
+
+def test_failed_check_records_attempt(monkeypatch):
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon):
+            self.target, self.args = target, args
+        def start(self):
+            self.target(*self.args)
+    monkeypatch.setattr(update_manager, "installed_application", lambda: True)
+    monkeypatch.setattr(update_manager, "Thread", ImmediateThread)
+    def fail(_version):
+        raise OSError("offline")
+    monkeypatch.setattr(update_manager, "fetch_newer_release", fail)
+    manager = update_manager.UpdateManager()
+    assert manager.check()["state"] == "check_failed"
+    assert manager.last_check_at is not None
