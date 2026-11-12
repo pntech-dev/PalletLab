@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+
+from palletlab.core.models import Beam3D
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,6 @@ def wood_palette(material_id: str) -> dict[str, str]:
     return WOOD_PALETTES.get(material_id, WOOD_PALETTES[DEFAULT_MATERIAL_ID]).copy()
 
 
-def pallet_mass_kg(beams, material_id: str) -> float:
+def pallet_mass_kg(beams: Iterable[Beam3D], material_id: str) -> float:
     volume_m3 = sum(beam.size_x * beam.size_y * beam.size_z for beam in beams) / 1_000_000_000
     return volume_m3 * get_material(material_id).density_kg_m3

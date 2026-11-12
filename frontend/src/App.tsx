@@ -54,6 +54,7 @@ type CalculationResponse = {
     project: Project;
     pallet: {
       size: { length: number; width: number; height: number };
+      massKg: number;
       beams: ViewportBeam[];
       dimensions: ViewportDimension[];
       insertionMarkers: ViewportInsertionMarker[];
@@ -101,6 +102,10 @@ function palletDetails(beams: ViewportBeam[]) {
 }
 
 const formatMillimetres = (value: number) => new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(value);
+const formatKilograms = (value: number) => new Intl.NumberFormat("ru-RU", {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+}).format(value);
 
 const DIRECTION_FIELDS = [
   "beam_height",
@@ -2223,6 +2228,7 @@ export function App() {
                   <div><dt>Длина</dt><dd>{formatMillimetres(calculation.snapshot.pallet.size.length)} <span>мм</span></dd></div>
                   <div><dt>Ширина</dt><dd>{formatMillimetres(calculation.snapshot.pallet.size.width)} <span>мм</span></dd></div>
                   <div><dt>Высота</dt><dd>{formatMillimetres(calculation.snapshot.pallet.size.height)} <span>мм</span></dd></div>
+                  <div><dt>Масса</dt><dd>{formatKilograms(calculation.snapshot.pallet.massKg)} <span>кг</span></dd></div>
                 </dl>
               </section>
               <section className="pallet-summary-card" aria-label="Детали поддона">

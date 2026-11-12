@@ -12,6 +12,7 @@ from typing import Any
 
 from palletlab.controllers.viewport_geometry import InsertionMarker, editable_dimensions, insertion_markers
 from palletlab.core.calculator import calculate_direction, insertion_slots, insertion_slots_for_direction
+from palletlab.core.materials import DEFAULT_MATERIAL_ID, pallet_mass_kg
 from palletlab.core.models import Beam3D, InsertionSlot, LayerInput, ManualBeamInput, PalletResult
 from palletlab.core.persistence import project_to_dict
 from palletlab.core.project_state import ProjectState, beam_layer_ids
@@ -36,7 +37,12 @@ def project_snapshot(state: ProjectState) -> dict[str, Any]:
             "selectedForDeletion": _selection_payload(state.selected_for_deletion),
             "selectedForSection": _selection_payload(state.selected_for_section),
         },
-        "pallet": pallet_snapshot(result, state.manual_beams, state.layers if state.multi_layer_mode else ()) if result else None,
+        "pallet": pallet_snapshot(
+            result,
+            state.manual_beams,
+            state.layers if state.multi_layer_mode else (),
+            material_id=state.material_id,
+        ) if result else None,
     }
 
 
@@ -44,6 +50,7 @@ def pallet_snapshot(
     result: PalletResult,
     manual_beams: Sequence[ManualBeamInput] = (),
     layers: Sequence[LayerInput] = (),
+    material_id: str = DEFAULT_MATERIAL_ID,
 ) -> dict[str, Any]:
     """Return viewport data without coupling the caller to PyVista or Qt."""
     slots = _insertion_slots(result, layers)
@@ -58,6 +65,7 @@ def pallet_snapshot(
             "width": result.pallet_width,
             "height": result.pallet_height,
         },
+        "massKg": pallet_mass_kg(result.beams_3d, material_id),
         "upperLayer": result.upper_layer,
         "layers": [
             {

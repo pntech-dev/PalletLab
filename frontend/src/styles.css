@@ -74,7 +74,7 @@ input:disabled { cursor: default; background: #ecece8; color: #7d8583; }
 .pallet-summary { min-height: 0; overflow: hidden; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 12px; }
 .pallet-summary-card { min-width: 0; padding: 12px 14px; border: 1px solid #42585a; border-radius: 12px; background: #f8f7f3; }
 .pallet-summary-card h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
-.pallet-summary-sizes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.pallet-summary-sizes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
 .pallet-summary-sizes dt, .pallet-detail span { color: #6e7774; font-size: 12px; }
 .pallet-summary-sizes dd { margin: 2px 0 0; color: #273033; font-size: 16px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pallet-summary-sizes dd span { color: #6e7774; font-size: 12px; font-weight: 400; }
