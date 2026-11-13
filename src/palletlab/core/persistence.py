@@ -15,7 +15,10 @@ from .materials import MATERIALS, DEFAULT_MATERIAL_ID
 from .project_state import ProjectState
 
 
-FORMAT_VERSION = 3
+FORMAT_VERSION = 4
+HISTORY_LIMIT = 50
+
+ProjectHistoryData = dict[str, list[dict[str, Any]]]
 
 
 class ProjectPersistenceError(ValueError):
@@ -165,7 +168,7 @@ def project_to_dict(state: ProjectState) -> dict[str, Any]:
 
 def project_from_dict(raw: object) -> ProjectState:
     """Read a stable project configuration, never restoring transient UI state."""
-    if not isinstance(raw, dict) or raw.get("format_version") not in (1, 2, FORMAT_VERSION):
+    if not isinstance(raw, dict) or raw.get("format_version") not in (1, 2, 3, FORMAT_VERSION):
         raise ProjectPersistenceError("Неподдерживаемый формат файла проекта.")
     pallet, view = raw.get("pallet"), raw.get("view")
     if not isinstance(pallet, dict) or not isinstance(view, dict):
@@ -350,10 +353,32 @@ def _layer_ids(view: dict[str, Any], layer_ids: set[str], field: str) -> list[st
     return list(raw)
 
 
-def save_project(path: str | Path, state: ProjectState) -> None:
+def _project_history_from_dict(raw: object) -> ProjectHistoryData:
+    if not isinstance(raw, dict) or set(raw) != {"undo", "redo"}:
+        raise ProjectPersistenceError("История изменений проекта содержит некорректные данные.")
+    undo, redo = raw.get("undo"), raw.get("redo")
+    if (not isinstance(undo, list) or not isinstance(redo, list)
+            or len(undo) + len(redo) > HISTORY_LIMIT):
+        raise ProjectPersistenceError("История изменений проекта содержит недопустимое число снимков.")
+
+    snapshots: dict[str, list[dict[str, Any]]] = {"undo": [], "redo": []}
+    for stack_name, stack in (("undo", undo), ("redo", redo)):
+        for snapshot in stack:
+            if not isinstance(snapshot, dict) or "history" in snapshot:
+                raise ProjectPersistenceError("История изменений проекта содержит некорректный снимок.")
+            try:
+                snapshots[stack_name].append(project_to_dict(project_from_dict(snapshot)))
+            except (ProjectPersistenceError, TypeError, KeyError, IndexError, AttributeError, OverflowError) as exc:
+                raise ProjectPersistenceError("История изменений проекта содержит некорректный снимок.") from exc
+    return snapshots
+
+
+def save_project(path: str | Path, state: ProjectState, history: object | None = None) -> None:
     """Atomically replace a project only after its JSON passes the load validator."""
     destination = Path(path)
     payload = project_to_dict(state)
+    if history is not None:
+        payload["history"] = _project_history_from_dict(history)
     project_from_dict(payload)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None
@@ -411,9 +436,22 @@ def save_project(path: str | Path, state: ProjectState) -> None:
             Path(temporary_name).unlink(missing_ok=True)
 
 
-def load_project(path: str | Path) -> ProjectState:
+def load_project_with_history(
+    path: str | Path,
+) -> tuple[ProjectState, ProjectHistoryData | None, bool]:
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ProjectPersistenceError("Не удалось прочитать файл проекта.") from exc
-    return project_from_dict(raw)
+    state = project_from_dict(raw)
+    if not isinstance(raw, dict) or raw.get("format_version") != FORMAT_VERSION or "history" not in raw:
+        return state, None, False
+    try:
+        history = _project_history_from_dict(raw["history"])
+    except ProjectPersistenceError:
+        return state, None, True
+    return state, history, False
+
+
+def load_project(path: str | Path) -> ProjectState:
+    return load_project_with_history(path)[0]

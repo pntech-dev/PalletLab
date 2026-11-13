@@ -50,12 +50,32 @@ def test_project_json_round_trip_preserves_configuration_not_transient_state(tmp
         LayerInput("width", "width", state.width_input), LayerInput("length", "length", state.length_input)
     ]
     assert restored.layer_sections == {("length", 2): BeamSection(100, 75)}
-    assert json.loads(path.read_text(encoding="utf-8"))["format_version"] == 3
+    assert json.loads(path.read_text(encoding="utf-8"))["format_version"] == 4
 
 
 def test_project_json_rejects_unknown_or_invalid_format():
     with pytest.raises(ProjectPersistenceError):
         project_from_dict({"format_version": 99})
+
+
+def test_version_three_projects_remain_supported():
+    payload = project_to_dict(_state())
+    payload["format_version"] = 3
+
+    assert project_from_dict(payload).material_id == "spruce"
+
+
+def test_project_history_limit_is_fifty_combined_snapshots(tmp_path):
+    state = _state()
+    snapshot = project_to_dict(state)
+    path = tmp_path / "project.json"
+
+    save_project(path, state, {"undo": [snapshot] * 25, "redo": [snapshot] * 25})
+    saved_history = json.loads(path.read_text(encoding="utf-8"))["history"]
+    assert len(saved_history["undo"]) + len(saved_history["redo"]) == 50
+
+    with pytest.raises(ProjectPersistenceError, match="число снимков"):
+        save_project(path, state, {"undo": [snapshot] * 26, "redo": [snapshot] * 25})
 
 
 def test_step_reference_and_placement_round_trip_and_validate(tmp_path):

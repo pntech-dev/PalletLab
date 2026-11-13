@@ -165,11 +165,13 @@ class WebApplicationApi:
     def materials(self) -> list[dict[str, str]]:
         return ApplicationService().materials()
 
-    def save_project(self, project: object, save_as: bool = False) -> dict[str, Any]:
+    def save_project(
+        self, project: object, save_as: bool = False, history: object | None = None
+    ) -> dict[str, Any]:
         path = self._choose_file("save") if save_as or self._project_path is None else self._project_path
         if path is None:
             return {"ok": False, "cancelled": True}
-        response = ApplicationService().save(project, path)
+        response = ApplicationService().save(project, path, history)
         if response.get("ok"):
             self._project_path = path
         return response

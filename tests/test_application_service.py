@@ -1,3 +1,5 @@
+import json
+
 from palletlab.application.service import ApplicationService
 from palletlab.core.models import DirectionInput
 from palletlab.core.persistence import project_to_dict
@@ -283,6 +285,66 @@ def test_save_and_load_preserve_a_valid_project(tmp_path) -> None:
     assert saved == {"ok": True}
     assert loaded["ok"] is True
     assert loaded["project"]["pallet"]["material_id"] == "pine"
+
+
+def test_save_and_load_preserve_undo_redo_history(tmp_path) -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    history = {"undo": [project], "redo": [project]}
+    path = tmp_path / "project.palletlab.json"
+
+    saved = service.save(project, str(path), history)
+    loaded = service.load(str(path))
+
+    assert saved == {"ok": True}
+    assert loaded["ok"] is True
+    assert loaded["history"] == history
+    assert loaded["history_warning"] is False
+
+
+def test_loading_version_three_project_starts_with_empty_history(tmp_path) -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    project["format_version"] = 3
+    path = tmp_path / "legacy-project.json"
+    path.write_text(json.dumps(project), encoding="utf-8")
+
+    loaded = service.load(str(path))
+
+    assert loaded["ok"] is True
+    assert loaded["history"] is None
+    assert loaded["history_warning"] is False
+
+
+def test_corrupt_history_does_not_prevent_opening_project(tmp_path) -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    layer_ids = [layer["id"] for layer in project["pallet"]["layers"]]
+    project["pallet"]["manual_beams"] = [{
+        "id": "test-manual-beam",
+        "first": [layer_ids[0], 0],
+        "second": [layer_ids[1], 0],
+        "distance": 100,
+        "height": 70,
+        "width": 50,
+        "reference": None,
+        "reference_face": None,
+        "first_face": "top",
+        "second_face": "top",
+        "start_point": None,
+    }]
+    corrupted_snapshot = json.loads(json.dumps(project))
+    del corrupted_snapshot["pallet"]["manual_beams"][0]["distance"]
+    project["history"] = {"undo": [corrupted_snapshot], "redo": []}
+    path = tmp_path / "project.palletlab.json"
+    path.write_text(json.dumps(project), encoding="utf-8")
+
+    loaded = service.load(str(path))
+
+    assert loaded["ok"] is True
+    assert loaded["project"]["pallet"] == project["pallet"]
+    assert loaded["history"] is None
+    assert loaded["history_warning"] is True
 
 
 def test_kompas_export_recalculates_the_project_before_calling_the_exporter(tmp_path, monkeypatch) -> None:

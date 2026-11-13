@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -149,6 +150,7 @@ export type Project = {
     locked_layer_ids: string[];
   };
 };
+type ProjectHistory = { undo: Project[]; redo: Project[] };
 type Material = { id: string; name: string };
 type BeamSection = { height: number; width: number };
 const SECTION_PRESETS = [
@@ -298,12 +300,15 @@ declare global {
         save_project: (
           project: object,
           saveAs: boolean,
+          history: ProjectHistory,
         ) => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
         open_project: () => Promise<{
           ok: boolean;
           cancelled?: boolean;
           error?: string;
           project?: Project;
+          history?: ProjectHistory | null;
+          history_warning?: boolean;
         }>;
         choose_export_directory: () => Promise<CommandResponse & { path?: string }>;
         export_kompas: (
@@ -356,6 +361,7 @@ export function App() {
   const duplicatingLayer = useRef(false);
   const [duplicateBusy, setDuplicateBusy] = useState(false);
   const [savedProject, setSavedProject] = useState<string | null>(null);
+  const [savedHistory, setSavedHistory] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [update, setUpdate] = useState<UpdateStatus>({ state: "idle" });
   const [updateDismissed, setUpdateDismissed] = useState(false);
@@ -426,10 +432,18 @@ export function App() {
   const manualBeamInFlight = useRef(false);
   const [viewportToolError, setViewportToolError] = useState<string | null>(null);
   const [viewportToolErrorVersion, setViewportToolErrorVersion] = useState(0);
-  const [, setHistoryVersion] = useState(0);
+  const [historyVersion, setHistoryVersion] = useState(0);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const [historyReadErrorOpen, setHistoryReadErrorOpen] = useState(false);
   const undoStack = useRef<Project[]>([]);
   const redoStack = useRef<Project[]>([]);
+  const currentHistory = useMemo(
+    () => JSON.stringify({ undo: undoStack.current, redo: redoStack.current }),
+    [historyVersion],
+  );
+  const hasUnsavedChanges = project !== null && (
+    JSON.stringify(project) !== savedProject || currentHistory !== savedHistory
+  );
   const formEditStart = useRef<Project | null>(null);
   const viewportToolErrorTimeout = useRef<number | null>(null);
   const lastNotifiedCalculationError = useRef<string | null>(null);
@@ -746,10 +760,15 @@ export function App() {
   async function saveProject(saveAs = false) {
     if (!project || saving) return;
     const savedVersion = JSON.stringify(project);
+    const history = {
+      undo: undoStack.current.map(copyProject),
+      redo: redoStack.current.map(copyProject),
+    };
+    const savedHistoryVersion = JSON.stringify(history);
     setSaving(true);
     let response: { ok: boolean; cancelled?: boolean; error?: string };
     try {
-      response = await window.pywebview!.api!.save_project(project, saveAs);
+      response = await window.pywebview!.api!.save_project(project, saveAs, history);
     } catch {
       setCalculationError("Не удалось сохранить проект.");
       return;
@@ -758,6 +777,7 @@ export function App() {
     }
     if (response.ok) {
       setSavedProject(savedVersion);
+      setSavedHistory(savedHistoryVersion);
       void window.pywebview?.api?.clear_recovery_project();
       setRecoveryNotice(null);
     } else if (!response.cancelled)
@@ -771,10 +791,15 @@ export function App() {
       applyProject(response.project, true);
       setSavedProject(JSON.stringify(response.project));
       setCalculationError(null);
-      undoStack.current = [];
-      redoStack.current = [];
+      undoStack.current = response.history?.undo ?? [];
+      redoStack.current = response.history?.redo ?? [];
+      setSavedHistory(response.history_warning === true ? null : JSON.stringify({
+        undo: undoStack.current,
+        redo: redoStack.current,
+      }));
       void window.pywebview?.api?.clear_recovery_project();
       setRecoveryNotice(null);
+      setHistoryReadErrorOpen(response.history_warning === true);
       setHistoryVersion((value) => value + 1);
     } else if (!response.cancelled) {
       setCalculationError(response.error ?? "Не удалось открыть проект.");
@@ -1796,7 +1821,7 @@ export function App() {
         <strong className="app-brand">PalletLab</strong>
         <nav className="app-actions" aria-label="Действия с проектом">
           <button type="button" className="secondary" onClick={openProject} disabled={!status}>Открыть</button>
-          <button type="button" className="secondary" onClick={() => void saveProject()} disabled={!project || saving || JSON.stringify(project) === savedProject}>Сохранить</button>
+          <button type="button" className="secondary" onClick={() => void saveProject()} disabled={!project || saving || !hasUnsavedChanges}>Сохранить</button>
           <button type="button" className="secondary" onClick={() => void saveProject(true)} disabled={!project || saving}>Сохранить как</button>
           <button
             type="button"
@@ -1824,6 +1849,7 @@ export function App() {
               {status ? `${status.application} ${status.version}` : "Подключение…"}
             </p>
           </div>
+          {recoveryNotice ? <p className="recovery-notice" role="alert">{recoveryNotice}</p> : null}
         {!settingsOpen && !updateDismissed && ["available", "downloading", "ready", "failed", "installing"].includes(update.state) ? (
           <div className="modal-backdrop">
             <section className="modal progress-modal" role="dialog" aria-modal="true" aria-labelledby="update-title" aria-live="polite">
@@ -1835,15 +1861,15 @@ export function App() {
               </> : null}
               {update.state === "ready" ? <>
                 <p>Версия {update.version} готова к установке. Приложение закроется.</p>
-                {project && JSON.stringify(project) !== savedProject ? <p>Несохранённые изменения могут быть потеряны. Вы можете сохранить проект перед установкой.</p> : null}
+                {hasUnsavedChanges ? <p>Несохранённые изменения могут быть потеряны. Вы можете сохранить проект перед установкой.</p> : null}
               </> : null}
               {update.state === "installing" ? <p>Запускается установка обновления…</p> : null}
               {update.error ? <p className="error">{update.error}</p> : null}
               <footer className="modal-actions">
                 {update.state !== "downloading" && update.state !== "installing" ? <button type="button" className="secondary" onClick={() => setUpdateDismissed(true)}>Позже</button> : null}
                 {(update.state === "available" && !update.manualOnly) || update.state === "failed" ? <button type="button" onClick={() => void window.pywebview?.api?.download_update().then(setUpdate)}>Скачать</button> : null}
-                {update.state === "ready" && project && JSON.stringify(project) !== savedProject ? <button type="button" disabled={saving} onClick={() => void saveProject()}>Сохранить проект</button> : null}
-                {update.state === "ready" ? <button type="button" disabled={saving} onClick={() => void window.pywebview?.api?.install_update().then(setUpdate)}>{project && JSON.stringify(project) !== savedProject ? "Установить без сохранения" : "Установить"}</button> : null}
+                {update.state === "ready" && hasUnsavedChanges ? <button type="button" disabled={saving} onClick={() => void saveProject()}>Сохранить проект</button> : null}
+                {update.state === "ready" ? <button type="button" disabled={saving} onClick={() => void window.pywebview?.api?.install_update().then(setUpdate)}>{hasUnsavedChanges ? "Установить без сохранения" : "Установить"}</button> : null}
               </footer>
             </section>
           </div>
@@ -1949,7 +1975,6 @@ export function App() {
             </section>
           </div>
         ) : null}
-        {recoveryNotice ? <p className="recovery-notice">{recoveryNotice}</p> : null}
         {stepRestoreError ? <p className="error" role="alert">{stepRestoreError}</p> : null}
         {stepImport && stepImportPhase(stepImport.state, stepModel !== null, stepRestoreError !== null) ? (
           <div className="modal-backdrop" role="presentation">
@@ -2331,6 +2356,25 @@ export function App() {
         ) : null}
         </section>
       </div>
+      {historyReadErrorOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <section
+            className="modal result-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="history-read-error-title"
+            aria-describedby="history-read-error-message"
+          >
+            <h2 id="history-read-error-title">История изменений недоступна</h2>
+            <p id="history-read-error-message" className="error">
+              Не удалось прочитать историю изменений. Проект открыт без истории Undo/Redo.
+            </p>
+            <footer className="modal-actions">
+              <button type="button" onClick={() => setHistoryReadErrorOpen(false)}>Понятно</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
