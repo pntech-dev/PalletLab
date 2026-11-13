@@ -372,3 +372,42 @@ def test_solidworks_materials_load_saved_library(monkeypatch) -> None:
     api = WebApplicationApi()
     assert api.solidworks_materials("materials.sldmat") == {"ok": True, "materials": ["Pine", "Oak"]}
     assert not api.solidworks_materials("")["ok"]
+
+
+def test_normal_exit_discards_recovery_and_rejects_late_autosaves(tmp_path) -> None:
+    store = _WebSettings(tmp_path / "settings.json")
+    project = WebApplicationApi().default_project()
+    assert store.save_recovery_project(project)
+    assert store.finish_recovery_session()
+    assert not store.save_recovery_project(project)
+    assert _WebSettings(tmp_path / "settings.json").recovery_project() is None
+
+
+def test_web_host_clears_recovery_only_after_normal_exit(monkeypatch, tmp_path) -> None:
+    import sys
+    from types import SimpleNamespace
+    from palletlab.desktop import web_host
+
+    events = []
+    class FakeApi:
+        def __init__(self):
+            self._settings = SimpleNamespace(finish_recovery_session=lambda: events.append("clean"))
+        def frontend_url(self, _root):
+            return "http://localhost/"
+        def attach_window(self, _window):
+            pass
+
+    fake_webview = SimpleNamespace(create_window=lambda *_args, **_kwargs: object(), start=lambda: None)
+    monkeypatch.setattr(web_host, "WebApplicationApi", FakeApi)
+    monkeypatch.setattr(web_host, "frontend_entrypoint", lambda: tmp_path / "index.html")
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+    web_host.run_web_application()
+    assert events == ["clean"]
+
+    events.clear()
+    def crash():
+        raise RuntimeError("webview failed")
+    fake_webview.start = crash
+    with pytest.raises(RuntimeError, match="webview failed"):
+        web_host.run_web_application()
+    assert events == []

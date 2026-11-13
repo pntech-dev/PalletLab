@@ -359,6 +359,7 @@ class _WebSettings:
         root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "PalletLab"
         self._path = path or root / "web_settings.json"
         self._lock = Lock()
+        self._recovery_closed = False
 
     _DEFAULTS: dict[str, object] = {
         "rounding": "50", "autosaveEnabled": True, "autosaveMinutes": 1,
@@ -449,6 +450,8 @@ class _WebSettings:
         except ProjectPersistenceError:
             return False
         with self._lock:
+            if self._recovery_closed:
+                return False
             try:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
                 path = self._path.with_name("web_autosave.json")
@@ -466,6 +469,16 @@ class _WebSettings:
 
     def clear_recovery_project(self) -> bool:
         with self._lock:
+            try:
+                self._path.with_name("web_autosave.json").unlink(missing_ok=True)
+                return True
+            except OSError:
+                return False
+
+    def finish_recovery_session(self) -> bool:
+        """Discard recovery after a normal exit and reject late autosaves."""
+        with self._lock:
+            self._recovery_closed = True
             try:
                 self._path.with_name("web_autosave.json").unlink(missing_ok=True)
                 return True
@@ -670,3 +683,4 @@ def run_web_application() -> None:
     )
     api.attach_window(window)
     webview.start()
+    api._settings.finish_recovery_session()

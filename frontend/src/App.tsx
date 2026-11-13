@@ -220,7 +220,6 @@ type ExportResult = {
   message: string;
 };
 
-const AUTOSAVE_KEY = "palletlab.web.autosave.v1";
 const SOLIDWORKS_OPTIONS_KEY = "palletlab.web.solidworks-options.v1";
 const HISTORY_LIMIT = 50;
 
@@ -230,23 +229,6 @@ function copyProject(project: Project): Project {
 
 function projectsMatch(first: Project, second: Project): boolean {
   return JSON.stringify(first) === JSON.stringify(second);
-}
-
-function recoveredProject(): Project | null {
-  try {
-    const raw = window.localStorage.getItem(AUTOSAVE_KEY);
-    return raw ? (JSON.parse(raw) as Project) : null;
-  } catch {
-    return null;
-  }
-}
-
-function discardRecoveredProject() {
-  try {
-    window.localStorage.removeItem(AUTOSAVE_KEY);
-  } catch {
-    // Recovery is optional when an embedded browser disables local storage.
-  }
 }
 
 function storedSolidWorksOptions(): SolidWorksOptions | null {
@@ -636,9 +618,8 @@ export function App() {
         setLastUpdateCheck(updateState.lastCheckedAt ?? null);
         setSettings(loadedSettings);
         const defaultWithSettings = projectWithDefaults(defaultProject as Project, loadedSettings);
-        const recovered = loadedSettings.autosaveEnabled ? ((await api.recovery_project()) ?? recoveredProject()) : null;
+        const recovered = loadedSettings.autosaveEnabled ? (await api.recovery_project()) : null;
         const initialProject = recovered ?? defaultWithSettings;
-        void restoreProjectStep(initialProject);
         const initialCalculation = await api.calculate(initialProject);
         reportStartupStage("первый расчёт завершён");
         if (recovered) {
@@ -646,9 +627,9 @@ export function App() {
             calculatedInitialProject.current = initialCalculation.snapshot.project;
             applyProject(initialCalculation.snapshot.project, true);
             applyCalculation(initialCalculation);
+            void restoreProjectStep(initialCalculation.snapshot.project);
             setRecoveryNotice("Восстановлен последний автосохранённый проект.");
           } else {
-            discardRecoveredProject();
             void api.clear_recovery_project();
             projectBaseline.current = JSON.stringify(defaultWithSettings);
             applyProject(defaultWithSettings, true);
@@ -777,7 +758,6 @@ export function App() {
     }
     if (response.ok) {
       setSavedProject(savedVersion);
-      discardRecoveredProject();
       void window.pywebview?.api?.clear_recovery_project();
       setRecoveryNotice(null);
     } else if (!response.cancelled)
@@ -793,7 +773,6 @@ export function App() {
       setCalculationError(null);
       undoStack.current = [];
       redoStack.current = [];
-      discardRecoveredProject();
       void window.pywebview?.api?.clear_recovery_project();
       setRecoveryNotice(null);
       setHistoryVersion((value) => value + 1);
