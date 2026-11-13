@@ -517,6 +517,7 @@ export function App() {
   }, [calculationError]);
 
   function applyProject(nextProject: Project, expandTopLayer = false) {
+    const topLayerId = nextProject.pallet.layers.at(-1)?.id ?? null;
     setProject(nextProject);
     setCamera(nextProject.view.camera);
     setHiddenLayerIds(nextProject.view.hidden_layer_ids);
@@ -533,9 +534,11 @@ export function App() {
         ]),
       ),
     );
-    setSelectedLayerId((current) => nextProject.pallet.layers.some((layer) => layer.id === current) ? current : null);
+    setSelectedLayerId((current) => expandTopLayer
+      ? topLayerId
+      : nextProject.pallet.layers.some((layer) => layer.id === current) ? current : null);
     setExpandedLayerId((current) => expandTopLayer
-      ? nextProject.pallet.layers[nextProject.pallet.layers.length - 1]?.id ?? null
+      ? topLayerId
       : nextProject.pallet.layers.some((layer) => layer.id === current)
         ? current
         : nextProject.pallet.layers[0]?.id ?? null);
@@ -1611,13 +1614,11 @@ export function App() {
     updateProject({ ...project, pallet: { ...project.pallet, layers } });
   }
 
-  function removeLayer(index: number) {
+  function removeLayer(layerId: string) {
     if (!project || project.pallet.layers.length <= 2) return;
-    const removedLayerId = project.pallet.layers[index]?.id;
-    if (isLocked(removedLayerId)) {
-      showViewportToolError("Для удаления слоя сначала разблокируйте его.");
-      return;
-    }
+    const index = project.pallet.layers.findIndex((layer) => layer.id === layerId);
+    if (index < 0 || isLocked(layerId)) return;
+    const removedLayerId = layerId;
     const manual = project.pallet.manual_beams ?? [];
     const physical = new Map(project.pallet.layers.map((layer) => [layer.id, layer.id]));
     for (const beam of manual) {
@@ -1990,49 +1991,42 @@ export function App() {
         ) : null}
         {project ? (
           <div className="directions">
-            <fieldset className="rounding">
-              <legend>Округление поддона</legend>
-              {(["50", "5", "none"] as const).map((value) => (
-                <label key={value}>
-                  <input
-                    type="radio"
-                    name="rounding"
-                    value={value}
-                    checked={rounding === value}
-                    disabled={(project.view.locked_layer_ids ?? []).length > 0}
-                    onChange={() => setRounding(value)}
-                  />
-                  {value === "none" ? "Без округления" : `${value} мм`}
-                </label>
-              ))}
-            </fieldset>
             <section className="layer-stack" aria-label="Слои поддона">
               <div className="layer-stack-heading">
                 <div>
                   <p className="eyebrow">Конструкция</p>
                   <h2>Слои поддона</h2>
                 </div>
-                <button type="button" className="secondary" onClick={addLayer}>
-                  Добавить слой
-                </button>
+                <div className="layer-toolbar" role="toolbar" aria-label="Инструменты слоёв">
+                  <button type="button" className="secondary" disabled={!selectedLayerId}
+                    aria-pressed={selectedLayerId ? isLocked(selectedLayerId) : false}
+                    onClick={() => {
+                      if (!selectedLayerId) return;
+                      const locked = project.view.locked_layer_ids ?? [];
+                      const next = locked.includes(selectedLayerId) ? locked.filter((id) => id !== selectedLayerId) : [...locked, selectedLayerId];
+                      clearInteractionState();
+                      updateProject({ ...project, view: { ...project.view, locked_layer_ids: next } });
+                    }}>
+                    {selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать" : "Заблокировать"}
+                  </button>
+                  <button type="button" className="secondary" disabled={!selectedLayerId || duplicateBusy} onClick={() => void duplicateLayer()}>
+                    Дублировать
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={!selectedLayerId || project.pallet.layers.length <= 2 || isLocked(selectedLayerId)}
+                    onClick={() => {
+                      if (selectedLayerId) removeLayer(selectedLayerId);
+                    }}
+                  >
+                    Удалить слой
+                  </button>
+                </div>
               </div>
-              <div className="layer-toolbar" role="toolbar" aria-label="Инструменты слоёв">
-                <button type="button" className="secondary" disabled={!selectedLayerId}
-                  aria-pressed={selectedLayerId ? isLocked(selectedLayerId) : false}
-                  onClick={() => {
-                    if (!selectedLayerId) return;
-                    const locked = project.view.locked_layer_ids ?? [];
-                    const next = locked.includes(selectedLayerId) ? locked.filter((id) => id !== selectedLayerId) : [...locked, selectedLayerId];
-                    clearInteractionState();
-                    updateProject({ ...project, view: { ...project.view, locked_layer_ids: next } });
-                  }}>
-                  {selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать" : "Заблокировать"}
-                </button>
-                <button type="button" className="secondary" disabled={!selectedLayerId || duplicateBusy} onClick={() => void duplicateLayer()}>
-                  Дублировать
-                </button>
-                <span>{selectedLayerId ? `Слой ${layerNumber(project.pallet.layers.find((layer) => layer.id === selectedLayerId)!, project.pallet.layers.findIndex((layer) => layer.id === selectedLayerId))}` : "Выберите слой"}</span>
-              </div>
+              <button type="button" className="secondary layer-add-button" onClick={addLayer}>
+                Добавить слой
+              </button>
               <div className="layer-stack-list">
               {[...project.pallet.layers].reverse().map((layer) => {
                 const index = project.pallet.layers.findIndex((item) => item.id === layer.id);
@@ -2093,15 +2087,6 @@ export function App() {
                       aria-pressed={hiddenLayerIds.includes(layer.id)}
                     >
                       {hiddenLayerIds.includes(layer.id) ? "Показать" : "Скрыть"}
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-button secondary"
-                      aria-label={`Удалить слой ${layerNumber(layer, index)}`}
-                      onClick={(event) => { event.stopPropagation(); removeLayer(index); }}
-                      disabled={project.pallet.layers.length <= 2 || isLocked(layer.id)}
-                    >
-                      ×
                     </button>
                   </div>
                   {expandedLayerId === layer.id ? (
@@ -2223,6 +2208,21 @@ export function App() {
                   </div>;
                 })}
               </fieldset> : null}
+              <fieldset className="rounding">
+                <legend>Округление поддона</legend>
+                {(["50", "5", "none"] as const).map((value) => (
+                  <label key={value}>
+                    <input
+                      type="radio"
+                      name="rounding"
+                      value={value}
+                      checked={rounding === value}
+                      onChange={() => setRounding(value)}
+                    />
+                    {value === "none" ? "Без округления" : `${value} мм`}
+                  </label>
+                ))}
+              </fieldset>
               <div className="layer-stack-footer">
                 <button type="button" className="secondary" onClick={() => void resetProject()}>
                   Сбросить проект
