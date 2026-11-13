@@ -178,6 +178,7 @@ def project_from_dict(raw: object) -> ProjectState:
         if not isinstance(step_model, dict):
             raise ProjectPersistenceError("Данные STEP-модели должны быть объектом.")
         source, transform, starts = step_model.get("source"), step_model.get("transform"), step_model.get("starts")
+        placement_matrix = step_model.get("placement_matrix")
         if (not isinstance(source, str) or not source.strip()
                 or not isinstance(transform, list) or len(transform) != 16
                 or not isinstance(starts, list) or len(starts) != 2
@@ -185,6 +186,17 @@ def project_from_dict(raw: object) -> ProjectState:
                        for value in (*transform, *starts))):
             raise ProjectPersistenceError("Данные STEP-модели содержат некорректные параметры.")
         step_model = {"source": source, "transform": list(transform), "starts": list(starts)}
+        if placement_matrix is not None:
+            if (not isinstance(placement_matrix, list) or len(placement_matrix) != 4
+                    or any(not isinstance(row, list) or len(row) != 4 for row in placement_matrix)
+                    or any(
+                        isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+                        for row in placement_matrix for value in row
+                    )):
+                raise ProjectPersistenceError("Матрица размещения STEP-модели содержит некорректные параметры.")
+            step_model["placement_matrix"] = [
+                [float(value) for value in row] for row in placement_matrix
+            ]
     raw_margins = pallet.get("pallet_margins")
     pallet_margins = None
     if raw_margins is not None:

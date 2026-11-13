@@ -14,7 +14,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 from xml.etree import ElementTree
 
 if TYPE_CHECKING:
@@ -25,6 +25,7 @@ from palletlab.exporters.drawings import (
     DrawingExportError,
     DrawingScope,
     DrawingTemplateError,
+    SpecificationRow,
     assembly_specification_rows,
 )
 
@@ -87,6 +88,8 @@ def create_drawings(
     scope: DrawingScope,
     configured_template: str | Path | None = None,
     pallet_result: PalletResult | None = None,
+    model_path: str | Path | None = None,
+    specification_rows: tuple[SpecificationRow, ...] | None = None,
 ) -> Path:
     """Create associative SolidWorks drawings for the exported native models.
 
@@ -95,20 +98,33 @@ def create_drawings(
     ESKD/GOST styles remain intact.
     """
     directory = Path(model_directory)
-    metadata = _drawing_metadata_path(directory)
-    if pallet_result and not metadata.is_file():
-        metadata = _write_drawing_metadata(directory, pallet_result)
-    models = sorted(model for model in directory.glob("*.SLDPRT") if not model.name.startswith("~$"))
-    assembly = next(
-        (model for model in directory.glob("*.SLDASM") if not model.name.startswith("~$")),
-        None,
-    )
-    if scope is DrawingScope.PARTS_AND_ASSEMBLY:
-        models_to_draw = [*models, *([assembly] if assembly else [])]
-    elif scope is DrawingScope.PARTS_ONLY:
-        models_to_draw = models
+    if model_path is not None:
+        selected_model = Path(model_path)
+        if not selected_model.is_file():
+            raise DrawingExportError(f"Модель для чертежа не найдена: {selected_model}")
+        models_to_draw = [selected_model]
+        metadata = (
+            _write_packaging_drawing_metadata(directory, specification_rows)
+            if specification_rows is not None else None
+        )
     else:
-        models_to_draw = [assembly] if assembly else []
+        metadata = _drawing_metadata_path(directory)
+        if pallet_result and not metadata.is_file():
+            metadata = _write_drawing_metadata(directory, pallet_result)
+        models = sorted(model for model in directory.glob("*.SLDPRT") if not model.name.startswith("~$"))
+        assembly = next(
+            (
+                model for model in sorted(directory.glob("*.SLDASM"))
+                if not model.name.startswith("~$") and model.stem not in ("Модель_экспорта", "УЧ-Поддон")
+            ),
+            None,
+        )
+        if scope is DrawingScope.PARTS_AND_ASSEMBLY:
+            models_to_draw = [*models, *([assembly] if assembly else [])]
+        elif scope is DrawingScope.PARTS_ONLY:
+            models_to_draw = models
+        else:
+            models_to_draw = [assembly] if assembly else []
     if not models_to_draw:
         raise DrawingExportError("В выбранной папке не найдены модели SolidWorks для создания чертежей.")
 
@@ -126,7 +142,7 @@ def create_drawings(
         for model in models_to_draw:
             _create_drawing_with_helper(
                 template, model, drawings / f"{model.stem}.SLDDRW",
-                metadata if model.suffix.casefold() == ".sldasm" and metadata.is_file() else None,
+                metadata if model.suffix.casefold() == ".sldasm" and metadata is not None and metadata.is_file() else None,
             )
         return drawings
     except (DrawingExportError, DrawingTemplateError):
@@ -156,6 +172,30 @@ def _create_drawing_with_helper(template: Path, model_path: Path, filename: Path
 
 def _drawing_metadata_path(directory: Path) -> Path:
     return directory / ".palletlab-drawing.json"
+
+
+def _write_packaging_drawing_metadata(
+    directory: Path, specification_rows: tuple[SpecificationRow, ...],
+) -> Path:
+    metadata = directory / ".palletlab-packaging-drawing.json"
+    payload = {
+        "schema": 2,
+        "specification": [
+            {
+                "position": row.position,
+                "name": row.name,
+                "dimensions": row.dimensions,
+                "quantity": row.quantity,
+                "designation": row.designation,
+            }
+            for row in specification_rows
+        ],
+    }
+    try:
+        metadata.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    except OSError as exc:
+        raise DrawingExportError(f"Не удалось сохранить спецификацию упаковочной сборки: {exc}") from exc
+    return metadata
 
 
 def _write_drawing_metadata(directory: Path, result: PalletResult) -> Path:
@@ -355,15 +395,30 @@ def export_pallet(
     material_library: str | Path | None = None,
     material_name: str | None = None,
     include_assembly: bool = True,
+    step_model_path: str | Path | None = None,
+    placement_matrix: Sequence[Sequence[float]] | None = None,
 ) -> Path:
     """Create native parts and optionally an assembly; return the new folder."""
+    if (step_model_path is None) != (placement_matrix is None):
+        raise SolidWorksExportError("Для модели экспорта нужны STEP-файл и матрица размещения.")
+    if step_model_path is not None and not include_assembly:
+        raise SolidWorksExportError("Модель упаковки требует включённую модель поддона.")
     api = _load_solidworks_api()
     api["pythoncom"].CoInitialize()
     try:
         material = get_material(material_id)
         library = _validate_material_library(material_library, material_name)
         return _export(
-            api, result, Path(parent_directory), configured_templates, material, library, material_name, include_assembly
+            api,
+            result,
+            Path(parent_directory),
+            configured_templates,
+            material,
+            library,
+            material_name,
+            include_assembly,
+            step_model_path,
+            placement_matrix,
         )
     except SolidWorksExportError:
         raise
@@ -395,6 +450,7 @@ def _load_solidworks_api() -> dict[str, object]:
             swStandardViews_e,
             swDwgPaperSizes_e,
             swUserPreferenceStringValue_e,
+            swUserPreferenceToggle_e,
         )
     except (ImportError, OSError) as exc:
         raise SolidWorksExportError("Не удалось подключить API SolidWorks. Переустановите компоненты pythonnet и pywin32 приложения.") from exc
@@ -408,6 +464,7 @@ def _load_solidworks_api() -> dict[str, object]:
             "views": swStandardViews_e,
             "paper_sizes": swDwgPaperSizes_e,
             "user_preferences": swUserPreferenceStringValue_e,
+            "user_preference_toggles": swUserPreferenceToggle_e,
         },
         "pythoncom": pythoncom,
         "win32": win32com.client,
@@ -423,7 +480,13 @@ def _export(
     material_library: Path,
     material_name: str,
     include_assembly: bool = True,
+    step_model_path: str | Path | None = None,
+    placement_matrix: Sequence[Sequence[float]] | None = None,
 ) -> Path:
+    if (step_model_path is None) != (placement_matrix is None):
+        raise SolidWorksExportError("Для модели экспорта нужны STEP-файл и матрица размещения.")
+    if step_model_path is not None and not include_assembly:
+        raise SolidWorksExportError("Модель упаковки требует включённую модель поддона.")
     sw = api["SldWorks"]()
     if sw is None:
         raise SolidWorksExportError("Не удалось запустить SolidWorks.")
@@ -456,6 +519,19 @@ def _export(
             assembly_file = output / f"Поддон_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.SLDASM"
             _create_assembly(api, sw, templates.assembly, result, parts, assembly_file)
             _write_drawing_metadata(output, result)
+            if step_model_path is not None:
+                if placement_matrix is None:
+                    raise SolidWorksExportError("Для модели экспорта не задана матрица размещения STEP-модели.")
+                _create_export_assembly(
+                    api,
+                    sw,
+                    templates.assembly,
+                    templates.part,
+                    assembly_file,
+                    Path(step_model_path),
+                    placement_matrix,
+                    output / "УЧ-Поддон.SLDASM",
+                )
         return output
     except Exception:
         shutil.rmtree(output, ignore_errors=True)
@@ -691,3 +767,220 @@ def _create_assembly(api, sw, template: Path, result: PalletResult, parts, filen
     except Exception:
         LOGGER.debug("SolidWorks does not support optional assembly view fitting.", exc_info=True)
     _save(api, assembly, filename)
+
+
+def _solidworks_step_component_transform(placement_matrix: Sequence[Sequence[float]]) -> tuple[float, ...]:
+    """Map the STEP placement from pallet coordinates into SolidWorks axes."""
+    if len(placement_matrix) != 4 or any(len(row) != 4 for row in placement_matrix):
+        raise SolidWorksExportError("Матрица размещения STEP-модели должна иметь размер 4×4.")
+    # AddComponents3 stores the transformed local axes in rows. PalletLab's
+    # matrix stores them in columns, and the pallet assembly uses +Z for width.
+    rotation = tuple(
+        (float(placement_matrix[0][column]), float(placement_matrix[2][column]),
+         float(placement_matrix[1][column]))
+        for column in range(3)
+    )
+    translation = (
+        float(placement_matrix[0][3]) / 1000.0,
+        float(placement_matrix[2][3]) / 1000.0,
+        float(placement_matrix[1][3]) / 1000.0,
+    )
+    return (*rotation[0], *rotation[1], *rotation[2], *translation, 1.0, 0.0, 0.0, 0.0)
+
+
+def _create_export_assembly(
+    api: dict[str, object],
+    sw,
+    template: Path,
+    part_template: Path,
+    pallet_assembly: Path,
+    step_model_path: Path,
+    placement_matrix: Sequence[Sequence[float]],
+    filename: Path,
+) -> None:
+    if not pallet_assembly.is_file():
+        raise SolidWorksExportError(f"Модель поддона не найдена: {pallet_assembly}")
+    if not step_model_path.is_file():
+        raise SolidWorksExportError(f"Исходная STEP-модель не найдена: {step_model_path}")
+
+    model_directory = filename.parent / "Модель_экспорта"
+    model_directory.mkdir(exist_ok=True)
+    copied_model = model_directory / step_model_path.name
+    try:
+        shutil.copy2(step_model_path, copied_model)
+    except OSError as exc:
+        raise SolidWorksExportError(f"Не удалось скопировать STEP-модель в папку экспорта: {exc}") from exc
+    imported_part = model_directory / f"{step_model_path.stem}.SLDPRT"
+    application = api["win32"].GetActiveObject("SldWorks.Application")
+
+    imported_part = _import_step_model(api, application, copied_model, imported_part, part_template, template)
+
+    _new_document(sw, template, filename.name)
+    assembly = api["win32"].GetActiveObject("SldWorks.Application").ActiveDoc
+    if assembly is None:
+        raise SolidWorksExportError("Не удалось получить модель упаковки SolidWorks.")
+    identity = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0)
+    transforms = (identity, _solidworks_step_component_transform(placement_matrix))
+    pythoncom = api["pythoncom"]
+    names = api["win32"].VARIANT(
+        pythoncom.VT_ARRAY | pythoncom.VT_BSTR, (str(pallet_assembly), str(imported_part))
+    )
+    matrices = api["win32"].VARIANT(
+        pythoncom.VT_ARRAY | pythoncom.VT_R8, tuple(value for matrix in transforms for value in matrix)
+    )
+    coordinate_systems = api["win32"].VARIANT(
+        pythoncom.VT_ARRAY | pythoncom.VT_BSTR, ("", "")
+    )
+    _flag_methods(assembly, "AddComponents3", "EditRebuild3", "ShowNamedView2", "ViewZoomtofit2")
+    if assembly.AddComponents3(names, matrices, coordinate_systems) is None:
+        raise SolidWorksExportError("SolidWorks не добавил модели в сборку экспорта.")
+    assembly.EditRebuild3()
+    try:
+        assembly.ShowNamedView2("", api["Convert"].ToInt32(api["const"]["views"].swIsometricView))
+        assembly.ViewZoomtofit2()
+    except Exception:
+        LOGGER.debug("SolidWorks does not support optional package-assembly view fitting.", exc_info=True)
+    _save(api, assembly, filename)
+
+
+def _import_step_model(
+    api: dict[str, object], application, step_path: Path, imported_part: Path, part_template: Path,
+    assembly_template: Path,
+) -> Path:
+    """Import a neutral STEP file with SolidWorks' translator and save it natively."""
+    template_preference = api["const"]["user_preferences"].swDefaultTemplatePart
+    assembly_preference = api["const"]["user_preferences"].swDefaultTemplateAssembly
+    always_default_preference = api["const"]["user_preference_toggles"].swAlwaysUseDefaultTemplates
+    interconnect_preference = api["const"]["user_preference_toggles"].swMultiCAD_Enable3DInterconnect
+    multibody_preference = api["const"]["user_preference_toggles"].swImportMultBodyAsPartData
+    previous_template = application.GetUserPreferenceStringValue(template_preference)
+    previous_assembly = application.GetUserPreferenceStringValue(assembly_preference)
+    previous_always_default = application.GetUserPreferenceToggle(always_default_preference)
+    previous_interconnect = application.GetUserPreferenceToggle(interconnect_preference)
+    previous_multibody = application.GetUserPreferenceToggle(multibody_preference)
+    try:
+        if not application.SetUserPreferenceStringValue(template_preference, str(part_template)):
+            raise SolidWorksExportError("Не удалось временно настроить шаблон детали для импорта STEP в SolidWorks.")
+        if not application.SetUserPreferenceStringValue(assembly_preference, str(assembly_template)):
+            raise SolidWorksExportError("Не удалось временно настроить шаблон сборки для импорта STEP в SolidWorks.")
+        application.SetUserPreferenceToggle(always_default_preference, True)
+        if application.GetUserPreferenceToggle(always_default_preference) is not True:
+            raise SolidWorksExportError("Не удалось отключить запрос шаблона при импорте STEP в SolidWorks.")
+
+        # 3D Interconnect can show a modal assembly-template dialog during
+        # STEP import even when default templates are configured.
+        application.SetUserPreferenceToggle(interconnect_preference, False)
+        if application.GetUserPreferenceToggle(interconnect_preference):
+            raise SolidWorksExportError("Не удалось отключить 3D Interconnect для импорта STEP.")
+        application.SetUserPreferenceToggle(multibody_preference, False)
+        if application.GetUserPreferenceToggle(multibody_preference):
+            raise SolidWorksExportError("Не удалось настроить импорт многотельной STEP-модели.")
+
+        import_data = application.GetImportFileData(str(step_path))
+        if import_data is None:
+            raise SolidWorksExportError(
+                f"SolidWorks не подготовил параметры импорта STEP-модели {step_path.name}."
+            )
+        import_data.MapConfigurationData = False
+        byref_i4 = api["pythoncom"].VT_BYREF | api["pythoncom"].VT_I4
+        errors = api["win32"].VARIANT(byref_i4, 0)
+        imported = application.LoadFile4(str(step_path), "r", import_data, errors)
+        if isinstance(imported, tuple):
+            imported = imported[0]
+        if imported is None and errors.value == 1:
+            # Some valid STEP assemblies (including exports from C3D) are
+            # rejected by the SolidWorks translator. Re-encode their B-rep
+            # geometry with the same OpenCascade reader used by the viewport.
+            compatible_path = step_path.with_name("palletlab-compatible.step")
+            if compatible_path == step_path:
+                compatible_path = step_path.with_name("palletlab-compatible-copy.step")
+            _write_compatible_step(step_path, compatible_path)
+            import_data = application.GetImportFileData(str(compatible_path))
+            if import_data is not None:
+                import_data.MapConfigurationData = False
+                errors = api["win32"].VARIANT(byref_i4, 0)
+                imported = application.LoadFile4(str(compatible_path), "r", import_data, errors)
+                if isinstance(imported, tuple):
+                    imported = imported[0]
+        if imported is None:
+            raise SolidWorksExportError(
+                f"SolidWorks не импортировал STEP-модель {step_path.name}; "
+                f"код загрузки: {errors.value}."
+            )
+        _flag_methods(imported, "GetType")
+        document_type = imported.GetType()
+        if document_type not in (1, 2):
+            raise SolidWorksExportError(f"SolidWorks вернул неподдерживаемый тип STEP-модели: {document_type}.")
+        native_model = imported_part.with_suffix(".SLDASM") if document_type == 2 else imported_part
+        _save(api, imported, native_model)
+        return native_model
+    finally:
+        restore_errors = []
+        try:
+            if not application.SetUserPreferenceStringValue(template_preference, previous_template):
+                restore_errors.append("шаблон детали")
+        except Exception as exc:
+            restore_errors.append(f"шаблон детали: {exc}")
+        try:
+            if not application.SetUserPreferenceStringValue(assembly_preference, previous_assembly):
+                restore_errors.append("шаблон сборки")
+        except Exception as exc:
+            restore_errors.append(f"шаблон сборки: {exc}")
+        try:
+            application.SetUserPreferenceToggle(multibody_preference, previous_multibody)
+            if application.GetUserPreferenceToggle(multibody_preference) != previous_multibody:
+                restore_errors.append("настройка импорта многотельных моделей")
+        except Exception as exc:
+            restore_errors.append(f"настройка импорта многотельных моделей: {exc}")
+        try:
+            application.SetUserPreferenceToggle(interconnect_preference, previous_interconnect)
+            if application.GetUserPreferenceToggle(interconnect_preference) != previous_interconnect:
+                restore_errors.append("3D Interconnect")
+        except Exception as exc:
+            restore_errors.append(f"3D Interconnect: {exc}")
+        try:
+            application.SetUserPreferenceToggle(always_default_preference, previous_always_default)
+            if application.GetUserPreferenceToggle(always_default_preference) != previous_always_default:
+                restore_errors.append("настройка шаблонов")
+        except Exception as exc:
+            restore_errors.append(f"настройка шаблонов: {exc}")
+        if restore_errors:
+            raise SolidWorksExportError(
+                "Не удалось восстановить настройки SolidWorks после импорта STEP: "
+                + ", ".join(restore_errors)
+            )
+
+
+def _write_compatible_step(source: Path, destination: Path) -> None:
+    """Re-encode STEP geometry when the SolidWorks translator rejects the source.
+
+    Keep the original alongside this file: STEPControl transfers geometry, not
+    all assembly names, colours or other product metadata.
+    """
+    try:
+        from OCP.IFSelect import IFSelect_RetDone
+        from OCP.Interface import Interface_Static
+        from OCP.STEPControl import STEPControl_AsIs, STEPControl_Reader, STEPControl_Writer
+
+        reader = STEPControl_Reader()
+        if reader.ReadFile(str(source)) != IFSelect_RetDone or reader.TransferRoots() == 0:
+            raise ValueError("OpenCascade не смог прочитать геометрию")
+        shape = reader.OneShape()
+        if shape.IsNull():
+            raise ValueError("STEP-файл не содержит геометрии")
+        writer = STEPControl_Writer()
+        previous_assembly_mode = Interface_Static.IVal_s("write.step.assembly")
+        try:
+            # Import the geometric compound as a single STEP representation.
+            # Expanding a large compound into hundreds of nested documents can
+            # exhaust SolidWorks' resources before the model is loaded.
+            if not Interface_Static.SetIVal_s("write.step.assembly", 0):
+                raise ValueError("OpenCascade не смог настроить совместимое представление")
+            if writer.Transfer(shape, STEPControl_AsIs) != IFSelect_RetDone:
+                raise ValueError("OpenCascade не смог подготовить геометрию")
+            if writer.Write(str(destination)) != IFSelect_RetDone or not destination.is_file():
+                raise ValueError("OpenCascade не смог сохранить совместимую копию")
+        finally:
+            Interface_Static.SetIVal_s("write.step.assembly", previous_assembly_mode)
+    except Exception as exc:
+        raise SolidWorksExportError(f"Не удалось подготовить STEP-модель для SolidWorks: {exc}") from exc

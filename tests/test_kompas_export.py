@@ -197,6 +197,7 @@ def test_drawing_uses_specification_saved_with_export(tmp_path, monkeypatch):
     from palletlab.exporters.drawings import DrawingScope
 
     (tmp_path / "Pallet.a3d").touch()
+    (tmp_path / "Модель_экспорта.a3d").touch()
     (tmp_path / ".palletlab-drawing.json").write_text(json.dumps({"specification": [
         {"position": 1, "name": "Stored part", "dimensions": "1 × 2 × 3", "quantity": 42},
     ]}), encoding="utf-8")
@@ -209,9 +210,163 @@ def test_drawing_uses_specification_saved_with_export(tmp_path, monkeypatch):
 
     kompas.create_drawings(tmp_path, DrawingScope.ASSEMBLY_ONLY, None, _result())
 
+    assert captured[0][0][2] == tmp_path / "Pallet.a3d"
     assert captured[0][0][3].parent.name == "Чертежи"
     assert captured[0][1]["specification_rows"][0].name == "Stored part"
     assert captured[0][1]["specification_rows"][0].quantity == 42
+
+
+def test_packaging_drawing_targets_explicit_assembly_and_specification(tmp_path, monkeypatch):
+    from palletlab.exporters import kompas
+    from palletlab.exporters.drawings import DrawingScope, SpecificationRow
+
+    assembly = tmp_path / "Модель_экспорта.a3d"
+    assembly.touch()
+    captured = []
+    pythoncom = SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)
+    monkeypatch.setattr(kompas, "_load_kompas_api", lambda: {
+        "pythoncom": pythoncom, "Dispatch": lambda _name: SimpleNamespace(Visible=False), "constants": object(),
+    })
+    monkeypatch.setattr(kompas, "_create_drawing", lambda *args, **kwargs: captured.append((args, kwargs)))
+    rows = (SpecificationRow(1, "Поддон", "1200×800×210", 1, "Поддон"),)
+
+    kompas.create_drawings(
+        tmp_path, DrawingScope.ASSEMBLY_ONLY, model_path=assembly, specification_rows=rows,
+    )
+
+    assert captured[0][0][2] == assembly
+    assert captured[0][1]["specification_rows"] == rows
+
+
+def test_export_assembly_inserts_pallet_assembly_and_transformed_step_model(tmp_path):
+    from palletlab.exporters.kompas import _create_export_assembly
+
+    result = _result()
+    parts = {}
+    for index, beam in enumerate(result.beams_3d):
+        key = (beam.orientation, beam.size_x, beam.size_y, beam.size_z)
+        if key not in parts:
+            parts[key] = tmp_path / f"beam_{index}.m3d"
+            parts[key].touch()
+    step_model = tmp_path / "equipment.step"
+    step_model.write_text("step", encoding="utf-8")
+    components = []
+    imported_files = []
+
+    class _Placement:
+        def SetOrigin(self, *origin):
+            self.origin = origin
+            return True
+
+        def SetAxes(self, *axes):
+            self.axes = axes
+            return True
+
+    class _ImportParameters:
+        def Init(self):
+            self.initialized = True
+
+        def SetObjectsOptions(self, _option, _enabled):
+            return True
+
+    class _Part:
+        def __init__(self):
+            self.placement = _Placement()
+
+        def Create(self, *args):
+            self.create_arguments = args
+            return True
+
+        def AdditionFormatParam(self):
+            return _ImportParameters()
+
+        def LoadFromAdditionFormat(self, filename, parameters):
+            imported_files.append((Path(filename), parameters.format))
+            return True
+
+        def RebuildDocument(self):
+            pass
+
+        def GetPart(self, _kind):
+            return self
+
+        def BodyCollection(self):
+            return SimpleNamespace(GetCount=lambda: 1)
+
+        def SaveAs(self, filename):
+            Path(filename).touch()
+            return True
+
+        def GetPlacement(self):
+            return self.placement
+
+        def UpdatePlacement(self):
+            return True
+
+    class _Assembly:
+        def Create(self, *_args):
+            return True
+
+        def GetPart(self, _part_kind):
+            if _part_kind == -1:
+                return SimpleNamespace(name="", Update=lambda: True,
+                    GetGabarit=lambda *_args: (True, 0., 0., 0., 1000., 800., 600.))
+            return _Part()
+
+        def SetPartFromFile(self, filename, part, _keep):
+            components.append((Path(filename), part))
+            return True
+
+        def RebuildDocument(self):
+            pass
+
+        def SaveAs(self, filename):
+            Path(filename).touch()
+            return True
+
+        def ZoomPrevNextOrAll(self, _value):
+            pass
+
+    class _Kompas:
+        def __init__(self):
+            self.import_part = _Part()
+            self.documents = [self.import_part, _Assembly()]
+
+        @property
+        def Document3D(self):
+            return self.documents.pop(0)
+
+    placement = (
+        (0.0, -1.0, 0.0, 100.0),
+        (1.0, 0.0, 0.0, 200.0),
+        (0.0, 0.0, 1.0, 300.0),
+        (0.0, 0.0, 0.0, 1.0),
+    )
+    filename = tmp_path / "Модель_экспорта.a3d"
+    pallet = tmp_path / "Поддон.a3d"
+    pallet.touch()
+    kompas = _Kompas()
+    _create_export_assembly(
+        kompas,
+        SimpleNamespace(pNew_Part=1, pTop_Part=-1),
+        pallet,
+        step_model,
+        placement,
+        filename,
+    )
+
+    native_model = tmp_path / "Модель_экспорта" / "equipment.m3d"
+    assert imported_files == [(tmp_path / "Модель_экспорта" / "equipment.step", -3)]
+    assert kompas.import_part.create_arguments == (False, True)
+    assert components[0][0] == pallet
+    assert components[0][1].placement.origin == (0.0, 0.0, 0.0)
+    assert components[-1][0] == native_model
+    assert len(components) == 2
+    assert components[-1][1].placement.origin == (100.0, 200.0, 300.0)
+    assert components[-1][1].placement.axes == (0.0, 1.0, 0.0, -1.0, 0.0, 0.0)
+    assert (tmp_path / "Модель_экспорта" / "equipment.step").is_file()
+    assert native_model.is_file()
+    assert filename.is_file()
 
 
 def test_parts_only_drawing_scope_excludes_assembly(tmp_path, monkeypatch):
@@ -597,3 +752,100 @@ def test_kompas_assembly_specification_is_drawn_in_the_system_view():
 def test_kompas_drawing_scale_uses_a_standard_reduction_for_large_models():
     assert _drawing_scale(Path("Pallet_4200x1950.a3d")) == 1 / 20
     assert _drawing_scale(Path("Beam_1_1000x100x70.m3d")) == 1 / 4
+
+
+def test_step_import_rejects_empty_kompas_geometry(tmp_path):
+    from types import SimpleNamespace
+    from palletlab.exporters.kompas import KompasExportError, _import_step_model
+
+    parameters = SimpleNamespace(Init=lambda: None, SetObjectsOptions=lambda *_args: True)
+    root = SimpleNamespace(BodyCollection=lambda: SimpleNamespace(GetCount=lambda: 0))
+    document = SimpleNamespace(
+        Create=lambda *_args: True,
+        AdditionFormatParam=lambda: parameters,
+        LoadFromAdditionFormat=lambda *_args: True,
+        RebuildDocument=lambda: None,
+        GetPart=lambda _kind: root,
+        SaveAs=lambda _path: pytest.fail("An empty model must not be saved"),
+    )
+    with pytest.raises(KompasExportError, match="без геометрических тел"):
+        _import_step_model(SimpleNamespace(Document3D=document), SimpleNamespace(pTop_Part=-1),
+                           tmp_path / "model.step", tmp_path / "model.m3d")
+
+
+def test_step_import_uses_kompas_generated_assembly(tmp_path):
+    from types import SimpleNamespace
+    from palletlab.exporters.kompas import _import_step_model
+
+    step = tmp_path / "source.step"
+    output = step.with_suffix(".a3d")
+    parameters = SimpleNamespace(Init=lambda: None, SetObjectsOptions=lambda *_args: True)
+    root = SimpleNamespace(BodyCollection=lambda: SimpleNamespace(GetCount=lambda: 0))
+    def load(*_args):
+        output.touch()
+        return True
+    document = SimpleNamespace(Create=lambda *_args: True, AdditionFormatParam=lambda: parameters,
+        LoadFromAdditionFormat=load, RebuildDocument=lambda: None, GetPart=lambda _kind: root,
+        SaveAs=lambda _path: pytest.fail("The empty intermediate part must not be saved"))
+    result = _import_step_model(SimpleNamespace(Document3D=document), SimpleNamespace(pTop_Part=-1),
+                                step, tmp_path / "source.m3d")
+    assert result == output
+
+
+def test_packaging_scale_uses_full_model_bounds_and_rejects_missing_bounds(tmp_path):
+    import json
+    from palletlab.exporters.kompas import _drawing_scale
+    from palletlab.exporters.drawings import DrawingExportError
+    model = tmp_path / "УЧ-Поддон.a3d"
+    with pytest.raises(DrawingExportError, match="габариты"):
+        _drawing_scale(model)
+    (tmp_path / ".palletlab-packaging-bounds.json").write_text(
+        json.dumps({"dimensions": [3050, 1600, 2100]}), encoding="utf-8"
+    )
+    scale = _drawing_scale(model)
+    assert (3050 + 1600) * scale <= 275
+    assert 2100 * scale <= 147
+    assert scale == 1 / 20
+    (tmp_path / ".palletlab-packaging-bounds.json").write_text(
+        json.dumps({"dimensions": [1600, 3050, 2498.2586219521877]}), encoding="utf-8"
+    )
+    assert _drawing_scale(model) == 1 / 20
+    from palletlab.exporters.kompas import _packaging_origin_y
+    origin = _packaging_origin_y(model, 1 / 20)
+    assert origin + 2498.2586219521877 / 20 <= 282
+    assert origin >= 135
+    assert 3050 / 20 <= 222  # plan on its own sheet
+
+
+@pytest.mark.parametrize(
+    ("length", "width", "expected_format", "vertical", "sheet_width", "sheet_height"),
+    [(1600, 3050, 4, True, 210, 297), (1600, 4000, 4, False, 297, 210),
+     (4000, 4000, 3, False, 420, 297)],
+)
+def test_packaging_plan_sheet_fits_selected_format(
+    tmp_path, length, width, expected_format, vertical, sheet_width, sheet_height
+):
+    import json
+    from palletlab.exporters.kompas import _add_packaging_plan_sheet
+
+    model = tmp_path / "УЧ-Поддон.a3d"
+    (tmp_path / ".palletlab-packaging-bounds.json").write_text(
+        json.dumps({"dimensions": [length, width, 2000]}), encoding="utf-8"
+    )
+    first = SimpleNamespace(Format=SimpleNamespace(Format=3, VerticalOrientation=False))
+    second = SimpleNamespace(Format=SimpleNamespace(), Update=lambda: True)
+    sheets = SimpleNamespace(Count=1, Item=lambda _: first, Add=lambda: second)
+    kompas = SimpleNamespace(ksGetApplication7=SimpleNamespace(ActiveDocument=SimpleNamespace(LayoutSheets=sheets)))
+    calls = []
+    document = SimpleNamespace(ksOpenView=lambda _: None,
+        ksCreateSheetStandartViews=lambda *args: calls.append(args) or True)
+    view = SimpleNamespace()
+    _add_packaging_plan_sheet(kompas, document, SimpleNamespace(), view, model, 1 / 20)
+    assert second.Format.Format == expected_format
+    assert second.Format.VerticalOrientation == vertical
+    assert len(calls) == 1
+    # KOMPAS builds this view rightwards and downwards from its insertion point.
+    assert 20 <= view.x - 420
+    assert view.x - 420 + width / 20 <= sheet_width - 10
+    assert view.y <= sheet_height - 15
+    assert view.y - length / 20 >= 60

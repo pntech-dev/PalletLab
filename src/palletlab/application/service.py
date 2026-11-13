@@ -21,7 +21,12 @@ from palletlab.core.persistence import (
 from palletlab.core.project_state import ProjectState, beam_layer_ids
 from palletlab.exporters.kompas import KompasExportError, export_pallet as export_kompas_pallet
 from palletlab.exporters.solidworks import SolidWorksExportError, export_pallet as export_solidworks_pallet
-from palletlab.exporters.drawings import DrawingExportError, DrawingScope, DrawingTemplateError
+from palletlab.exporters.drawings import (
+    DrawingExportError,
+    DrawingScope,
+    DrawingTemplateError,
+    packaging_specification_rows,
+)
 from palletlab.exporters.kompas import create_drawings as create_kompas_drawings
 from palletlab.exporters.solidworks import create_drawings as create_solidworks_drawings
 
@@ -301,7 +306,11 @@ class ApplicationService:
             return {"ok": False, "error": str(exc)}
 
     def export_kompas(
-        self, project: object, parent_directory: object, include_assembly: bool = True
+        self,
+        project: object,
+        parent_directory: object,
+        include_assembly: object = True,
+        include_export_model: object = False,
     ) -> dict[str, Any]:
         """Recalculate and export the current project through KOMPAS-3D.
 
@@ -313,17 +322,39 @@ class ApplicationService:
             return {"ok": False, "error": error}
         if not isinstance(include_assembly, bool):
             return {"ok": False, "error": "Некорректный выбор модели поддона."}
+        if not isinstance(include_export_model, bool):
+            return {"ok": False, "error": "Некорректный выбор модели экспорта."}
+        if include_export_model and not include_assembly:
+            return {"ok": False, "error": "Модель упаковки требует включённую модель поддона."}
         result, error = self._calculate_result(state)
         if error:
             return {"ok": False, "error": error}
+        step_model_path, placement_matrix, error = _step_export_data(state, include_export_model)
+        if error:
+            return {"ok": False, "error": error}
         try:
-            output = export_kompas_pallet(result, directory, state.material_id, include_assembly)
+            if include_export_model:
+                output = export_kompas_pallet(
+                    result,
+                    directory,
+                    state.material_id,
+                    include_assembly,
+                    step_model_path=step_model_path,
+                    placement_matrix=placement_matrix,
+                )
+            else:
+                output = export_kompas_pallet(result, directory, state.material_id, include_assembly)
         except KompasExportError as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "output": str(output)}
 
     def export_solidworks(
-        self, project: object, parent_directory: object, options: object, include_assembly: bool = True
+        self,
+        project: object,
+        parent_directory: object,
+        options: object,
+        include_assembly: object = True,
+        include_export_model: object = False,
     ) -> dict[str, Any]:
         """Recalculate and export the current project through SolidWorks."""
         state, directory, error = self._export_input(project, parent_directory)
@@ -331,22 +362,42 @@ class ApplicationService:
             return {"ok": False, "error": error}
         if not isinstance(include_assembly, bool):
             return {"ok": False, "error": "Некорректный выбор модели поддона."}
+        if not isinstance(include_export_model, bool):
+            return {"ok": False, "error": "Некорректный выбор модели экспорта."}
+        if include_export_model and not include_assembly:
+            return {"ok": False, "error": "Модель упаковки требует включённую модель поддона."}
         templates, material_library, material_name, error = _solidworks_options(options, include_assembly)
         if error:
             return {"ok": False, "error": error}
         result, error = self._calculate_result(state)
         if error:
             return {"ok": False, "error": error}
+        step_model_path, placement_matrix, error = _step_export_data(state, include_export_model)
+        if error:
+            return {"ok": False, "error": error}
         try:
-            output = export_solidworks_pallet(
-                result,
-                directory,
-                templates,
-                state.material_id,
-                material_library,
-                material_name,
-                include_assembly=include_assembly,
-            )
+            if include_export_model:
+                output = export_solidworks_pallet(
+                    result,
+                    directory,
+                    templates,
+                    state.material_id,
+                    material_library,
+                    material_name,
+                    include_assembly=include_assembly,
+                    step_model_path=step_model_path,
+                    placement_matrix=placement_matrix,
+                )
+            else:
+                output = export_solidworks_pallet(
+                    result,
+                    directory,
+                    templates,
+                    state.material_id,
+                    material_library,
+                    material_name,
+                    include_assembly=include_assembly,
+                )
         except SolidWorksExportError as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "output": str(output)}
@@ -358,6 +409,7 @@ class ApplicationService:
         scope: object,
         model_directory: object,
         template: object,
+        include_export_model: object = False,
     ) -> dict[str, Any]:
         """Create native drawings from an existing web-exported CAD directory."""
         try:
@@ -369,6 +421,10 @@ class ApplicationService:
         scopes = {item.value: item for item in DrawingScope}
         if scope not in scopes:
             return {"ok": False, "error": "Выберите состав чертежей."}
+        if not isinstance(include_export_model, bool):
+            return {"ok": False, "error": "Некорректный выбор модели чертежа."}
+        if include_export_model and scopes[scope] is not DrawingScope.ASSEMBLY_ONLY:
+            return {"ok": False, "error": "Упаковочный чертёж должен быть чертежом модели сборки."}
         if not isinstance(model_directory, str) or not Path(model_directory).is_dir():
             return {"ok": False, "error": "Выберите папку с экспортированными CAD-моделями."}
         if template is not None and (not isinstance(template, str) or not template.strip()):
@@ -377,9 +433,34 @@ class ApplicationService:
         result, error = self._calculate_result(state)
         if error:
             return {"ok": False, "error": error}
+        model_path = None
+        specification_rows = None
+        if include_export_model:
+            source_path, _, error = _step_export_data(state, True)
+            if error or source_path is None:
+                return {"ok": False, "error": error or "Для модели экспорта не найдена исходная STEP-модель."}
+            extension = ".SLDASM" if cad == "solidworks" else ".a3d"
+            model_path = Path(model_directory) / f"УЧ-Поддон{extension}"
+            if not model_path.is_file():
+                model_path = Path(model_directory) / f"Модель_экспорта{extension}"
+            specification_rows = packaging_specification_rows(
+                result,
+                source_path.name,
+                pallet_is_subassembly=True,
+            )
         try:
             create = create_solidworks_drawings if cad == "solidworks" else create_kompas_drawings
-            output = create(Path(model_directory), scopes[scope], template or None, result)
+            if include_export_model:
+                output = create(
+                    Path(model_directory),
+                    scopes[scope],
+                    template or None,
+                    result,
+                    model_path,
+                    specification_rows,
+                )
+            else:
+                output = create(Path(model_directory), scopes[scope], template or None, result)
         except DrawingTemplateError as exc:
             return {"ok": False, "error": str(exc), "needsTemplate": True}
         except DrawingExportError as exc:
@@ -555,6 +636,48 @@ def _solidworks_options(
         material_name,
         None,
     )
+
+
+def _step_export_data(
+    state: ProjectState,
+    requested: bool,
+) -> tuple[Path | None, tuple[tuple[float, ...], ...] | None, str | None]:
+    """Return persisted STEP placement inputs only for an export assembly request."""
+    if not requested:
+        return None, None, None
+    step_model = state.step_model
+    if step_model is None:
+        return None, None, "Для модели экспорта необходима построенная STEP-модель."
+    source = step_model.get("source")
+    matrix = step_model.get("placement_matrix")
+    if not isinstance(source, str) or not source.strip():
+        return None, None, "Для модели экспорта не найдена исходная STEP-модель."
+    if matrix is None:
+        transform = step_model.get("transform")
+        if not isinstance(transform, list) or len(transform) != 16:
+            return None, None, "Для модели экспорта необходима матрица размещения STEP-модели."
+        viewport_matrix = [
+            [float(transform[column * 4 + row]) for column in range(4)]
+            for row in range(4)
+        ]
+        for row in range(3):
+            viewport_matrix[row][3] *= 1000
+        axis_swap = (0, 2, 1, 3)
+        matrix = [
+            [viewport_matrix[axis_swap[row]][axis_swap[column]] for column in range(4)]
+            for row in range(4)
+        ]
+    if not isinstance(matrix, list) or len(matrix) != 4:
+        return None, None, "Матрица размещения STEP-модели содержит некорректные параметры."
+    if any(not isinstance(row, list) or len(row) != 4 for row in matrix):
+        return None, None, "Матрица размещения STEP-модели содержит некорректные параметры."
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value)
+        for row in matrix for value in row
+    ):
+        return None, None, "Матрица размещения STEP-модели содержит некорректные параметры."
+    placement = tuple(tuple(float(value) for value in row) for row in matrix)
+    return Path(source), placement, None
 
 
 class _Signal:

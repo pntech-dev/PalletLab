@@ -190,14 +190,19 @@ class WebApplicationApi:
         return {"ok": False, "cancelled": True} if directory is None else {"ok": True, "path": directory}
 
     def export_kompas(
-        self, project: object, include_assembly: object = True, parent_directory: object = None
+        self,
+        project: object,
+        include_assembly: object = True,
+        parent_directory: object = None,
+        include_export_model: object = False,
     ) -> dict[str, Any]:
         directory = parent_directory
         if directory is None:
             directory = self._choose_directory("Выберите папку для экспорта КОМПАС-3D")
-        return {"ok": False, "cancelled": True} if directory is None else ApplicationService().export_kompas(
-            project, directory, include_assembly
-        )
+        if directory is None:
+            return {"ok": False, "cancelled": True}
+        service = ApplicationService()
+        return service.export_kompas(project, directory, include_assembly, include_export_model)
 
     def discover_cad_templates(self, current: object) -> dict[str, Any]:
         return {"ok": True, **discover_solidworks_paths(current)}
@@ -228,14 +233,20 @@ class WebApplicationApi:
             return {"ok": False, "error": str(exc)}
 
     def export_solidworks(
-        self, project: object, options: object, include_assembly: object = True, parent_directory: object = None
+        self,
+        project: object,
+        options: object,
+        include_assembly: object = True,
+        parent_directory: object = None,
+        include_export_model: object = False,
     ) -> dict[str, Any]:
         directory = parent_directory
         if directory is None:
             directory = self._choose_directory("Выберите папку для экспорта SolidWorks")
-        return {"ok": False, "cancelled": True} if directory is None else ApplicationService().export_solidworks(
-            project, directory, options, include_assembly
-        )
+        if directory is None:
+            return {"ok": False, "cancelled": True}
+        service = ApplicationService()
+        return service.export_solidworks(project, directory, options, include_assembly, include_export_model)
 
     def select_drawing_template(self, cad: object) -> dict[str, Any]:
         if cad not in {"solidworks", "kompas"}:
@@ -255,7 +266,13 @@ class WebApplicationApi:
         }
 
     def create_drawings(
-        self, project: object, cad: object, scope: object, template: object, model_directory: object = None
+        self,
+        project: object,
+        cad: object,
+        scope: object,
+        template: object,
+        model_directory: object = None,
+        include_export_model: object = False,
     ) -> dict[str, Any]:
         if model_directory is None:
             directory = self._choose_directory("Выберите папку экспорта с CAD-моделями")
@@ -271,7 +288,7 @@ class WebApplicationApi:
             template = options.get("drawingTemplate") if options else None
         if cad == "kompas":
             template = None
-        response = service.create_drawings(project, cad, scope, directory, template)
+        response = service.create_drawings(project, cad, scope, directory, template, include_export_model)
         if not response.get("needsTemplate"):
             return response
 

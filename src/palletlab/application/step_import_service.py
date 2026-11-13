@@ -196,6 +196,7 @@ class StepImportService:
                 "ok": True,
                 "snapshot": project_snapshot(state),
                 "modelTransform": _viewport_transform(placement_matrix),
+                "placementMatrix": [[float(value) for value in row] for row in placement_matrix],
                 "supportCount": len(supports),
                 "referenceFace": face_index,
                 "performance": report,

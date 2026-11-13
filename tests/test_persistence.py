@@ -82,16 +82,47 @@ def test_step_reference_and_placement_round_trip_and_validate(tmp_path):
     from palletlab.application.service import ApplicationService
 
     state = _state()
-    state.step_model = {"source": str(tmp_path / "model.step"), "transform": list(range(16)), "starts": [100, 150]}
+    placement_matrix = [
+        [1.0, 0.0, 0.0, 100.0],
+        [0.0, 1.0, 0.0, 200.0],
+        [0.0, 0.0, 1.0, 300.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    state.step_model = {
+        "source": str(tmp_path / "model.step"),
+        "transform": list(range(16)),
+        "starts": [100, 150],
+        "placement_matrix": placement_matrix,
+    }
     path = tmp_path / "project.palletlab.json"
     save_project(path, state)
     assert load_project(path).step_model == state.step_model
     calculated = ApplicationService().calculate(project_to_dict(state))
     assert calculated["ok"]
     assert calculated["snapshot"]["project"]["step_model"] == state.step_model
-    payload = project_to_dict(state)
+    def step_payload():
+        payload = project_to_dict(state)
+        payload["step_model"] = {
+            **payload["step_model"],
+            "transform": list(payload["step_model"]["transform"]),
+            "placement_matrix": [list(row) for row in payload["step_model"]["placement_matrix"]],
+        }
+        return payload
+
+    payload = step_payload()
+    payload["step_model"].pop("placement_matrix")
+    assert project_from_dict(payload).step_model == {
+        "source": str(tmp_path / "model.step"),
+        "transform": list(range(16)),
+        "starts": [100, 150],
+    }
+    payload = step_payload()
     payload["step_model"]["transform"] = [1, 2]
     with pytest.raises(ProjectPersistenceError, match="STEP-модели"):
+        project_from_dict(payload)
+    payload = step_payload()
+    payload["step_model"]["placement_matrix"][1][1] = float("nan")
+    with pytest.raises(ProjectPersistenceError, match="Матрица размещения"):
         project_from_dict(payload)
 
 

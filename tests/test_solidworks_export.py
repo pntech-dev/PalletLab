@@ -18,9 +18,11 @@ from palletlab.exporters.solidworks import (
     _metres,
     _new_document,
     _resolve_templates,
+    _solidworks_step_component_transform,
     create_output_directory,
 )
 from palletlab.core.materials import get_material
+from palletlab.exporters.drawings import SpecificationRow
 
 
 def _result():
@@ -90,6 +92,7 @@ def test_drawing_preserves_exported_assembly_metadata(tmp_path, monkeypatch):
 
     assembly = tmp_path / "Pallet.SLDASM"
     assembly.touch()
+    (tmp_path / "Модель_экспорта.SLDASM").touch()
     (tmp_path / "~$Pallet.SLDASM").touch()
     metadata = tmp_path / ".palletlab-drawing.json"
     metadata.write_text('{"pallet": {"length": 1234}}', encoding="utf-8")
@@ -108,6 +111,231 @@ def test_drawing_preserves_exported_assembly_metadata(tmp_path, monkeypatch):
     assert captured[0][3] == metadata
     assert captured[0][2].parent.name == "Чертежи"
     assert metadata.read_text(encoding="utf-8") == '{"pallet": {"length": 1234}}'
+
+
+def test_packaging_drawing_targets_explicit_assembly_and_uses_its_specification(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from palletlab.exporters import solidworks
+    from palletlab.exporters.drawings import DrawingScope
+
+    assembly = tmp_path / "Модель_экспорта.SLDASM"
+    assembly.touch()
+    captured = []
+    pythoncom = SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)
+    monkeypatch.setattr(solidworks, "_load_solidworks_api", lambda: {
+        "pythoncom": pythoncom, "SldWorks": lambda: SimpleNamespace(Visible=False),
+    })
+    monkeypatch.setattr(solidworks, "_resolve_drawing_template", lambda *_args: tmp_path / "drawing.drwdot")
+    monkeypatch.setattr(solidworks, "_create_drawing_with_helper", lambda *args: captured.append(args))
+    rows = (SpecificationRow(1, "Поддон", "1200×800×210", 1, "Поддон"),)
+
+    solidworks.create_drawings(tmp_path, DrawingScope.ASSEMBLY_ONLY, model_path=assembly, specification_rows=rows)
+
+    metadata = captured[0][3]
+    payload = json.loads(metadata.read_text(encoding="utf-8"))
+    assert captured[0][1] == assembly
+    assert payload["specification"][0]["name"] == "Поддон"
+    assert "pallet" not in payload
+
+
+def test_step_component_transform_maps_pallet_coordinates_to_solidworks_axes():
+    matrix = (
+        (0.0, -1.0, 0.0, 100.0),
+        (1.0, 0.0, 0.0, 200.0),
+        (0.0, 0.0, 1.0, 300.0),
+        (0.0, 0.0, 0.0, 1.0),
+    )
+
+    assert _solidworks_step_component_transform(matrix) == (
+        0.0, 0.0, 1.0,
+        -1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.1, 0.3, 0.2,
+        1.0, 0.0, 0.0, 0.0,
+    )
+
+
+@pytest.mark.parametrize(("document_type", "suffix"), [(1, ".SLDPRT"), (2, ".SLDASM")])
+def test_step_import_uses_solidworks_neutral_file_import_api(tmp_path, monkeypatch, document_type, suffix):
+    from types import SimpleNamespace
+
+    from palletlab.exporters import solidworks
+
+    step_path = tmp_path / "equipment.step"
+    step_path.touch()
+    native_part = tmp_path / "equipment.SLDPRT"
+    import_data = SimpleNamespace(MapConfigurationData=True)
+    imported_document = SimpleNamespace(GetType=lambda: document_type)
+    calls = []
+
+    class _Variant:
+        def __init__(self, _variant_type, value):
+            self.value = value
+
+    class _Application:
+        def __init__(self):
+            self.toggles = {111: False, 112: True, 113: True}
+
+        def GetUserPreferenceStringValue(self, preference):
+            calls.append(("get_string", preference))
+            return "previous-template"
+
+        def GetUserPreferenceToggle(self, preference):
+            calls.append(("get_toggle", preference))
+            return self.toggles[preference]
+
+        def SetUserPreferenceStringValue(self, preference, value):
+            calls.append(("set_string", preference, value))
+            return True
+
+        def SetUserPreferenceToggle(self, preference, value):
+            calls.append(("set_toggle", preference, value))
+            self.toggles[preference] = value
+            return value
+
+        def GetImportFileData(self, path):
+            calls.append(("import_data", path))
+            return import_data
+
+        def LoadFile4(self, path, options, data, errors):
+            calls.append(("load", path, options, data, errors))
+            return imported_document
+
+    saved = []
+    monkeypatch.setattr(solidworks, "_save", lambda _api, document, path: saved.append((document, path)))
+    api = {
+        "pythoncom": SimpleNamespace(VT_BYREF=1, VT_I4=3),
+        "win32": SimpleNamespace(VARIANT=_Variant),
+        "const": {
+            "user_preferences": SimpleNamespace(swDefaultTemplatePart=8, swDefaultTemplateAssembly=9),
+            "user_preference_toggles": SimpleNamespace(swAlwaysUseDefaultTemplates=111, swMultiCAD_Enable3DInterconnect=112, swImportMultBodyAsPartData=113),
+        },
+    }
+
+    application = _Application()
+    result = solidworks._import_step_model(api, application, step_path, native_part, tmp_path / "part.prtdot", tmp_path / "assembly.asmdot")
+
+    load_call = next(call for call in calls if call[0] == "load")
+    assert ("import_data", str(step_path)) in calls
+    assert load_call[:4] == ("load", str(step_path), "r", import_data)
+    assert load_call[4].value == 0
+    assert ("set_string", 9, str(tmp_path / "assembly.asmdot")) in calls
+    assert ("set_string", 9, "previous-template") in calls
+    assert import_data.MapConfigurationData is False
+    assert ("set_string", 8, str(tmp_path / "part.prtdot")) in calls
+    assert ("set_string", 8, "previous-template") in calls
+    assert ("set_toggle", 111, False) in calls
+    assert application.toggles == {111: False, 112: True, 113: True}
+    assert ("set_toggle", 112, False) in calls
+    assert ("set_toggle", 112, True) in calls
+    assert result == native_part.with_suffix(suffix)
+    assert saved == [(imported_document, result)]
+
+
+def test_export_assembly_imports_step_before_adding_native_component(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from palletlab.exporters import solidworks
+
+    pallet = tmp_path / "pallet.SLDASM"
+    pallet.touch()
+    step_model = tmp_path / "equipment.step"
+    step_model.write_text("step", encoding="utf-8")
+    imported_document = SimpleNamespace(GetType=lambda: 1)
+    load_calls = []
+    saved = []
+
+    class _Variant:
+        def __init__(self, _variant_type, value):
+            self.value = value
+
+    class _Assembly:
+        def AddComponents3(self, names, _matrices, _coordinate_systems):
+            self.component_names = names.value
+            return True
+
+        def EditRebuild3(self):
+            pass
+
+        def ShowNamedView2(self, *_args):
+            pass
+
+        def ViewZoomtofit2(self):
+            pass
+
+    assembly = _Assembly()
+
+    class _Application:
+        ActiveDoc = assembly
+
+        def __init__(self):
+            self.toggles = {111: False, 112: True, 113: True}
+
+        def GetUserPreferenceStringValue(self, _preference):
+            return ""
+
+        def GetUserPreferenceToggle(self, preference):
+            return self.toggles[preference]
+
+        def SetUserPreferenceStringValue(self, *_args):
+            return True
+
+        def SetUserPreferenceToggle(self, preference, value):
+            self.toggles[preference] = value
+            return value
+
+        def GetImportFileData(self, _path):
+            return SimpleNamespace(MapConfigurationData=True)
+
+        def LoadFile4(self, path, options, data, errors):
+            load_calls.append((path, options, data))
+            return imported_document
+
+    application = _Application()
+    api = {
+        "pythoncom": SimpleNamespace(
+            VT_BYREF=1, VT_I4=3, VT_ARRAY=0x2000, VT_BSTR=8, VT_R8=5,
+        ),
+        "win32": SimpleNamespace(
+            VARIANT=_Variant,
+            GetActiveObject=lambda _name: application,
+        ),
+        "Convert": SimpleNamespace(ToInt32=int),
+        "const": {
+            "views": SimpleNamespace(swIsometricView=3),
+            "user_preferences": SimpleNamespace(swDefaultTemplatePart=8, swDefaultTemplateAssembly=9),
+            "user_preference_toggles": SimpleNamespace(swAlwaysUseDefaultTemplates=111, swMultiCAD_Enable3DInterconnect=112, swImportMultBodyAsPartData=113),
+        },
+    }
+
+    def save(_api, document, path):
+        saved.append((document, path))
+        Path(path).touch()
+
+    monkeypatch.setattr(solidworks, "_save", save)
+    monkeypatch.setattr(solidworks, "_new_document", lambda *_args: None)
+    monkeypatch.setattr(solidworks, "_flag_methods", lambda *_args: None)
+    filename = tmp_path / "Модель_экспорта.SLDASM"
+
+    solidworks._create_export_assembly(
+        api,
+        object(),
+        tmp_path / "assembly.asmdot",
+        tmp_path / "part.prtdot",
+        pallet,
+        step_model,
+        ((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+        filename,
+    )
+
+    native_part = tmp_path / "Модель_экспорта" / "equipment.SLDPRT"
+    copied_step = tmp_path / "Модель_экспорта" / "equipment.step"
+    assert load_calls[0][:2] == (str(copied_step), "r")
+    assert load_calls[0][2].MapConfigurationData is False
+    assert assembly.component_names == (str(pallet), str(native_part))
+    assert saved == [(imported_document, native_part), (assembly, filename)]
 
 
 def test_export_can_create_parts_without_an_assembly(tmp_path, monkeypatch):
@@ -469,3 +697,97 @@ def test_drawing_uses_the_automation_drawing_document(monkeypatch, tmp_path):
     )
 
     assert drawing.created == [str(model)]
+
+
+def test_step_import_restores_solidworks_preferences_on_failure(tmp_path):
+    from types import SimpleNamespace
+    from palletlab.exporters.solidworks import SolidWorksExportError, _import_step_model
+
+    class App:
+        def __init__(self):
+            self.paths = {8: "old-part", 9: "old-assembly"}
+            self.toggles = {111: False, 112: True, 113: True}
+        def GetUserPreferenceStringValue(self, key): return self.paths[key]
+        def SetUserPreferenceStringValue(self, key, value): self.paths[key] = value; return True
+        def GetUserPreferenceToggle(self, key): return self.toggles[key]
+        def SetUserPreferenceToggle(self, key, value): self.toggles[key] = value; return True
+        def GetImportFileData(self, _path): return None
+
+    app = App()
+    api = {"const": {"user_preferences": SimpleNamespace(swDefaultTemplatePart=8, swDefaultTemplateAssembly=9),
+                     "user_preference_toggles": SimpleNamespace(swAlwaysUseDefaultTemplates=111, swMultiCAD_Enable3DInterconnect=112, swImportMultBodyAsPartData=113)}}
+    with pytest.raises(SolidWorksExportError, match="параметры импорта"):
+        _import_step_model(api, app, tmp_path / "source.step", tmp_path / "model.SLDPRT",
+                           tmp_path / "part.prtdot", tmp_path / "assembly.asmdot")
+    assert app.paths == {8: "old-part", 9: "old-assembly"}
+    assert app.toggles == {111: False, 112: True, 113: True}
+
+
+def test_step_import_retries_incompatible_source_with_converted_geometry(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from palletlab.exporters import solidworks
+    calls = []
+    document = SimpleNamespace(GetType=lambda: 2)
+    class Variant:
+        def __init__(self, _kind, value): self.value = value
+    class App:
+        def __init__(self): self.paths = {8: "part", 9: "assembly"}; self.flags = {111: False, 112: True, 113: True}
+        def GetUserPreferenceStringValue(self, key): return self.paths[key]
+        def SetUserPreferenceStringValue(self, key, value): self.paths[key] = value; return True
+        def GetUserPreferenceToggle(self, key): return self.flags[key]
+        def SetUserPreferenceToggle(self, key, value): self.flags[key] = value; return True
+        def GetImportFileData(self, path): calls.append(("data", Path(path))); return SimpleNamespace()
+        def LoadFile4(self, path, _mode, _data, errors):
+            calls.append(("load", Path(path)))
+            if len([call for call in calls if call[0] == "load"]) == 1:
+                errors.value = 1
+                return None
+            return document
+    api = {"pythoncom": SimpleNamespace(VT_BYREF=1, VT_I4=3), "win32": SimpleNamespace(VARIANT=Variant),
+           "const": {"user_preferences": SimpleNamespace(swDefaultTemplatePart=8, swDefaultTemplateAssembly=9),
+                     "user_preference_toggles": SimpleNamespace(swAlwaysUseDefaultTemplates=111, swMultiCAD_Enable3DInterconnect=112, swImportMultBodyAsPartData=113)}}
+    source = tmp_path / "source.step"
+    converted = tmp_path / "palletlab-compatible.step"
+    saved = []
+    monkeypatch.setattr(solidworks, "_write_compatible_step", lambda src, dst: calls.append(("convert", src, dst)))
+    monkeypatch.setattr(solidworks, "_save", lambda _api, obj, path: saved.append((obj, path)))
+    result = solidworks._import_step_model(api, App(), source, tmp_path / "model.SLDPRT", tmp_path / "p.prtdot", tmp_path / "a.asmdot")
+    assert ("convert", source, converted) in calls
+    assert ("load", converted) in calls
+    assert saved == [(document, result)]
+    assert result.suffix == ".SLDASM"
+
+
+def test_compatible_step_preserves_solids_without_expanding_assembly(tmp_path):
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+    from OCP.Interface import Interface_Static
+    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Reader, STEPControl_Writer
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS_Compound
+    from palletlab.exporters.solidworks import _write_compatible_step
+
+    shape = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(shape)
+    builder.Add(shape, BRepPrimAPI_MakeBox(10, 20, 30).Shape())
+    builder.Add(shape, BRepPrimAPI_MakeBox(gp_Pnt(50, 0, 0), 10, 20, 30).Shape())
+    source, target = tmp_path / "source.step", tmp_path / "compatible.step"
+    writer = STEPControl_Writer()
+    writer.Transfer(shape, STEPControl_AsIs)
+    writer.Write(str(source))
+    previous = Interface_Static.IVal_s("write.step.assembly")
+    _write_compatible_step(source, target)
+    assert Interface_Static.IVal_s("write.step.assembly") == previous
+    assert b"NEXT_ASSEMBLY_USAGE_OCCURRENCE" not in target.read_bytes()
+    reader = STEPControl_Reader()
+    reader.ReadFile(str(target))
+    reader.TransferRoots()
+    explorer = TopExp_Explorer(reader.OneShape(), TopAbs_SOLID)
+    count = 0
+    while explorer.More():
+        count += 1
+        explorer.Next()
+    assert count == 2

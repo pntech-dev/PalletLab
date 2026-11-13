@@ -4,6 +4,7 @@ from palletlab.application.service import ApplicationService
 from palletlab.core.models import DirectionInput
 from palletlab.core.persistence import project_to_dict
 from palletlab.core.project_state import ProjectState
+from palletlab.exporters.drawings import DrawingScope
 
 
 def test_calculate_returns_a_fresh_web_snapshot() -> None:
@@ -367,6 +368,64 @@ def test_kompas_export_recalculates_the_project_before_calling_the_exporter(tmp_
     assert captured["result"].beams_3d
 
 
+def test_kompas_export_includes_the_saved_step_model_in_the_export_assembly(tmp_path, monkeypatch) -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    matrix = [
+        [1.0, 0.0, 0.0, 10.0],
+        [0.0, 1.0, 0.0, 20.0],
+        [0.0, 0.0, 1.0, 30.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    project["step_model"] = {
+        "source": str(tmp_path / "equipment.step"),
+        "transform": list(range(16)),
+        "starts": [0, 0],
+        "placement_matrix": matrix,
+    }
+    captured = {}
+    monkeypatch.setattr(
+        "palletlab.application.service.export_kompas_pallet",
+        lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs) or tmp_path / "export",
+    )
+
+    response = service.export_kompas(project, str(tmp_path), include_export_model=True)
+
+    assert response == {"ok": True, "output": str(tmp_path / "export")}
+    assert captured["kwargs"] == {
+        "step_model_path": tmp_path / "equipment.step",
+        "placement_matrix": tuple(tuple(row) for row in matrix),
+    }
+
+
+def test_kompas_export_recovers_placement_for_legacy_step_projects(tmp_path, monkeypatch) -> None:
+    from palletlab.application.step_import_service import _viewport_transform
+
+    service = ApplicationService()
+    project = service.default_project()
+    placement = [
+        [1.0, 0.0, 0.0, 10.0],
+        [0.0, 0.0, 1.0, 20.0],
+        [0.0, 1.0, 0.0, 30.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    project["step_model"] = {
+        "source": str(tmp_path / "equipment.step"),
+        "transform": _viewport_transform(placement),
+        "starts": [0, 0],
+    }
+    captured = {}
+    monkeypatch.setattr(
+        "palletlab.application.service.export_kompas_pallet",
+        lambda *args, **kwargs: captured.update(kwargs) or tmp_path / "export",
+    )
+
+    response = service.export_kompas(project, str(tmp_path), include_export_model=True)
+
+    assert response["ok"] is True
+    assert captured["placement_matrix"] == tuple(tuple(row) for row in placement)
+
+
 def test_solidworks_export_passes_explicit_web_resources(tmp_path, monkeypatch) -> None:
     service = ApplicationService()
     part = tmp_path / "part.prtdot"
@@ -408,6 +467,52 @@ def test_solidworks_export_passes_explicit_web_resources(tmp_path, monkeypatch) 
     assert captured["material_name"] == "Pine"
     assert captured["include_assembly"] is True
     assert captured["result"].beams_3d
+
+
+def test_solidworks_export_includes_the_saved_step_model_in_the_export_assembly(tmp_path, monkeypatch) -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    part = tmp_path / "part.prtdot"
+    assembly = tmp_path / "assembly.asmdot"
+    library = tmp_path / "materials.sldmat"
+    for path in (part, assembly, library):
+        path.touch()
+    matrix = [
+        [1.0, 0.0, 0.0, 10.0],
+        [0.0, 1.0, 0.0, 20.0],
+        [0.0, 0.0, 1.0, 30.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    project["step_model"] = {
+        "source": str(tmp_path / "equipment.step"),
+        "transform": list(range(16)),
+        "starts": [0, 0],
+        "placement_matrix": matrix,
+    }
+    captured = {}
+    monkeypatch.setattr(
+        "palletlab.application.service.export_solidworks_pallet",
+        lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs) or tmp_path / "export",
+    )
+
+    response = service.export_solidworks(
+        project,
+        str(tmp_path),
+        {
+            "partTemplate": str(part),
+            "assemblyTemplate": str(assembly),
+            "materialLibrary": str(library),
+            "materialName": "Pine",
+        },
+        include_export_model=True,
+    )
+
+    assert response == {"ok": True, "output": str(tmp_path / "export")}
+    assert captured["kwargs"] == {
+        "include_assembly": True,
+        "step_model_path": tmp_path / "equipment.step",
+        "placement_matrix": tuple(tuple(row) for row in matrix),
+    }
 
 
 def test_solidworks_parts_only_export_does_not_require_assembly_template(tmp_path, monkeypatch) -> None:
@@ -473,6 +578,50 @@ def test_create_solidworks_drawings_uses_the_current_calculation(tmp_path, monke
     assert captured["scope"].value == "parts_and_assembly"
     assert captured["template"] == r"C:\templates\drawing.drwdot"
     assert captured["result"].beams_3d
+
+
+def test_create_packaging_drawing_targets_the_export_assembly(tmp_path, monkeypatch) -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    project["step_model"] = {
+        "source": str(tmp_path / "equipment.step"),
+        "transform": list(range(16)),
+        "starts": [0, 0],
+        "placement_matrix": [
+            [1.0, 0.0, 0.0, 10.0],
+            [0.0, 1.0, 0.0, 20.0],
+            [0.0, 0.0, 1.0, 30.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    }
+    (tmp_path / "УЧ-Поддон.a3d").touch()
+    captured = {}
+
+    def create(directory, scope, template, result, model_path, specification_rows):
+        captured.update(
+            directory=directory,
+            scope=scope,
+            template=template,
+            result=result,
+            model_path=model_path,
+            specification_rows=specification_rows,
+        )
+        return tmp_path / "Drawings"
+
+    monkeypatch.setattr("palletlab.application.service.create_kompas_drawings", create)
+
+    response = service.create_drawings(
+        project, "kompas", "assembly", str(tmp_path), None, include_export_model=True
+    )
+
+    assert response == {"ok": True, "output": str(tmp_path / "Drawings")}
+    assert captured["model_path"] == tmp_path / "УЧ-Поддон.a3d"
+    assert captured["scope"] is DrawingScope.ASSEMBLY_ONLY
+    rows = captured["specification_rows"]
+    assert rows[-1].name == "equipment"
+    assert rows[-1].quantity == 1
+    assert rows[0].name == "Поддон"
+    assert len(rows) == 2 and rows[0].quantity == 1
 
 
 def test_create_drawings_rejects_invalid_web_options(tmp_path) -> None:

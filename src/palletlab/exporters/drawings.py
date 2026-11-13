@@ -74,3 +74,28 @@ def assembly_specification_rows(result: PalletResult) -> tuple[SpecificationRow,
         for index, (dimensions, quantity) in enumerate(sorted(groups.items()), start=1)
     )
 
+
+def packaging_specification_rows(
+    result: PalletResult,
+    model_name: str,
+    *,
+    pallet_is_subassembly: bool = True,
+) -> tuple[SpecificationRow, ...]:
+    """Describe the pallet components and imported model in the export assembly."""
+    def number(value: float) -> str:
+        return str(int(value)) if float(value).is_integer() else f"{value:g}"
+
+    if pallet_is_subassembly:
+        pallet_dimensions = "×".join(number(value) for value in (
+            result.pallet_length, result.pallet_width, result.pallet_height,
+        ))
+        pallet_rows = (SpecificationRow(1, "Поддон", pallet_dimensions, 1, "Поддон"),)
+    else:
+        pallet_rows = assembly_specification_rows(result)
+
+    model_designation = Path(model_name).stem
+    return (
+        *pallet_rows,
+        SpecificationRow(len(pallet_rows) + 1, model_designation, "", 1, model_designation),
+    )
+

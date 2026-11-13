@@ -85,8 +85,13 @@ try
         palletViewLayout = CreatePalletOrthographicViews(drawing, model, modelPath, pallet, hasTechnicalRequirements);
         ApplyGostSheetScale(sw, drawing, pallet, hasTechnicalRequirements);
     }
-    else if (hasPartRequirements)
-        CreatePartOrthographicViews(drawing, drawingModel, model, modelPath, hasTechnicalRequirements);
+    else if (hasPartRequirements || hasAssemblyRequirements)
+    {
+        if (hasAssemblyRequirements)
+            CreatePackagingViews(drawing, drawingModel, model, modelPath, drawingTemplate);
+        else
+            CreatePartOrthographicViews(drawing, drawingModel, model, modelPath, hasTechnicalRequirements);
+    }
     else
     {
         if (!drawing.Create3rdAngleViews2(modelPath))
@@ -108,6 +113,8 @@ try
     {
         AddPartTechnicalRequirements(drawing, drawingModel);
     }
+    if (pallet?.Pallet is not null)
+        AddPalletPlanSheet(drawing, drawingModel, model, modelPath, drawingTemplate);
     drawingModel.ForceRebuild3(false);
     drawingModel.GraphicsRedraw2();
     drawingModel.SaveAs3(Path.GetFullPath(args[2]), (int)swSaveAsVersion_e.swSaveAsCurrentVersion, (int)swSaveAsOptions_e.swSaveAsOptions_Silent);
@@ -170,7 +177,7 @@ static void ApplyGostSheetScale(SldWorks sw, DrawingDoc drawing, PalletDrawingDa
     var sheetHeight = Convert.ToDouble(properties.GetValue(6));
     var views = GetModelViews(drawing).ToArray();
     var lowerReserve = reserveTechnicalRequirements ? TechnicalRequirementsLowerReserve : WorkingLowerReserve;
-    var chosen = allowed.FirstOrDefault(scale => pallet is not null
+    var chosen = allowed.FirstOrDefault(scale => pallet?.Pallet is not null
         ? PalletLayoutFits(pallet.Pallet, scale.Numerator / scale.Denominator, sheetWidth, sheetHeight, lowerReserve)
         : ViewsFitOnSheet(views, scale.Numerator / scale.Denominator, sheetWidth, sheetHeight, lowerReserve));
     if (chosen == default)
@@ -201,8 +208,9 @@ static bool PalletLayoutFits(PalletEnvelope? pallet, double scale, double sheetW
     var width = pallet.Width / 1000d * scale;
     var height = pallet.Height / 1000d * scale;
     return length + width + ProjectedViewGap <= sheetWidth - WorkingLeftMargin - WorkingRightMargin
-        && width + ManualAnnotationReserve + ProjectedViewGap + height
-            <= sheetHeight - lowerReserve - WorkingUpperMargin;
+        && height + ManualAnnotationReserve <= sheetHeight - lowerReserve - WorkingUpperMargin
+        && length <= sheetWidth - WorkingLeftMargin - WorkingRightMargin
+        && width <= sheetHeight - WorkingLowerReserve - WorkingUpperMargin;
 }
 
 static void CenterProjectedViewGroup(
@@ -303,6 +311,150 @@ static void CreatePartOrthographicViews(
     drawingModel.ForceRebuild3(false);
 }
 
+static Sheet AddPlanSheet(DrawingDoc drawing, Sheet firstSheet, string drawingTemplate)
+{
+    var properties = (Array)firstSheet.GetProperties2();
+    var format = firstSheet.GetTemplateName();
+    if (!Path.IsPathRooted(format))
+        format = Path.Combine(Path.GetDirectoryName(drawingTemplate)!, format);
+    if (!File.Exists(format))
+        throw new InvalidOperationException($"Не найден формат листа для второго листа: {format}");
+    if (!drawing.NewSheet4("Вид сверху", Convert.ToInt32(properties.GetValue(0)),
+        (int)swDwgTemplates_e.swDwgTemplateCustom,
+        Convert.ToDouble(properties.GetValue(2)), Convert.ToDouble(properties.GetValue(3)),
+        Convert.ToDouble(properties.GetValue(4)) != 0, format,
+        Convert.ToDouble(properties.GetValue(5)), Convert.ToDouble(properties.GetValue(6)),
+        "Default", 0, 0, 0, 0, 0, 0))
+        throw new InvalidOperationException("SolidWorks не создал второй лист чертежа.");
+    return (Sheet)drawing.GetCurrentSheet();
+}
+
+static void FitPlanSheet(DrawingDoc drawing, ModelDoc2 drawingModel, Sheet sheet,
+    SolidWorks.Interop.sldworks.View top, string drawingTemplate)
+{
+    // Select only an explicitly named subsequent-sheet format; an A3 frame
+    // cannot simply be placed on A4 without clipping its border and stamp.
+    var linkedFormat = sheet.GetTemplateName();
+    var directories = new[] { Path.GetDirectoryName(drawingTemplate), Path.GetDirectoryName(linkedFormat) }
+        .Where(path => !string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
+        .Distinct(StringComparer.OrdinalIgnoreCase);
+    var formats = directories.SelectMany(path => Directory.EnumerateFiles(path!, "*.slddrt"))
+        .Where(path =>
+        {
+            var name = Path.GetFileNameWithoutExtension(path).Replace(" ", "").ToLowerInvariant();
+            return (name.Contains("а4") || name.Contains("a4"))
+                && (name.Contains("лист2") || name.Contains("sheet2"));
+        }).ToArray();
+    var outline = (Array)top.GetOutline();
+    var width = Convert.ToDouble(outline.GetValue(2)) - Convert.ToDouble(outline.GetValue(0));
+    var height = Convert.ToDouble(outline.GetValue(3)) - Convert.ToDouble(outline.GetValue(1));
+    const double left = 0.025, right = 0.010, bottom = 0.070, upper = 0.015;
+    var choices = new[] { (Width: 0.210, Height: 0.297, Landscape: false), (Width: 0.297, Height: 0.210, Landscape: true) };
+    foreach (var choice in choices)
+    {
+        if (width > choice.Width - left - right || height > choice.Height - bottom - upper)
+            continue;
+        var format = formats.FirstOrDefault(path =>
+        {
+            var name = Path.GetFileNameWithoutExtension(path).ToLowerInvariant();
+            var landscape = name.Contains("горизонт") || name.Contains("landscape");
+            return choice.Landscape == landscape;
+        });
+        if (format is null)
+            continue;
+        var props = (Array)sheet.GetProperties2();
+        if (!drawing.SetupSheet6(sheet.GetName(), (int)swDwgPaperSizes_e.swDwgPapersUserDefined,
+            (int)swDwgTemplates_e.swDwgTemplateCustom, Convert.ToDouble(props.GetValue(2)),
+            Convert.ToDouble(props.GetValue(3)), Convert.ToDouble(props.GetValue(4)) != 0,
+            format, choice.Width, choice.Height, "Default", false, 0, 0, 0, 0, 0, 0))
+            throw new InvalidOperationException("SolidWorks не настроил формат второго листа.");
+        top.Position = new[] { left + (choice.Width - left - right) / 2d, bottom + (choice.Height - bottom - upper) / 2d };
+        drawingModel.ForceRebuild3(false);
+        return;
+    }
+}
+
+static void AddPalletPlanSheet(DrawingDoc drawing, ModelDoc2 drawingModel, ModelDoc2 model, string modelPath, string drawingTemplate)
+{
+    var first = (Sheet)drawing.GetCurrentSheet();
+    var firstName = first.GetName();
+    var firstProperties = (Array)first.GetProperties2();
+    var numerator = Convert.ToDouble(firstProperties.GetValue(2));
+    var denominator = Convert.ToDouble(firstProperties.GetValue(3));
+    var second = AddPlanSheet(drawing, first, drawingTemplate);
+    var properties = (Array)second.GetProperties2();
+    var topName = ResolveStandardViewName(model, "top", "сверх");
+    var top = drawing.CreateDrawViewFromModelView3(modelPath, topName,
+        Convert.ToDouble(properties.GetValue(5)) / 2d,
+        WorkingLowerReserve + (Convert.ToDouble(properties.GetValue(6)) - WorkingLowerReserve - WorkingUpperMargin) / 2d, 0d)
+        ?? throw new InvalidOperationException("SolidWorks не создал вид поддона сверху.");
+    // SolidWorks may automatically change the new sheet's scale when its
+    // first view is inserted. Restore the scale selected for the first sheet.
+    second.SetScale(numerator, denominator, true, false);
+    top.UseSheetScale = 1;
+    drawingModel.ForceRebuild3(false);
+    FitPlanSheet(drawing, drawingModel, second, top, drawingTemplate);
+    if (!drawing.ActivateSheet(firstName))
+        throw new InvalidOperationException("SolidWorks не активировал первый лист чертежа.");
+}
+
+static void CreatePackagingViews(DrawingDoc drawing, ModelDoc2 drawingModel, ModelDoc2 model, string modelPath, string drawingTemplate)
+{
+    var first = (Sheet)drawing.GetCurrentSheet();
+    var firstName = first.GetName();
+    var properties = (Array)first.GetProperties2();
+    var sheetWidth = Convert.ToDouble(properties.GetValue(5));
+    var sheetHeight = Convert.ToDouble(properties.GetValue(6));
+    first.SetScale(1, 1, true, false);
+    var front = drawing.CreateDrawViewFromModelView3(modelPath, ResolveStandardViewName(model, "front", "сперед"), 0, 0, 0)
+        ?? throw new InvalidOperationException("SolidWorks не создал главный вид упаковочной сборки.");
+    var right = drawing.CreateDrawViewFromModelView3(modelPath, ResolveStandardViewName(model, "right", "справ"), 0, 0, 0)
+        ?? throw new InvalidOperationException("SolidWorks не создал боковой вид упаковочной сборки.");
+    front.UseSheetScale = 1;
+    right.UseSheetScale = 1;
+    drawingModel.ForceRebuild3(false);
+    var frontSize = GetUnscaledViewSize(front);
+    var rightSize = GetUnscaledViewSize(right);
+    var second = AddPlanSheet(drawing, first, drawingTemplate);
+    second.SetScale(1, 1, true, false);
+    var top = drawing.CreateDrawViewFromModelView3(modelPath, ResolveStandardViewName(model, "top", "сверх"), 0, 0, 0)
+        ?? throw new InvalidOperationException("SolidWorks не создал вид упаковочной сборки сверху.");
+    top.UseSheetScale = 1;
+    drawingModel.ForceRebuild3(false);
+    var topSize = GetUnscaledViewSize(top);
+    var availableWidth = sheetWidth - WorkingLeftMargin - WorkingRightMargin;
+    var elevationHeight = sheetHeight - TechnicalRequirementsLowerReserve - WorkingUpperMargin;
+    var planHeight = sheetHeight - WorkingLowerReserve - WorkingUpperMargin;
+    var scale = AllowedDrawingScales().FirstOrDefault(candidate =>
+    {
+        var factor = candidate.Numerator / candidate.Denominator;
+        return (frontSize.Width + rightSize.Width) * factor + ProjectedViewGap <= availableWidth
+            && Math.Max(frontSize.Height, rightSize.Height) * factor <= elevationHeight
+            && topSize.Width * factor <= availableWidth && topSize.Height * factor <= planHeight;
+    });
+    if (scale == default)
+        throw new InvalidOperationException("Не удалось подобрать масштаб для упаковочного чертежа.");
+    second.SetScale(scale.Numerator, scale.Denominator, true, false);
+    top.UseSheetScale = 1;
+    top.Position = new[] { WorkingLeftMargin + availableWidth / 2d, WorkingLowerReserve + planHeight / 2d };
+    drawingModel.ForceRebuild3(false);
+    FitPlanSheet(drawing, drawingModel, second, top, drawingTemplate);
+    if (!drawing.ActivateSheet(firstName))
+        throw new InvalidOperationException("SolidWorks не активировал первый лист чертежа.");
+    first.SetScale(scale.Numerator, scale.Denominator, true, false);
+    front.UseSheetScale = 1;
+    right.UseSheetScale = 1;
+    var ratio = scale.Numerator / scale.Denominator;
+    var groupWidth = (frontSize.Width + rightSize.Width) * ratio + ProjectedViewGap;
+    var left = WorkingLeftMargin + (availableWidth - groupWidth) / 2d;
+    var centerY = TechnicalRequirementsLowerReserve + elevationHeight / 2d;
+    front.Position = new[] { left + frontSize.Width * ratio / 2d, centerY };
+    right.Position = new[] { left + frontSize.Width * ratio + ProjectedViewGap + rightSize.Width * ratio / 2d, centerY };
+    if (!right.AlignWithView((int)swAlignViewTypes_e.swAlignViewHorizontalCenter, front))
+        throw new InvalidOperationException("SolidWorks не выровнял виды упаковочной сборки.");
+    drawingModel.ForceRebuild3(false);
+}
+
 static (double Width, double Height) GetUnscaledViewSize(SolidWorks.Interop.sldworks.View view)
 {
     var outline = (Array)view.GetOutline();
@@ -329,7 +481,7 @@ static PalletViewLayout CreatePalletOrthographicViews(
     var topHeight = pallet.Pallet.Width / 1000d * scale;
     var endWidth = pallet.Pallet.Width / 1000d * scale;
     var groupWidth = sideWidth + ProjectedViewGap + endWidth;
-    var groupHeight = sideHeight + ManualAnnotationReserve + ProjectedViewGap + topHeight;
+    var groupHeight = sideHeight + ManualAnnotationReserve;
     var workingWidth = sheetWidth - WorkingLeftMargin - WorkingRightMargin;
     var lowerReserve = reserveTechnicalRequirements ? TechnicalRequirementsLowerReserve : WorkingLowerReserve;
     var workingHeight = sheetHeight - lowerReserve - WorkingUpperMargin;
@@ -342,7 +494,7 @@ static PalletViewLayout CreatePalletOrthographicViews(
     var groupLeft = WorkingLeftMargin + (workingWidth - groupWidth) / 2d;
     var groupBottom = lowerReserve + (workingHeight - groupHeight) / 2d;
     var sideX = groupLeft + sideWidth / 2d;
-    var sideY = groupBottom + topHeight + ManualAnnotationReserve + ProjectedViewGap + sideHeight / 2d;
+    var sideY = groupBottom + ManualAnnotationReserve + sideHeight / 2d;
     var topX = sideX;
     var topY = groupBottom + topHeight / 2d;
     var endX = groupLeft + sideWidth + ProjectedViewGap + endWidth / 2d;
@@ -359,20 +511,12 @@ static PalletViewLayout CreatePalletOrthographicViews(
     // view for some pallet assemblies.
     var side = drawing.CreateDrawViewFromModelView3(modelPath, sideName, sideX, sideY, 0d)
         ?? throw new InvalidOperationException("SolidWorks did not create the side view.");
-    var top = drawing.CreateDrawViewFromModelView3(modelPath, topName, topX, topY, 0d)
-        ?? throw new InvalidOperationException("SolidWorks did not create the top view.");
     var end = drawing.CreateDrawViewFromModelView3(modelPath, endName, endX, endY, 0d)
         ?? throw new InvalidOperationException("SolidWorks did not create the end view.");
     side.UseSheetScale = 1;
-    top.UseSheetScale = 1;
     end.UseSheetScale = 1;
-    // Retain the projection relationship: the top view may move only along
-    // the vertical projection line, and the end view only along the horizontal
-    // one.  Use the documented object-based API rather than the name-based
-    // convenience methods; the latter produced invalid dependent views in
-    // some SolidWorks installations after a user drag.
-    if (!top.AlignWithView((int)swAlignViewTypes_e.swAlignViewVerticalCenter, side)
-        || !end.AlignWithView((int)swAlignViewTypes_e.swAlignViewHorizontalCenter, side))
+    // Keep the end view aligned with the elevation; the plan is on sheet two.
+    if (!end.AlignWithView((int)swAlignViewTypes_e.swAlignViewHorizontalCenter, side))
         throw new InvalidOperationException("SolidWorks did not preserve the projected-view alignment.");
     return new PalletViewLayout(
         sideX - sideWidth / 2d, sideY - sideHeight / 2d, sideWidth, sideHeight,
@@ -615,7 +759,7 @@ static void AddRotatedSpecificationHeaders(
         [5] = ("Кол.", 0.0030),
     };
     var x = TitleBlockLeft;
-    var notes = new List<(Note Note, double CenterX, double CenterY)>();
+    var notes = new List<(Note Note, double CenterX, double CenterY, double Height)>();
     for (var column = 0; column < columnWidths.Count; column++)
     {
         if (captions.TryGetValue(column, out var caption)
@@ -627,19 +771,23 @@ static void AddRotatedSpecificationHeaders(
                 caption.Height,
                 Math.PI / 2d) is Note note)
         {
-            notes.Add((note, x + columnWidths[column] / 2d, tableTop - SpecificationHeaderHeight / 2d));
+            notes.Add((note, x + columnWidths[column] / 2d, tableTop - SpecificationHeaderHeight / 2d, caption.Height));
         }
         else if (captions.ContainsKey(column))
             throw new InvalidOperationException("SolidWorks did not create a rotated specification header.");
         x += columnWidths[column];
     }
     drawingModel.ForceRebuild3(false);
-    foreach (var (note, centerX, centerY) in notes)
+    foreach (var (note, centerX, centerY, height) in notes)
     {
         var annotation = note.GetAnnotation() as Annotation
             ?? throw new InvalidOperationException("SolidWorks did not expose a rotated specification header.");
-        if (!annotation.SetTextFormat(0, true, null))
-            throw new InvalidOperationException("SolidWorks did not apply the template text style to a specification header.");
+        var format = annotation.GetTextFormat(0) as TextFormat
+            ?? throw new InvalidOperationException("SolidWorks did not expose the specification header text format.");
+        format.CharHeight = height;
+        if (!annotation.SetTextFormat(0, false, format))
+            throw new InvalidOperationException("SolidWorks did not apply the specification header text format.");
+        note.Angle = Math.PI / 2d;
         drawingModel.ForceRebuild3(false);
         var extent = GetNoteExtent(note);
         var position = (Array)annotation.GetPosition();

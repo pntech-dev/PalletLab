@@ -128,7 +128,12 @@ const DIRECTION_FIELD_LABELS: Record<DirectionField, string> = {
   margin_end: "Отступ с конца, мм",
 };
 export type Project = {
-  step_model?: { source: string; transform: number[]; starts: [number, number] };
+  step_model?: {
+    source: string;
+    transform: number[];
+    starts: [number, number];
+    placement_matrix?: number[][];
+  };
   pallet: {
     length: Direction;
     width: Direction;
@@ -191,6 +196,7 @@ type StepImportOperation = {
 type StepModelResponse = { ok: boolean; error?: string; assetUrl?: string };
 type StepPalletResponse = CalculationResponse & {
   modelTransform?: number[];
+  placementMatrix?: number[][];
   supportCount?: number;
   referenceFace?: number;
 };
@@ -315,6 +321,7 @@ declare global {
           project: Project,
           includeAssembly?: boolean,
           parentDirectory?: string,
+          includeExportModel?: boolean,
         ) => Promise<CommandResponse>;
         select_solidworks_template: (kind: "part" | "assembly" | "drawing") => Promise<SolidWorksTemplateResponse>;
         select_solidworks_material_library: () => Promise<SolidWorksMaterialsResponse>;
@@ -325,6 +332,7 @@ declare global {
           options: SolidWorksOptions,
           includeAssembly?: boolean,
           parentDirectory?: string,
+          includeExportModel?: boolean,
         ) => Promise<CommandResponse>;
         create_drawings: (
           project: Project,
@@ -332,6 +340,7 @@ declare global {
           scope: DrawingScope,
           template: string | null,
           modelDirectory?: string,
+          includeExportModel?: boolean,
         ) => Promise<CommandResponse>;
         import_step_model: () => Promise<StepImportOperation>;
         restore_step_model: (path: string) => Promise<StepImportOperation>;
@@ -397,6 +406,8 @@ export function App() {
   const [includePartModels, setIncludePartModels] = useState(true);
   const [includePalletDrawing, setIncludePalletDrawing] = useState(true);
   const [includePartDrawings, setIncludePartDrawings] = useState(false);
+  const [includeExportModel, setIncludeExportModel] = useState(false);
+  const [includePackagingDrawing, setIncludePackagingDrawing] = useState(false);
   const [buildingStepPallet, setBuildingStepPallet] = useState(false);
   const [selectedBeams, setSelectedBeams] = useState<ViewportBeam[]>([]);
   const [beamTool, setBeamTool] = useState<"none" | "delete" | "section">("none");
@@ -441,6 +452,17 @@ export function App() {
     () => JSON.stringify({ undo: undoStack.current, redo: redoStack.current }),
     [historyVersion],
   );
+  const hasBuiltStepModel = Boolean(
+    stepPalletBuilt
+    && project?.step_model?.source
+    && project.step_model.transform.length === 16,
+  );
+  useEffect(() => {
+    if (!hasBuiltStepModel) {
+      setIncludeExportModel(false);
+      setIncludePackagingDrawing(false);
+    }
+  }, [hasBuiltStepModel]);
   const hasUnsavedChanges = project !== null && (
     JSON.stringify(project) !== savedProject || currentHistory !== savedHistory
   );
@@ -469,6 +491,8 @@ export function App() {
     stepImportStartedAt.current = performance.now();
     stepPlacement.current = { transform: model.transform, starts: model.starts };
     setStepPalletBuilt(true);
+    setIncludeExportModel(true);
+    setIncludePackagingDrawing(true);
     try {
       const response = await window.pywebview!.api!.restore_step_model(model.source);
       if (generation !== stepRestoreGeneration.current) return;
@@ -816,12 +840,18 @@ export function App() {
       setIncludePalletModel(false);
       setIncludePalletDrawing(false);
       setIncludePartDrawings(false);
+      setIncludeExportModel(false);
+      setIncludePackagingDrawing(false);
     }
   }
 
   function changePalletModel(enabled: boolean) {
     setIncludePalletModel(enabled);
-    if (!enabled) setIncludePalletDrawing(false);
+    if (!enabled) {
+      setIncludePalletDrawing(false);
+      setIncludeExportModel(false);
+      setIncludePackagingDrawing(false);
+    }
   }
 
   async function browseExportDirectory() {
@@ -844,6 +874,10 @@ export function App() {
   async function exportCad() {
     const api = window.pywebview?.api;
     if (!api || !project || !includePartModels) return;
+    if (includeExportModel && !hasBuiltStepModel) {
+      setExportDirectoryError("Чтобы создать модель упаковки, сначала постройте поддон по STEP-модели.");
+      return;
+    }
     if (!exportDirectory.trim()) {
       setExportDirectoryError("Укажите папку для сохранения экспорта.");
       return;
@@ -869,9 +903,13 @@ export function App() {
     try {
       let models: CommandResponse;
       if (cad === "kompas") {
-        models = await api.export_kompas(project, includePalletModel, exportDirectory.trim());
+        models = await api.export_kompas(
+          project, includePalletModel, exportDirectory.trim(), includeExportModel,
+        );
       } else if (options) {
-        models = await api.export_solidworks(project, options, includePalletModel, exportDirectory.trim());
+        models = await api.export_solidworks(
+          project, options, includePalletModel, exportDirectory.trim(), includeExportModel,
+        );
       } else {
         throw new Error("Сначала настройте экспорт SolidWorks.");
       }
@@ -893,13 +931,18 @@ export function App() {
           : includePartDrawings
             ? "parts"
             : null;
-      if (drawingScope) {
+      const drawingJobs: { scope: DrawingScope; exportModel: boolean }[] = [];
+      if (drawingScope) drawingJobs.push({ scope: drawingScope, exportModel: false });
+      if (includePackagingDrawing) drawingJobs.push({ scope: "assembly", exportModel: true });
+      let drawingsOutput: string | null = null;
+      for (const job of drawingJobs) {
         const drawings = await api.create_drawings(
           project,
           cad,
-          drawingScope,
+          job.scope,
           cad === "solidworks" ? options?.drawingTemplate || null : null,
           models.output,
+          job.exportModel,
         );
         if (drawings.cancelled || !drawings.ok) {
           setExportResult({
@@ -909,10 +952,13 @@ export function App() {
           });
           return;
         }
+        drawingsOutput = drawings.output ?? drawingsOutput;
+      }
+      if (drawingsOutput) {
         setExportResult({
           target,
           ok: true,
-          message: `Модели сохранены в папке:\n${models.output}\n\nЧертежи сохранены в папке:\n${drawings.output}`,
+          message: `Модели сохранены в папке:\n${models.output}\n\nЧертежи сохранены в папке:\n${drawingsOutput}`,
         });
         return;
       }
@@ -1013,8 +1059,13 @@ export function App() {
     setBuildingStepPallet(true);
     try {
       const response = await api.build_step_pallet(stepImport.operationId, project, faceIndex);
+      if (response.ok && response.snapshot && response.modelTransform && stepImport.path && !response.placementMatrix) {
+        setCalculationError("Не удалось определить матрицу размещения STEP-модели.");
+        return;
+      }
       applyCalculation(response);
-      if (response.ok && response.snapshot && response.modelTransform && stepImport.path) {
+      if (response.ok && response.snapshot && response.modelTransform && response.placementMatrix && stepImport.path) {
+        const placementMatrix = response.placementMatrix;
         const margins = palletMargins(response.snapshot.project);
         stepPlacement.current = {
           transform: response.modelTransform,
@@ -1022,7 +1073,12 @@ export function App() {
         };
         const nextProject: Project = {
           ...response.snapshot.project,
-          step_model: { source: stepImport.path, transform: response.modelTransform, starts: [margins[0], margins[2]] },
+          step_model: {
+            source: stepImport.path,
+            transform: response.modelTransform,
+            starts: [margins[0], margins[2]],
+            placement_matrix: placementMatrix,
+          },
           view: { ...response.snapshot.project.view, camera: "isometric" },
         };
         updateHistory(project, nextProject);
@@ -1030,6 +1086,8 @@ export function App() {
         setStepModel((model) => model ? { ...model, transform: response.modelTransform! } : model);
         setSelectedStepFace(null);
         setStepPalletBuilt(true);
+        setIncludeExportModel(true);
+        setIncludePackagingDrawing(true);
         setCameraRequest((value) => value + 1);
         setFitRequest((value) => value + 1);
         setCalculationError(null);
@@ -1904,6 +1962,23 @@ export function App() {
                   />
                   Модели деталей
                 </label>
+                {hasBuiltStepModel ? (
+                  <label className="export-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={includeExportModel}
+                      disabled={!includePartModels || !includePalletModel}
+                      onChange={(event) => {
+                        setIncludeExportModel(event.target.checked);
+                        if (!event.target.checked) setIncludePackagingDrawing(false);
+                      }}
+                    />
+                    Модель упаковки
+                  </label>
+                ) : null}
+                {hasBuiltStepModel && includeExportModel && exportCadSystem === "solidworks" ? (
+                  <p className="modal-hint">Если SolidWorks не сможет прочитать исходный STEP, будет создана совместимая копия геометрии. Имена и цвета компонентов могут не сохраниться; копия может быть значительно больше оригинала и потребовать много памяти при импорте. Исходный STEP останется в папке экспорта.</p>
+                ) : null}
                 <label className="export-checkbox">
                   <input
                     type="checkbox"
@@ -1922,6 +1997,21 @@ export function App() {
                   />
                   Чертежи деталей
                 </label>
+                {hasBuiltStepModel ? (
+                  <label className="export-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={includePackagingDrawing}
+                      disabled={
+                        !includeExportModel
+                        || !includePartModels
+                        || !includePalletModel
+                      }
+                      onChange={(event) => setIncludePackagingDrawing(event.target.checked)}
+                    />
+                    Упаковочный чертёж
+                  </label>
+                ) : null}
               </fieldset>
               <label className="file-field export-directory-field">
                 Папка сохранения
@@ -1959,7 +2049,15 @@ export function App() {
           <div className="modal-backdrop" role="presentation">
             <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite">
               <h2>Экспорт выполняется</h2>
-              <p>{exporting === "solidworks" ? "SolidWorks создаёт выбранные модели и чертежи…" : "КОМПАС-3D создаёт выбранные модели и чертежи…"}</p>
+              <p>
+                {exporting === "solidworks"
+                  ? includeExportModel
+                    ? "SolidWorks импортирует STEP-модель и формирует упаковочную сборку. Для крупных моделей подготовка может занять несколько минут…"
+                    : "SolidWorks создаёт выбранные модели и чертежи…"
+                  : includeExportModel
+                    ? "КОМПАС-3D импортирует STEP-модель и формирует упаковочную сборку. Импорт крупной модели может занять несколько минут…"
+                    : "КОМПАС-3D создаёт выбранные модели и чертежи…"}
+              </p>
               <progress aria-label="Процесс экспорта" />
               <p className="modal-hint">Не закрывайте PalletLab и CAD-систему до завершения операции.</p>
             </section>

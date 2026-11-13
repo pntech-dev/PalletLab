@@ -8,7 +8,7 @@ import logging
 import math
 from pathlib import Path
 import shutil
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:
     from palletlab.core.models import Beam3D, PalletResult
@@ -25,6 +25,8 @@ from palletlab.exporters.naming import beam_display_name
 
 LOGGER = logging.getLogger(__name__)
 
+_LOAD_FORMAT_STEP = -3
+
 
 _A3_LANDSCAPE_FORMAT = 3
 _VIEW_ORIGIN_X = 75.0
@@ -34,6 +36,13 @@ _VIEW_ORIGIN_X = 75.0
 _VIEW_ORIGIN_Y = 245.0
 _VIEW_GAP = 25.0
 _MAX_VIEW_WIDTH = 260.0
+# A3 landscape sheet. The main view grows upward from its insertion point;
+# the plan view grows downward below it, separated by the projection gap.
+_PACKAGING_BOTTOM_CLEARANCE = 60.0
+_PACKAGING_TOP_LIMIT = 282.0
+_PACKAGING_ELEVATION_BOTTOM = 135.0
+_PACKAGING_ELEVATION_X = 55.0
+_PACKAGING_AVAILABLE_WIDTH = 275.0
 _STANDARD_SCALE_DENOMINATORS = (1, 2, 2.5, 4, 5, 10, 20, 25, 40, 50, 100, 200, 400, 500)
 # Front, top and left are the three orthogonal projections.  Including both
 # left and right produces duplicate opposing side views in KOMPAS.
@@ -80,12 +89,22 @@ def create_drawings(
     scope: DrawingScope,
     configured_template: str | Path | None = None,
     pallet_result: PalletResult | None = None,
+    model_path: str | Path | None = None,
+    specification_rows: tuple[SpecificationRow, ...] | None = None,
 ) -> Path:
     """Create KOMPAS associative standard views from native models."""
     directory = Path(model_directory)
     parts = sorted(directory.glob("*.m3d"))
-    assembly = next(iter(directory.glob("*.a3d")), None)
-    if scope is DrawingScope.PARTS_AND_ASSEMBLY:
+    assembly = next(
+        (model for model in sorted(directory.glob("*.a3d")) if model.stem not in ("Модель_экспорта", "УЧ-Поддон")),
+        None,
+    )
+    if model_path is not None:
+        selected_model = Path(model_path)
+        if not selected_model.is_file():
+            raise DrawingExportError(f"Модель для чертежа не найдена: {selected_model}")
+        models = [selected_model]
+    elif scope is DrawingScope.PARTS_AND_ASSEMBLY:
         models = [*parts, *([assembly] if assembly else [])]
     elif scope is DrawingScope.PARTS_ONLY:
         models = parts
@@ -114,7 +133,11 @@ def create_drawings(
                 template,
                 include_assembly_requirements=model.suffix.casefold() == ".a3d",
                 specification_rows=(
-                    stored_rows or (assembly_specification_rows(pallet_result) if pallet_result else ())
+                    (
+                        specification_rows
+                        if specification_rows is not None
+                        else stored_rows or (assembly_specification_rows(pallet_result) if pallet_result else ())
+                    )
                     if model.suffix.casefold() == ".a3d" else ()
                 ),
             )
@@ -176,11 +199,16 @@ def _create_drawing(
     parameters.projectionLink = 1
     view_parameters = parameters.GetViewParam()
     view_parameters.Init()
-    view_parameters.x = _VIEW_ORIGIN_X
-    view_parameters.y = _VIEW_ORIGIN_Y
-    view_parameters.scale_ = _drawing_scale(model)
-    if not document.ksCreateSheetStandartViews(parameters, _PALLET_VIEW_MASK, _VIEW_GAP, _VIEW_GAP):
+    packaging = _is_packaging_model(model)
+    view_parameters.x = _PACKAGING_ELEVATION_X if packaging else _VIEW_ORIGIN_X
+    scale = _drawing_scale(model)
+    view_parameters.y = _packaging_origin_y(model, scale) if packaging else _VIEW_ORIGIN_Y
+    view_parameters.scale_ = scale
+    view_mask = 0x01 | 0x10 if packaging else _PALLET_VIEW_MASK
+    if not document.ksCreateSheetStandartViews(parameters, view_mask, _VIEW_GAP, _VIEW_GAP):
         raise DrawingExportError(f"КОМПАС-3D не создал стандартные виды для {model.name}.")
+    if packaging:
+        _add_packaging_plan_sheet(kompas, document, parameters, view_parameters, model, scale)
     # Standard views are inserted as associative objects.  KOMPAS creates
     # their nodes first and calculates the visible geometry on rebuild; saving
     # before this step leaves warning-marked, empty views in the drawing tree.
@@ -363,14 +391,83 @@ def _stored_specification_rows(directory: Path) -> tuple[SpecificationRow, ...]:
         return ()
 
 
+def _is_packaging_model(model: Path) -> bool:
+    return model.stem in ("УЧ-Поддон", "Модель_экспорта")
+
+
+def _packaging_dimensions(model: Path) -> tuple[float, float, float]:
+    try:
+        values = json.loads(model.with_name(".palletlab-packaging-bounds.json").read_text(encoding="utf-8"))["dimensions"]
+        if len(values) != 3:
+            raise ValueError("invalid dimensions")
+        dimensions = tuple(map(float, values))
+        if not all(math.isfinite(value) and value > 0 for value in dimensions):
+            raise ValueError("invalid dimensions")
+        return dimensions
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise DrawingExportError("Не удалось определить габариты упаковочной сборки для выбора масштаба.") from exc
+
+
+def _packaging_origin_y(model: Path, scale: float) -> float:
+    _, _, height = _packaging_dimensions(model)
+    working_height = _PACKAGING_TOP_LIMIT - _PACKAGING_ELEVATION_BOTTOM
+    return _PACKAGING_ELEVATION_BOTTOM + (working_height - height * scale) / 2.0
+
+
+def _add_packaging_plan_sheet(kompas, document, parameters, view_parameters, model: Path, scale: float) -> None:
+    """Put an independent associative plan on the smallest suitable sheet."""
+    try:
+        # KOMPAS displays sheets side by side in document coordinates.
+        sheets = kompas.ksGetApplication7.ActiveDocument.LayoutSheets
+        first_format = sheets.Item(0).Format
+        if sheets.Count != 1 or first_format.Format != 3 or first_format.VerticalOrientation:
+            raise RuntimeError("нужен шаблон с одним горизонтальным листом A3")
+        sheet = sheets.Add()
+        length, width, _ = _packaging_dimensions(model)
+        # In the #Сверху projection the view grows rightwards and downwards
+        # from its insertion point, with model width along the sheet X axis.
+        plan_width, plan_height = width * scale, length * scale
+        if plan_width <= 180.0 and plan_height <= 217.0:
+            sheet_width, sheet_height, use_a4, vertical = 210.0, 297.0, True, True
+        elif plan_width <= 267.0 and plan_height <= 130.0:
+            sheet_width, sheet_height, use_a4, vertical = 297.0, 210.0, True, False
+        else:
+            sheet_width, sheet_height, use_a4, vertical = 420.0, 297.0, False, False
+        sheet_format = sheet.Format
+        sheet_format.Format = 4 if use_a4 else 3  # A4 or A3
+        sheet_format.FormatMultiplicity = 1
+        sheet_format.VerticalOrientation = vertical
+        # Some KOMPAS versions return False even when the format is applied.
+        sheet.Update()
+        if sheet.Format.Format != (4 if use_a4 else 3) or bool(sheet.Format.VerticalOrientation) != vertical:
+            raise RuntimeError("не удалось настроить формат второго листа")
+        document.ksOpenView(0)
+        parameters.projectionName = "#Сверху"
+        view_parameters.x = 420.0 + 20.0 + (sheet_width - 30.0 - plan_width) / 2.0
+        working_height = sheet_height - 15.0 - _PACKAGING_BOTTOM_CLEARANCE
+        view_parameters.y = _PACKAGING_BOTTOM_CLEARANCE + (working_height - plan_height) / 2.0 + plan_height
+        if not document.ksCreateSheetStandartViews(parameters, 0x01, _VIEW_GAP, _VIEW_GAP):
+            raise RuntimeError("не удалось создать вид сверху")
+    except Exception as exc:
+        raise DrawingExportError(f"КОМПАС-3D не создал второй лист упаковочного чертежа: {exc}") from exc
+
+
 def _drawing_scale(model: Path) -> float:
     """Select a conventional reduction scale that keeps the model on an A3 sheet."""
-    dimensions = _dimensions_from_model_name(model)
-    largest_dimension = max(dimensions, default=1000.0)
-    required_denominator = max(1.0, largest_dimension / _MAX_VIEW_WIDTH)
+    if _is_packaging_model(model):
+        length, width, height = _packaging_dimensions(model)
+        required = max(
+            (length + width) / _PACKAGING_AVAILABLE_WIDTH,
+            height / (_PACKAGING_TOP_LIMIT - _PACKAGING_ELEVATION_BOTTOM),
+            max(length, width) / (_PACKAGING_TOP_LIMIT - _PACKAGING_BOTTOM_CLEARANCE),
+            1.0,
+        )
+    else:
+        dimensions = _dimensions_from_model_name(model)
+        required = max(1.0, max(dimensions, default=1000.0) / _MAX_VIEW_WIDTH)
     denominator = next(
-        (candidate for candidate in _STANDARD_SCALE_DENOMINATORS if candidate >= required_denominator),
-        math.ceil(required_denominator / 100.0) * 100.0,
+        (candidate for candidate in _STANDARD_SCALE_DENOMINATORS if candidate >= required),
+        math.ceil(required / 100.0) * 100.0,
     )
     return 1.0 / denominator
 
@@ -429,13 +526,21 @@ def export_pallet(
     parent_directory: str | Path,
     material_id: str = "pine",
     include_assembly: bool = True,
+    step_model_path: str | Path | None = None,
+    placement_matrix: Sequence[Sequence[float]] | None = None,
 ) -> Path:
     """Create KOMPAS M3D parts and optionally an A3D assembly."""
+    if (step_model_path is None) != (placement_matrix is None):
+        raise KompasExportError("Для модели экспорта нужны STEP-файл и матрица размещения.")
+    if step_model_path is not None and not include_assembly:
+        raise KompasExportError("Модель упаковки требует включённую модель поддона.")
     api = _load_kompas_api()
     output = create_output_directory(parent_directory, result)
     api["pythoncom"].CoInitialize()
     try:
-        return _export(api, result, output, get_material(material_id), include_assembly)
+        return _export(
+            api, result, output, get_material(material_id), include_assembly, step_model_path, placement_matrix
+        )
     except Exception as exc:
         shutil.rmtree(output, ignore_errors=True)
         raise KompasExportError(str(exc)) from exc
@@ -466,7 +571,13 @@ def _export(
     output: Path,
     material: PalletMaterial,
     include_assembly: bool = True,
+    step_model_path: str | Path | None = None,
+    placement_matrix: Sequence[Sequence[float]] | None = None,
 ) -> Path:
+    if (step_model_path is None) != (placement_matrix is None):
+        raise KompasExportError("Для модели экспорта нужны STEP-файл и матрица размещения.")
+    if step_model_path is not None and not include_assembly:
+        raise KompasExportError("Модель упаковки требует включённую модель поддона.")
     try:
         kompas = api["Dispatch"]("KOMPAS.Application.5")
         kompas.Visible = True
@@ -496,6 +607,17 @@ def _export(
         assembly_file = output / f"Поддон_{_format_number(result.pallet_length)}x{_format_number(result.pallet_width)}.a3d"
         _create_assembly(kompas, constants3d, result, parts, assembly_file)
         _write_drawing_metadata(output, result, parts, groups)
+        if step_model_path is not None:
+            if placement_matrix is None:
+                raise KompasExportError("Для модели экспорта не задана матрица размещения STEP-модели.")
+            _create_export_assembly(
+                kompas,
+                constants3d,
+                assembly_file,
+                Path(step_model_path),
+                placement_matrix,
+                output / "УЧ-Поддон.a3d",
+            )
     return output
 
 
@@ -636,16 +758,20 @@ def _placement(beam: Beam3D) -> tuple[float, float, float, bool]:
 
 
 def _insert_component(assembly, constants3d, filename: Path, beam: Beam3D) -> None:
+    x, y, z, rotate_90 = _placement(beam)
+    axes = (0.0, 1.0, 0.0, -1.0, 0.0, 0.0) if rotate_90 else (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    _insert_component_at(assembly, constants3d, filename, (x, y, z), axes)
+
+
+def _insert_component_at(assembly, constants3d, filename: Path, origin, axes) -> None:
     part = assembly.GetPart(constants3d.pNew_Part)
     if part is None or not assembly.SetPartFromFile(str(filename), part, True):
         raise KompasExportError(f"Не удалось вставить {filename.name} в сборку.")
     placement = part.GetPlacement()
     if placement is None:
         raise KompasExportError(f"Не удалось получить координаты компонента {filename.name}.")
-    x, y, z, rotate_90 = _placement(beam)
-    if not placement.SetOrigin(x, y, z):
+    if not placement.SetOrigin(*origin):
         raise KompasExportError(f"Не удалось задать координаты компонента {filename.name}.")
-    axes = (0.0, 1.0, 0.0, -1.0, 0.0, 0.0) if rotate_90 else (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
     if not placement.SetAxes(*axes) or not part.UpdatePlacement():
         raise KompasExportError(f"Не удалось ориентировать компонент {filename.name}.")
 
@@ -664,3 +790,97 @@ def _create_assembly(kompas, constants3d, result: PalletResult, parts, filename:
         assembly.ZoomPrevNextOrAll(0)
     except Exception:
         LOGGER.debug("KOMPAS does not support optional assembly zoom.", exc_info=True)
+
+
+def _create_export_assembly(
+    kompas,
+    constants3d,
+    pallet_assembly: Path,
+    step_model_path: Path,
+    placement_matrix: Sequence[Sequence[float]],
+    filename: Path,
+) -> None:
+    """Create a package assembly from the pallet and placed imported model."""
+    if len(placement_matrix) != 4 or any(len(row) != 4 for row in placement_matrix):
+        raise KompasExportError("Матрица размещения STEP-модели должна иметь размер 4×4.")
+    if not step_model_path.is_file():
+        raise KompasExportError(f"Исходная STEP-модель не найдена: {step_model_path}")
+    if not pallet_assembly.is_file():
+        raise KompasExportError(f"Модель поддона не найдена: {pallet_assembly}")
+
+    model_directory = filename.parent / "Модель_экспорта"
+    model_directory.mkdir(exist_ok=True)
+    copied_model = model_directory / step_model_path.name
+    try:
+        shutil.copy2(step_model_path, copied_model)
+    except OSError as exc:
+        raise KompasExportError(f"Не удалось скопировать STEP-модель в папку экспорта: {exc}") from exc
+
+    native_model = model_directory / f"{step_model_path.stem}.m3d"
+    native_model = _import_step_model(kompas, constants3d, copied_model, native_model)
+
+    assembly = kompas.Document3D
+    if not assembly.Create(False, False):
+        raise KompasExportError("Не удалось создать сборку модели экспорта КОМПАС.")
+    _insert_component_at(assembly, constants3d, pallet_assembly, (0.0, 0.0, 0.0),
+                         (1.0, 0.0, 0.0, 0.0, 1.0, 0.0))
+    origin = tuple(float(placement_matrix[index][3]) for index in range(3))
+    axes = tuple(
+        float(placement_matrix[row][column])
+        for column in range(2)
+        for row in range(3)
+    )
+    _insert_component_at(assembly, constants3d, native_model, origin, axes)
+    assembly.RebuildDocument()
+    root = assembly.GetPart(constants3d.pTop_Part)
+    if root is None:
+        raise KompasExportError("Не удалось получить свойства упаковочной сборки КОМПАС.")
+    _apply_part_name(root, "УЧ-Поддон")
+    bounds = root.GetGabarit(True, True, 0., 0., 0., 0., 0., 0.)
+    if not isinstance(bounds, tuple) or len(bounds) != 7 or not bounds[0]:
+        raise KompasExportError("Не удалось определить габариты упаковочной сборки КОМПАС.")
+    dimensions = [abs(float(bounds[index + 4]) - float(bounds[index + 1])) for index in range(3)]
+    if not all(math.isfinite(value) and value > 0 for value in dimensions):
+        raise KompasExportError("КОМПАС вернул некорректные габариты упаковочной сборки.")
+    if not assembly.SaveAs(str(filename)):
+        raise KompasExportError(f"Не удалось сохранить {filename.name}.")
+    filename.with_name(".palletlab-packaging-bounds.json").write_text(
+        json.dumps({"dimensions": dimensions}), encoding="utf-8"
+    )
+    try:
+        assembly.ZoomPrevNextOrAll(0)
+    except Exception:
+        LOGGER.debug("KOMPAS does not support optional package-assembly zoom.", exc_info=True)
+
+
+def _import_step_model(kompas, constants3d, step_path: Path, native_model: Path) -> Path:
+    """Import STEP into a native KOMPAS part before inserting it into an assembly."""
+    part = kompas.Document3D
+    if not part.Create(False, True):
+        raise KompasExportError("Не удалось создать деталь для импорта STEP-модели КОМПАС.")
+    parameters = part.AdditionFormatParam()
+    if parameters is None:
+        raise KompasExportError("КОМПАС не предоставил параметры импорта STEP-модели.")
+    parameters.Init()
+    parameters.format = _LOAD_FORMAT_STEP
+    # Init() does not enable geometry options on every KOMPAS installation.
+    if not parameters.SetObjectsOptions(0, True) or not parameters.SetObjectsOptions(2, True):
+        raise KompasExportError("Не удалось включить импорт тел и поверхностей в КОМПАС.")
+    if not part.LoadFromAdditionFormat(str(step_path), parameters):
+        raise KompasExportError(f"КОМПАС не импортировал STEP-модель {step_path.name}.")
+    part.RebuildDocument()
+    root = part.GetPart(constants3d.pTop_Part)
+    bodies = root.BodyCollection() if root is not None else None
+    if bodies is None or bodies.GetCount() == 0:
+        # For STEP assemblies KOMPAS creates a separate A3D and its component
+        # files beside the source, leaving the target part empty.
+        imported_assembly = step_path.with_suffix(".a3d")
+        if imported_assembly.is_file():
+            return imported_assembly
+        raise KompasExportError(
+            f"КОМПАС импортировал STEP-модель {step_path.name} без геометрических тел. "
+            "Проверьте исходный файл или настройки импорта КОМПАС."
+        )
+    if not part.SaveAs(str(native_model)):
+        raise KompasExportError(f"Не удалось сохранить импортированную STEP-модель {native_model.name}.")
+    return native_model

@@ -12,6 +12,7 @@ from palletlab.application.step_import_service import (
     _write_model_asset,
 )
 from palletlab.core.models import DirectionInput
+from palletlab.core.project_state import ProjectState
 
 
 def test_step_import_rejects_non_step_files_without_starting_a_worker(tmp_path):
@@ -109,6 +110,57 @@ def test_step_pallet_layers_keep_every_machine_support_on_one_bearing_plane():
     assert [layer.layer_id for layer in layers] == ["length", "width", "layer-1"]
     assert [layer.axis for layer in layers] == ["length", "width", "length"]
     assert sections == {}
+
+
+def test_build_step_pallet_returns_the_raw_cad_placement_matrix(monkeypatch):
+    from types import SimpleNamespace
+
+    import palletlab.application.snapshots as snapshots
+    import palletlab.importers.step_model as step_model
+    import palletlab.application.service as service_module
+    import palletlab.application.step_import_service as import_service_module
+
+    state = ProjectState(
+        length_input=DirectionInput(70, 50, (1000,), 200, 200, 100, 100),
+        width_input=DirectionInput(70, 50, (500,), 200, 200, 100, 100),
+    )
+    placement = np.eye(4)
+    placement[:3, 3] = (10, 20, 30)
+
+    class Controller:
+        def calculate_layers(self, _layers, show_error):
+            assert show_error is False
+            return SimpleNamespace(beams_3d=())
+
+    service = StepImportService()
+    service.status = lambda _operation_id: {"ok": True, "state": "completed", "path": "cached"}
+    monkeypatch.setattr(import_service_module, "project_from_dict", lambda _project: state)
+    monkeypatch.setattr(import_service_module, "geometry_footprint", lambda *_args: {})
+    monkeypatch.setattr(import_service_module, "_model_pallet_layers", lambda *_args: ([], {}))
+    monkeypatch.setattr(import_service_module, "_model_bearing_height", lambda _result: 210)
+    monkeypatch.setattr(import_service_module, "write_step_performance", lambda *_args: None)
+    monkeypatch.setattr(snapshots, "project_snapshot", lambda _state: {"project": "snapshot"})
+    monkeypatch.setattr(step_model, "load_cached_step_model", lambda _path: SimpleNamespace(mesh=None, edges=None))
+    monkeypatch.setattr(step_model, "coplanar_supports", lambda _model, _face: [object()])
+    monkeypatch.setattr(
+        step_model,
+        "pallet_inputs_from_supports",
+        lambda *_args, **_kwargs: (
+            state.length_input,
+            state.width_input,
+            placement.copy(),
+        ),
+    )
+    monkeypatch.setattr(
+        service_module.ApplicationService,
+        "_controller_for",
+        staticmethod(lambda _state: (Controller(), [])),
+    )
+
+    response = service.build_pallet("operation", {}, 0)
+
+    assert response["ok"] is True
+    assert response["placementMatrix"] == placement.tolist()
 
 
 def test_model_bearing_height_rejects_an_uneven_support_layer():
