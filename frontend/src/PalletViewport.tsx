@@ -275,10 +275,10 @@ function DimensionHitArea({
     end[1] - start[1],
     end[2] - start[2],
   );
-  // The rendered line is intentionally thin. This invisible cuboid covers its
-  // full length and gives it a reliable 160 mm hit target on every DPI scale.
+  // Keep the hit target narrower than the 50 mm minimum spacing between
+  // dimension lines so neighbouring dimensions cannot capture the same point.
   const size: [number, number, number] =
-    dimension.axis === "length" ? [length, 0.16, 0.16] : [0.16, 0.16, length];
+    dimension.axis === "length" ? [length, 0.04, 0.04] : [0.04, 0.04, length];
   return (
     <mesh
       position={middle}
@@ -804,7 +804,8 @@ export default function PalletViewport({
             end[1] - start[1],
             end[2] - start[2],
           );
-          const scale = Math.min(0.06, length / 5);
+          const arrowLength = Math.min(0.08, length / 8);
+          const arrowHalfWidth = arrowLength * 0.25;
           const unit: [number, number, number] = [
             (end[0] - start[0]) / length,
             (end[1] - start[1]) / length,
@@ -817,46 +818,51 @@ export default function PalletViewport({
           const arrow = (origin: [number, number, number], direction: number) =>
             [
               [
-                origin[0] + (unit[0] * direction + side[0]) * scale,
-                origin[1] + (unit[1] * direction + side[1]) * scale,
-                origin[2] + (unit[2] * direction + side[2]) * scale,
+                origin[0] + unit[0] * direction * arrowLength + side[0] * arrowHalfWidth,
+                origin[1] + unit[1] * direction * arrowLength + side[1] * arrowHalfWidth,
+                origin[2] + unit[2] * direction * arrowLength + side[2] * arrowHalfWidth,
               ],
               origin,
               [
-                origin[0] + (unit[0] * direction - side[0]) * scale,
-                origin[1] + (unit[1] * direction - side[1]) * scale,
-                origin[2] + (unit[2] * direction - side[2]) * scale,
+                origin[0] + unit[0] * direction * arrowLength - side[0] * arrowHalfWidth,
+                origin[1] + unit[1] * direction * arrowLength - side[1] * arrowHalfWidth,
+                origin[2] + unit[2] * direction * arrowLength - side[2] * arrowHalfWidth,
               ],
             ] as [number, number, number][];
+          const defaultExtension = (endpoint: [number, number, number]) =>
+            dimension.axis === "length"
+              ? [endpoint[0], endpoint[1], 0] as [number, number, number]
+              : [0, endpoint[1], endpoint[2]] as [number, number, number];
+          const startExtension = dimension.startExtension
+            ? point(dimension.startExtension)
+            : defaultExtension(start);
+          const endExtension = dimension.endExtension
+            ? point(dimension.endExtension)
+            : defaultExtension(end);
+          const dimensionColor = isHovered
+            ? "#e07822"
+            : dimension.editable
+              ? "#315b6c"
+              : "#718087";
           return (
             <group key={index}>
-              {dimension.startExtension ? (
-                <Line
-                  points={[point(dimension.startExtension), start]}
-                  color="#315b6c"
-                  lineWidth={1}
-                />
-              ) : null}
-              {dimension.endExtension ? (
-                <Line
-                  points={[point(dimension.endExtension), end]}
-                  color="#315b6c"
-                  lineWidth={1}
-                />
-              ) : null}
+              <Line
+                points={[startExtension, start]}
+                color={dimensionColor}
+                lineWidth={1}
+              />
+              <Line
+                points={[endExtension, end]}
+                color={dimensionColor}
+                lineWidth={1}
+              />
               <Line
                 points={[start, end]}
-                color={
-                  isHovered
-                    ? "#e07822"
-                    : dimension.editable
-                      ? "#315b6c"
-                      : "#718087"
-                }
+                color={dimensionColor}
                 lineWidth={isHovered ? 3 : dimension.editable ? 2 : 1.5}
               />
-              <Line points={arrow(start, 1)} color="#315b6c" lineWidth={1.5} />
-              <Line points={arrow(end, -1)} color="#315b6c" lineWidth={1.5} />
+              <Line points={arrow(start, 1)} color={dimensionColor} lineWidth={1.5} />
+              <Line points={arrow(end, -1)} color={dimensionColor} lineWidth={1.5} />
               {dimensionEditing && dimension.editable ? (
                 <DimensionHitArea
                   dimension={dimension}
