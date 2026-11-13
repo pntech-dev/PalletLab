@@ -238,25 +238,23 @@ def set_beam_face_distance_input(
 
     Dimension annotations are measured from the outer face of the first edge
     beam.  Moving an internal dimension changes that support beam centre;
-    moving the final dimension changes the pallet's end margin.
+    moving the final dimension changes the last support-to-edge distance.
     """
     last_index = len(direction.beam_centers) - 1
     if not 0 < beam_index <= last_index:
         raise CalculationError("Изменять можно только размер от первого края поддона.")
     _validate_measurements((("Новое расстояние", face_distance),))
     if beam_index == last_index:
-        margin_end = data.margin_end + face_distance - direction.raw_pallet_size
-        _validate_measurements((("Отступ поддона с конца", margin_end),), allow_empty=True)
-        return replace(data, margin_end=margin_end)
+        last_support_to_edge = data.last_support_to_edge + face_distance - direction.raw_pallet_size
+        _validate_measurements((("От последней опоры до габарита", last_support_to_edge),), allow_empty=True)
+        return replace(data, last_support_to_edge=last_support_to_edge)
     positions = list(direction.beam_centers[1:-1])
     positions[beam_index - 1] = face_distance + direction.beam_width / 2
     updated = _input_with_support_positions(data, direction, positions)
-    if beam_index == last_index - 1 and updated.last_support_to_edge < 0:
-        # The last internal beam may legitimately be moved past the current
-        # outer edge.  Keep its existing clearance to that edge and grow the
-        # pallet instead of producing a transient negative trailing distance.
-        trailing_clearance = direction.raw_pallet_size - data.margin_end - direction.beam_centers[last_index - 1]
-        return replace(updated, last_support_to_edge=trailing_clearance)
+    if beam_index == last_index - 1:
+        # Keep the trailing clearance tied to the last support so resizing and
+        # reversing this dimension also reverses the pallet envelope.
+        return replace(updated, last_support_to_edge=data.last_support_to_edge)
     return updated
 
 

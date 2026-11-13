@@ -395,7 +395,9 @@ class PalletController:
             peer_direction = calculate_direction(peer.direction)
             synchronized = replace(
                 peer.direction,
-                margin_end=peer.direction.margin_end + target_raw_size - peer_direction.raw_pallet_size,
+                last_support_to_edge=(
+                    peer.direction.last_support_to_edge + target_raw_size - peer_direction.raw_pallet_size
+                ),
             )
             calculate_direction(synchronized)
             replacements[peer.layer_id] = synchronized

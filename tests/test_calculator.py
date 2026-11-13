@@ -288,6 +288,19 @@ def test_moving_the_last_internal_beam_past_the_edge_grows_the_pallet():
 
     assert recalculated.pallet_size == pytest.approx(direction.pallet_size + 1500)
     assert recalculated.beam_centers[last_internal] - direction.beam_width / 2 == pytest.approx(previous_face + 1500)
+    assert updated_input.last_support_to_edge == LENGTH_EXAMPLE.last_support_to_edge
+    assert updated_input.margin_start == LENGTH_EXAMPLE.margin_start
+    assert updated_input.margin_end == LENGTH_EXAMPLE.margin_end
+
+    restored_input = set_beam_face_distance_input(updated_input, recalculated, last_internal, previous_face)
+    restored = calculate_direction(restored_input)
+
+    assert restored.pallet_size == pytest.approx(direction.pallet_size)
+    assert restored.beam_centers == pytest.approx(direction.beam_centers)
+    assert restored_input.support_distances == pytest.approx(LENGTH_EXAMPLE.support_distances)
+    assert restored_input.last_support_to_edge == LENGTH_EXAMPLE.last_support_to_edge
+    assert restored_input.margin_start == LENGTH_EXAMPLE.margin_start
+    assert restored_input.margin_end == LENGTH_EXAMPLE.margin_end
 
 
 def test_editing_the_first_edge_dimension_is_rejected():
@@ -300,7 +313,9 @@ def test_editing_the_final_dimension_changes_the_pallet_size():
     direction = calculate_direction(LENGTH_EXAMPLE)
     updated_input = set_beam_face_distance_input(LENGTH_EXAMPLE, direction, direction.beam_count - 1, 4300)
 
-    assert updated_input.margin_end == pytest.approx(196)
+    assert updated_input.margin_start == LENGTH_EXAMPLE.margin_start
+    assert updated_input.margin_end == LENGTH_EXAMPLE.margin_end
+    assert updated_input.last_support_to_edge == pytest.approx(LENGTH_EXAMPLE.last_support_to_edge + 96)
     assert calculate_direction(updated_input).pallet_size == pytest.approx(4300)
 
 

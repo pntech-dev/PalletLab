@@ -681,7 +681,9 @@ def test_envelope_dimension_edits_the_last_physical_beam_of_its_axis():
     assert controller.confirm_distance_edit(1000) is not None
 
     assert state.length_input is not None
-    assert state.length_input.margin_end != original.margin_end
+    assert state.length_input.margin_start == original.margin_start
+    assert state.length_input.margin_end == original.margin_end
+    assert state.length_input.last_support_to_edge == pytest.approx(800)
     assert errors == []
 
 
@@ -786,6 +788,11 @@ def test_final_dimension_edit_keeps_parallel_multilayer_grids_on_one_envelope():
     assert updated is not None
     length_sizes = [calculate_direction(layer.direction).pallet_size for layer in state.layers if layer.axis == "length"]
     assert length_sizes == [updated.pallet_length, updated.pallet_length]
+    for layer in state.layers:
+        if layer.axis == "length":
+            assert layer.direction.margin_start == LENGTH_INPUT.margin_start
+            assert layer.direction.margin_end == LENGTH_INPUT.margin_end
+            assert layer.direction.last_support_to_edge == pytest.approx(LENGTH_INPUT.last_support_to_edge + 100)
     assert errors == []
 
 
