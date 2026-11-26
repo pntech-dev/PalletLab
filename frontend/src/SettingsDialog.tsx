@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Settings, Box, Info, Axis3D, X, Copy } from "lucide-react";
+import { Settings, Box, Info, Axis3D, X, Copy, TriangleAlert, WandSparkles } from "lucide-react";
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Button } from "./design/Button";
 import { Checkbox } from "./design/Checkbox";
@@ -11,7 +11,7 @@ type Section = "general" | "view" | "cad" | "about";
 const SECTIONS: { id: Section; title: string; description: string }[] = [
   { id: "general", title: "Общее", description: "Параметры по умолчанию для новых проектов." },
   { id: "view", title: "Вид и управление", description: "Отображение поддона в области 3D-просмотра" },
-  { id: "cad", title: "CAD и чертежи", description: "Шаблоны и параметры экспорта в CAD-системы." },
+  { id: "cad", title: "CAD и чертежи", description: "Шаблоны файлов для экспорта поддона и его деталей" },
   { id: "about", title: "О программе", description: "Версия PalletLab, связь с разработчиком и обновления." },
 ];
 const SECTION_ICONS = { general: Settings, view: Axis3D, cad: Box, about: Info };
@@ -228,7 +228,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
             {SECTIONS.map((item) => { const Icon = SECTION_ICONS[item.id]; return <Button variant="ghost" key={item.id} aria-current={active === item.id ? "page" : undefined}
               onClick={() => setActive(item.id)}><Icon size={16} />{item.title}</Button>; })}
           </nav>
-          <div className={`settings-content${active === "general" || active === "view" ? " settings-content--standard" : ""}`}>
+          <div className={`settings-content${active !== "about" ? " settings-content--standard" : ""}`}>
             <h3>{section.title}</h3>
             <p className="settings-description">{section.description}</p>
 
@@ -271,11 +271,12 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 </div>
               </section>
             </div>}
-            {active === "cad" && <>
-              <section className="settings-group"><h4>Автопоиск шаблонов</h4>
-                <p>Поиск шаблонов детали, сборки и чертежа в настройках SolidWorks, реестре Windows и стандартных папках, а также стандартной библиотеки материалов.</p>
-                <button type="button" className="secondary" disabled={cadBusy || saving} onClick={() => void searchCadFiles()}>{searching ? "Поиск…" : "Найти шаблоны"}</button>
-                {searchMessage ? <p role="status">{searchMessage}</p> : null}
+            {active === "cad" && <div className="settings-standard-groups settings-cad-groups">
+              <section className="settings-cad-search" aria-label="Автопоиск шаблонов">
+                {searchMessage && Object.values(missingFiles).some(Boolean) ? <div className="settings-cad-warning" role="status">
+                  <TriangleAlert size={24} aria-hidden="true" /><div><strong>Не все файлы найдены</strong><p>{searchMessage}</p></div>
+                </div> : searchMessage ? <p className="settings-cad-search-status" role="status">{searchMessage}</p> : null}
+                <Button disabled={cadBusy || saving} onClick={() => void searchCadFiles()}><WandSparkles size={16} aria-hidden="true" />{searching ? "Поиск…" : "Заполнить автоматически"}</Button>
               </section>
               <section className="settings-group settings-cad-group"><h4>SolidWorks</h4>
                 <p>Выберите шаблоны детали, сборки и чертежа, библиотеку материалов и материал для экспорта.</p>
@@ -306,7 +307,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 </label>
                 {cadError ? <p className="error" role="alert">{cadError}</p> : null}
               </section>
-            </>}
+            </div>}
             {active === "about" && <>
               <section className="settings-group"><h4>Версия ПО</h4><p>{version ? `Версия: ${version}` : "Версия недоступна"}</p></section>
               <section className="settings-group"><h4>Ссылки и связь с разработчиком</h4>

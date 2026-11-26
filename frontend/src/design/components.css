@@ -119,6 +119,14 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .settings-content--standard .settings-segment-field { font-size: var(--font-size-body); }
 .settings-content--standard .settings-default-hint { display: flex; align-items: center; gap: var(--space-2); margin: auto 0 0; padding-top: var(--space-6); line-height: var(--line-height-ui); }
 .settings-default-hint svg { flex: none; }
+.settings-cad-search { display: grid; gap: var(--space-2); }
+.settings-cad-search > button { width: 100%; }
+.settings-cad-warning { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-4); border-radius: var(--radius-panel); color: var(--color-yellow-800); background: var(--color-orange-50); }
+.settings-cad-warning svg { flex: none; }
+.settings-cad-warning strong { display: block; margin-bottom: var(--space-2); font-size: var(--font-size-heading); font-weight: 600; }
+.settings-cad-warning p, .settings-cad-search-status { margin: 0; color: inherit; font-size: var(--font-size-body); line-height: var(--line-height-ui); }
+.settings-cad-group .field-error { font-weight: 500; }
+.settings-cad-group input[aria-invalid='true'] { border-color: var(--danger); box-shadow: none; }
 .error, .settings-group .error, .settings-cad-group .field-error { color: var(--danger); }
 .success-message { color: var(--color-green-600); }
 .manual-hud { color: var(--color-white); background: var(--surface-hud); font: var(--font-size-body)/var(--line-height-ui) var(--font-ui); box-shadow: var(--shadow-hud); backdrop-filter: blur(2.5px); }
