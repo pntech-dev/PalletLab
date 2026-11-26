@@ -385,11 +385,20 @@ class _WebSettings:
         "showDimensions": True, "showGrid": True, "camera": "isometric", "checkUpdates": True,
     }
 
+    @staticmethod
+    def _desktop_directory() -> str:
+        try:
+            from win32com.shell import shell, shellcon
+            return str(shell.SHGetFolderPath(0, shellcon.CSIDL_DESKTOPDIRECTORY, None, 0))
+        except (ImportError, OSError):
+            return str(Path.home() / "Desktop")
+
     @classmethod
     def _valid_settings(cls, value: object) -> bool:
         return (isinstance(value, dict)
                 and value.get("rounding") in ("50", "5", "none")
                 and value.get("camera") in ("isometric", "top", "front", "side")
+                and isinstance(value.get("exportDirectory", ""), str)
                 and all(type(value.get(key)) is bool for key in ("autosaveEnabled", "showDimensions", "showGrid", "checkUpdates"))
                 and type(value.get("autosaveMinutes")) is int and 1 <= value["autosaveMinutes"] <= 1440)
 
@@ -400,7 +409,8 @@ class _WebSettings:
             except (OSError, json.JSONDecodeError):
                 payload = {}
         value = payload.get("application") if isinstance(payload, dict) else None
-        return {key: value[key] for key in self._DEFAULTS} if self._valid_settings(value) else self._DEFAULTS.copy()
+        defaults = {**self._DEFAULTS, "exportDirectory": self._desktop_directory()}
+        return {key: value.get(key, default) for key, default in defaults.items()} if self._valid_settings(value) else defaults
 
     def save_application_settings(self, value: object) -> bool:
         return self.save_program_settings(value, None)
@@ -422,6 +432,7 @@ class _WebSettings:
                 if not isinstance(payload, dict):
                     payload = {}
                 payload["application"] = {key: value[key] for key in self._DEFAULTS}
+                payload["application"]["exportDirectory"] = value.get("exportDirectory", self._desktop_directory())
                 if isinstance(solidworks, dict):
                     payload["solidworks"] = {key: solidworks.get(key, "") for key in self._KEYS}
                 self._write(payload)

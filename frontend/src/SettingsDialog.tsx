@@ -167,6 +167,9 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
     }
   }
   const save = async () => {
+    if (!draft.exportDirectory.trim()) {
+      setActive("general"); setError("Укажите папку экспорта по умолчанию."); return;
+    }
     if (!Number.isInteger(draft.autosaveMinutes) || draft.autosaveMinutes < 1 || draft.autosaveMinutes > 1440) {
       setError("Период автосохранения должен быть от 1 до 1440 минут."); return;
     }
@@ -225,6 +228,19 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
             <p className="settings-description">{section.description}</p>
 
             {active === "general" && <>
+              <section className="settings-group"><h4>Экспорт</h4>
+                <label className="file-field">Папка экспорта по умолчанию
+                  <div className="file-field-control"><input value={draft.exportDirectory} onChange={(event) => setDraft({ ...draft, exportDirectory: event.target.value })} /><button type="button" className="secondary" disabled={saving} onClick={() => void (async () => {
+                    try {
+                      const result = await window.pywebview?.api?.choose_export_directory();
+                      if (result?.cancelled) return;
+                      if (!result?.ok || !result.path) { setError(result?.error ?? "Не удалось выбрать папку экспорта."); return; }
+                      setDraft((current) => ({ ...current, exportDirectory: result.path! }));
+                      setError(null);
+                    } catch { setError("Не удалось выбрать папку экспорта."); }
+                  })()}>Обзор…</button></div>
+                </label>
+              </section>
               <section className="settings-group"><h4>Параметры поддона</h4>
                 <label>Округление поддона по умолчанию
                   <select value={draft.rounding} onChange={(event) => setDraft({ ...draft, rounding: event.target.value as AppSettings["rounding"] })}><option value="50">50 мм</option><option value="5">5 мм</option><option value="none">Не округлять</option></select>

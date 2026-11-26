@@ -9,11 +9,13 @@ export type AppSettings = {
   showGrid: boolean;
   camera: CameraPreset;
   checkUpdates: boolean;
+  exportDirectory: string;
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
   rounding: "50", autosaveEnabled: true, autosaveMinutes: 1,
   showDimensions: true, showGrid: true, camera: "isometric", checkUpdates: true,
+  exportDirectory: "",
 };
 
 export function projectWithDefaults(project: Project, settings: AppSettings): Project {

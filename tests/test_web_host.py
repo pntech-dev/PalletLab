@@ -344,6 +344,25 @@ def test_application_settings_persist_and_do_not_replace_cad_settings(tmp_path) 
     assert store.application_settings() == settings
 
 
+def test_export_directory_defaults_to_desktop_and_migrates_existing_settings(tmp_path, monkeypatch) -> None:
+    import json
+
+    monkeypatch.setattr(_WebSettings, "_desktop_directory", staticmethod(lambda: "redirected desktop"))
+    path = tmp_path / "settings.json"
+    store = _WebSettings(path)
+    defaults = store.application_settings()
+    assert defaults["exportDirectory"] == "redirected desktop"
+    legacy = {key: value for key, value in defaults.items() if key != "exportDirectory"}
+    legacy["rounding"] = "5"
+    path.write_text(json.dumps({"application": legacy}), encoding="utf-8")
+    migrated = store.application_settings()
+    assert migrated == {**legacy, "exportDirectory": "redirected desktop"}
+    migrated["exportDirectory"] = str(tmp_path / "exports")
+    assert store.save_application_settings(migrated)
+    assert _WebSettings(path).application_settings() == migrated
+    assert not store.save_application_settings({**migrated, "exportDirectory": 42})
+
+
 def test_web_autosave_survives_settings_instances_and_is_clearable(tmp_path) -> None:
     from palletlab.application.service import ApplicationService
 

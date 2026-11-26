@@ -831,6 +831,8 @@ export function App() {
   }
 
   function openExportSetup() {
+    setExportDirectory(settings.exportDirectory);
+    setExportDirectoryError(null);
     setExportSetupOpen(true);
   }
 
