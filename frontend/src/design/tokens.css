@@ -17,6 +17,7 @@
   --color-blue-800: #193cb8;
   --color-red-500: #fb2c36;
   --color-red-600: #e7000b;
+  --color-red-700: #c10007;
   --color-green-600: #00a63e;
   --color-slate-300: #cad5e2;
   --surface-app: var(--color-neutral-200);
@@ -41,4 +42,6 @@
   --space-6: 24px;
   --shadow-card: 0 4px 24px rgb(0 0 0 / 8%);
   --shadow-hud: 0 4px 15px rgb(0 0 0 / 15%);
+  --surface-hud: rgb(64 64 64 / 70%);
+  --surface-error: rgb(193 0 7 / 70%);
 }

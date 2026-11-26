@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { Settings, Box, Info, Axis3D, X } from "lucide-react";
+import { SegmentedControl } from "./design/SegmentedControl";
+import { Button } from "./design/Button";
 import type { AppSettings } from "./appSettings";
 import type { SolidWorksOptions, UpdateStatus } from "./App";
 
@@ -10,6 +13,7 @@ const SECTIONS: { id: Section; title: string; description: string }[] = [
   { id: "cad", title: "CAD и чертежи", description: "Шаблоны и параметры экспорта в CAD-системы." },
   { id: "about", title: "О программе", description: "Версия PalletLab, связь с разработчиком и обновления." },
 ];
+const SECTION_ICONS = { general: Settings, view: Axis3D, cad: Box, about: Info };
 
 export function SettingsDialog({ version, settings, solidworks, initialSection = "general", update, lastUpdateCheck, onCheckUpdates, onSave, onClose }: {
   version?: string; settings: AppSettings; solidworks: SolidWorksOptions | null; initialSection?: Section;
@@ -217,11 +221,11 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
   return (
     <div className="modal-backdrop" role="presentation">
       <section ref={dialog} tabIndex={-1} className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <header className="settings-header"><h2 id="settings-title">Настройки программы</h2></header>
+        <header className="settings-header"><h2 id="settings-title">Настройки Pallet Lab</h2><Button variant="ghost" aria-label="Закрыть настройки" onClick={onClose} disabled={saving}><X size={16} /></Button></header>
         <div className="settings-layout">
           <nav className="settings-nav" aria-label="Разделы настроек">
-            {SECTIONS.map((item) => <button key={item.id} type="button" aria-current={active === item.id ? "page" : undefined}
-              onClick={() => setActive(item.id)}>{item.title}</button>)}
+            {SECTIONS.map((item) => { const Icon = SECTION_ICONS[item.id]; return <Button variant="ghost" key={item.id} aria-current={active === item.id ? "page" : undefined}
+              onClick={() => setActive(item.id)}><Icon size={16} />{item.title}</Button>; })}
           </nav>
           <div className="settings-content">
             <h3>{section.title}</h3>
@@ -242,9 +246,11 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 </label>
               </section>
               <section className="settings-group"><h4>Параметры поддона</h4>
-                <label>Округление поддона по умолчанию
-                  <select value={draft.rounding} onChange={(event) => setDraft({ ...draft, rounding: event.target.value as AppSettings["rounding"] })}><option value="50">50 мм</option><option value="5">5 мм</option><option value="none">Не округлять</option></select>
-                </label>
+                <div className="settings-segment-field"><span>Округление поддона по умолчанию</span>
+                  <SegmentedControl label="Округление поддона по умолчанию" value={draft.rounding}
+                    options={[{ value: "50", label: "До 50 мм" }, { value: "5", label: "До 5 мм" }, { value: "none", label: "Не округлять" }]}
+                    onChange={(rounding) => setDraft({ ...draft, rounding })} />
+                </div>
               </section>
               <section className="settings-group"><h4>Автосохранение</h4>
                 <label className="settings-check"><input type="checkbox" checked={draft.autosaveEnabled} onChange={(event) => setDraft({ ...draft, autosaveEnabled: event.target.checked })} /> Включить автосохранение</label>
@@ -327,8 +333,8 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
         </div>
         <footer className="modal-actions settings-footer">
           {error ? <p className="error settings-save-error" role="alert">{error}</p> : null}
-          <button type="button" className="secondary" onClick={onClose} disabled={saving}>Отмена</button>
-          <button type="button" onClick={() => void save()} disabled={saving || cadBusy}>Сохранить</button>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Отмена</Button>
+          <Button onClick={() => void save()} disabled={saving || cadBusy}>Сохранить</Button>
         </footer>
       </section>
     </div>

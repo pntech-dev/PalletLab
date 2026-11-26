@@ -708,7 +708,7 @@ def run_web_application() -> None:
         js_api=api,
         width=1400,
         height=900,
-        min_size=(1280, 1000),
+        min_size=(1280, 1060),
         maximized=True,
     )
     api.attach_window(window)

@@ -14,6 +14,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 import SceneSettings from "./SceneSettings";
+import { BadgeAlert, X } from "lucide-react";
 import { betweenFaces } from "./manualBeamBetween";
 export type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 
@@ -952,7 +953,8 @@ export default function PalletViewport({
           className={`viewport-error-toast${errorPresentation.leaving ? " is-leaving" : ""}`}
           role="alert"
         >
-          {errorPresentation.message}
+          <BadgeAlert size={16} aria-hidden="true" /> <span>{errorPresentation.message}</span>
+          <button type="button" className="viewport-error-dismiss" aria-label="Закрыть уведомление" onClick={() => setErrorPresentation(null)}><X size={16} aria-hidden="true" /></button>
         </div>
       ) : null}
     </div>

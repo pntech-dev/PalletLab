@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Settings } from "lucide-react";
 
 type SceneSettingsProps = {
   hasModel: boolean;
@@ -40,10 +41,7 @@ export default function SceneSettings({
       onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
       <button type="button" className="scene-settings-toggle" aria-label="Настройки сцены"
         aria-expanded={open} aria-controls="scene-settings-panel" onClick={() => setOpen((value) => !value)}>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <path strokeLinecap="round" d="M4 7h10m4 0h2M4 17h2m4 0h10" />
-          <circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" />
-        </svg>
+        <Settings size={16} aria-hidden="true" />
       </button>
       <div id="scene-settings-panel" className={`manual-hud scene-settings-panel${open ? " is-open" : ""}`}
         aria-hidden={!open} inert={!open}>

@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import type {
   CameraPreset,
   ViewportBeam,
@@ -24,7 +25,9 @@ import { betweenFaces, type BeamReference, type BeamReferenceFace } from "./manu
 import { manualSectionForSupport } from "./manualBeamSection";
 import { SettingsDialog } from "./SettingsDialog";
 import { Button } from "./design/Button";
-import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronUp } from "lucide-react";
+import { SegmentedControl } from "./design/SegmentedControl";
+import { Hud } from "./design/Hud";
+import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronUp, Info } from "lucide-react";
 import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
 
@@ -402,9 +405,26 @@ export function App() {
   const [exporting, setExporting] = useState<DrawingCad | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exportSetupOpen, setExportSetupOpen] = useState(false);
+  const exportDialog = useRef<HTMLElement>(null);
   const [exportCadSystem, setExportCadSystem] = useState<DrawingCad>("solidworks");
   const [exportDirectory, setExportDirectory] = useState("");
   const [exportDirectoryError, setExportDirectoryError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!exportSetupOpen) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    exportDialog.current?.focus();
+    const handleDialogKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); setExportSetupOpen(false); }
+      if (event.key !== "Tab" || !exportDialog.current) return;
+      const elements = Array.from(exportDialog.current.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex='0']"));
+      const first = elements[0], last = elements[elements.length - 1];
+      if (!first || !last) return;
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === exportDialog.current)) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener("keydown", handleDialogKey, true);
+    return () => { window.removeEventListener("keydown", handleDialogKey, true); previousFocus?.focus(); };
+  }, [exportSetupOpen]);
   const [includePalletModel, setIncludePalletModel] = useState(true);
   const [includePartModels, setIncludePartModels] = useState(true);
   const [includePalletDrawing, setIncludePalletDrawing] = useState(true);
@@ -1426,7 +1446,7 @@ export function App() {
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
-      if (settingsOpen) return;
+      if (settingsOpen || exportSetupOpen) return;
       if (event.key === "Escape") {
         event.preventDefault();
         stopDimensionEditing();
@@ -1723,8 +1743,7 @@ export function App() {
     ? (String(project.pallet.length.rounding_step) as "5" | "50")
     : "none";
   const manualHud: ReactNode = insertionMode && manualSupports.length === 2 ? (
-    <div className="manual-hud">
-      <strong>Новый брус</strong>
+    <Hud title="Добавить брус" actions={<><Button onClick={addManualBeam} disabled={(manualReferenceMode === "face" && !manualReference) || (manualReferenceMode === "between" && !manualBetween)}>Добавить</Button><Button variant="ghost" onClick={stopInsertion}>Отмена</Button></>}>
       <label>
         Отсчёт расстояния
         <select
@@ -1751,13 +1770,10 @@ export function App() {
           onChange={(event) => setManualDistance(Number(event.target.value))}
         />
       </label>
-      <button type="button" onClick={addManualBeam} disabled={(manualReferenceMode === "face" && !manualReference) || (manualReferenceMode === "between" && !manualBetween)}>Добавить брус</button>
-      <button type="button" onClick={stopInsertion}>Отмена</button>
-    </div>
+    </Hud>
   ) : null;
   const dimensionHud: ReactNode = dimensionEditing && selectedDimension ? (
-    <div className="manual-hud">
-      <strong>Изменить расстояние</strong>
+    <Hud title="Изменить расстояние" actions={<><Button onClick={changeSelectedDistance}>Изменить</Button><Button variant="ghost" onClick={stopDimensionEditing}>Отмена</Button></>}>
       <label>
         Значение, мм
         <input
@@ -1771,13 +1787,10 @@ export function App() {
           }}
         />
       </label>
-      <button type="button" onClick={changeSelectedDistance}>Применить</button>
-      <button type="button" onClick={stopDimensionEditing}>Отмена</button>
-    </div>
+    </Hud>
   ) : null;
   const sectionHud: ReactNode = beamTool === "section" && selectedBeams.length > 0 ? (
-    <div className="manual-hud section-hud">
-      <strong>Сечение бруса{selectedBeams.length > 1 ? ` · ${selectedBeams.length}` : ""}</strong>
+    <Hud className="section-hud" title={<>Изменить сечение{selectedBeams.length > 1 ? ` · ${selectedBeams.length}` : ""}</>} actions={<><Button onClick={() => void changeSelectedBeamSections()}>Применить</Button><Button variant="ghost" onClick={() => { setBeamTool("none"); setSelectedBeams([]); }}>Отмена</Button></>}>
       <label>
         Стандартное сечение
         <select
@@ -1818,9 +1831,7 @@ export function App() {
           />
         </label>
       </div>
-      <button type="button" onClick={() => void changeSelectedBeamSections()}>Применить</button>
-      <button type="button" onClick={() => { setBeamTool("none"); setSelectedBeams([]); }}>Отмена</button>
-    </div>
+    </Hud>
   ) : null;
   const viewportToolbar: ReactNode = (
     <>
@@ -1939,17 +1950,13 @@ export function App() {
             </section>
           </div>
         ) : null}
-        {exportSetupOpen ? (
+        {exportSetupOpen ? createPortal(
           <div className="modal-backdrop" role="presentation">
-            <section className="modal export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
-              <h2 id="export-title">Экспорт CAD</h2>
-              <label className="export-cad-field">
-                CAD-система
-                <select value={exportCadSystem} onChange={(event) => setExportCadSystem(event.target.value as DrawingCad)}>
-                  <option value="solidworks">SolidWorks</option>
-                  <option value="kompas">КОМПАС-3D</option>
-                </select>
-              </label>
+            <section ref={exportDialog} tabIndex={-1} className="modal export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
+              <header className="export-header"><h2 id="export-title">Экспорт поддона</h2><Button variant="ghost" aria-label="Закрыть экспорт" onClick={() => setExportSetupOpen(false)}>×</Button></header>
+              <div className="export-cad-field"><span>CAD-система</span>
+                <SegmentedControl label="CAD-система" value={exportCadSystem} options={[{ value: "solidworks", label: "SolidWorks" }, { value: "kompas", label: "КОМПАС-3D" }]} onChange={setExportCadSystem} />
+              </div>
               <fieldset className="export-options">
                 <legend>Состав экспорта</legend>
                 <label className="export-checkbox">
@@ -2040,17 +2047,16 @@ export function App() {
               </label>
               {exportDirectoryError ? <p className="error" role="alert">{exportDirectoryError}</p> : null}
               <footer className="modal-actions">
-                <button
-                  type="button"
+                <Button variant="secondary" onClick={() => setExportSetupOpen(false)}>Отмена</Button>
+                <Button
                   disabled={!includePartModels || !exportDirectory.trim() || exporting !== null}
                   onClick={() => void exportCad()}
                 >
-                  Экспорт
-                </button>
-                <button type="button" className="secondary" onClick={() => setExportSetupOpen(false)}>Отмена</button>
+                  Экспортировать
+                </Button>
               </footer>
             </section>
-          </div>
+          </div>, document.body
         ) : null}
         {exporting ? (
           <div className="modal-backdrop" role="presentation">
@@ -2206,20 +2212,14 @@ export function App() {
                   </div>
                   {expandedLayerId === layer.id ? (
                     <fieldset className="layer-card-content" disabled={isLocked(layer.id)}>
-                      <label>
-                        Направление брусьев
-                        <select
-                          value={layer.axis}
-                          onChange={(event) =>
-                            updateLayerAxis(index, event.target.value as "length" | "width")
-                          }
-                        >
-                          <option value="length">Вдоль длины</option>
-                          <option value="width">Вдоль ширины</option>
-                        </select>
-                      </label>
-                      <label>
-                        Стандартное сечение
+                      <div className="layer-direction-field layer-field-wide">
+                        <span>Расположение брусьев</span>
+                        <SegmentedControl label={`Расположение брусьев слоя ${layerNumber(layer, index)}`} value={layer.axis}
+                          options={[{ value: "length", label: "Продольные" }, { value: "width", label: "Поперечные" }]}
+                          disabled={isLocked(layer.id)} onChange={(axis) => updateLayerAxis(index, axis)} />
+                      </div>
+                      <label className="layer-field-wide">
+                        Сечение брусьев (по умолчанию)
                         <select
                           value={layerSectionPreset(layer)}
                           onChange={(event) => {
@@ -2290,6 +2290,7 @@ export function App() {
                           />
                         </label>
                       ))}
+                      <p className="layer-input-hint layer-field-wide"><Info size={16} aria-hidden="true" /> Введите расстояния в миллиметрах через пробел</p>
                     </fieldset>
                   ) : null}
                 </section>
@@ -2299,6 +2300,7 @@ export function App() {
             </section>
               {project ? <fieldset className="pallet-margins" disabled={(project.view.locked_layer_ids ?? []).length > 0}>
                 <h2>Отступы поддона</h2>
+                <p>Введите отступы от краёв поддона до размещаемого объекта</p>
                 {MARGIN_PAIRS.map(({ first, second, link, labels: names, description }) => {
                   const linked = marginLinks(project)[link];
                   return <div className="pallet-margins-fields" key={link}>
@@ -2324,19 +2326,11 @@ export function App() {
                 })}
               </fieldset> : null}
               <fieldset className="rounding">
-                <legend>Округление поддона</legend>
-                {(["50", "5", "none"] as const).map((value) => (
-                  <label key={value}>
-                    <input
-                      type="radio"
-                      name="rounding"
-                      value={value}
-                      checked={rounding === value}
-                      onChange={() => setRounding(value)}
-                    />
-                    {value === "none" ? "Без округления" : `${value} мм`}
-                  </label>
-                ))}
+                <h2>Округление габаритов поддона</h2>
+                <p>Выберите, до какого значения округлять габариты поддона.</p>
+                <SegmentedControl label="Округление габаритов поддона" value={rounding}
+                  options={[{ value: "50", label: "До 50 мм" }, { value: "5", label: "До 5 мм" }, { value: "none", label: "Не округлять" }]}
+                  onChange={setRounding} />
               </fieldset>
               <div className="layer-stack-footer">
                 <button type="button" className="secondary" onClick={() => void resetProject()}>
