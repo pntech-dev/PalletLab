@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Settings, Box, Info, Axis3D, X } from "lucide-react";
+import { Settings, Box, Info, Axis3D, X, Copy } from "lucide-react";
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Button } from "./design/Button";
 import { Checkbox } from "./design/Checkbox";
@@ -9,7 +9,7 @@ import type { SolidWorksOptions, UpdateStatus } from "./App";
 type Section = "general" | "view" | "cad" | "about";
 
 const SECTIONS: { id: Section; title: string; description: string }[] = [
-  { id: "general", title: "Общее", description: "Параметры новых проектов и автоматического сохранения." },
+  { id: "general", title: "Общее", description: "Параметры по умолчанию для новых проектов." },
   { id: "view", title: "Вид и управление", description: "Настройки отображения и начального положения камеры." },
   { id: "cad", title: "CAD и чертежи", description: "Шаблоны и параметры экспорта в CAD-системы." },
   { id: "about", title: "О программе", description: "Версия PalletLab, связь с разработчиком и обновления." },
@@ -176,7 +176,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
       setActive("general"); setError("Укажите папку экспорта по умолчанию."); return;
     }
     if (!Number.isInteger(draft.autosaveMinutes) || draft.autosaveMinutes < 1 || draft.autosaveMinutes > 1440) {
-      setError("Период автосохранения должен быть от 1 до 1440 минут."); return;
+      setActive("general"); setError("Период автосохранения должен быть от 1 до 1440 минут."); return;
     }
     const cadChanged = JSON.stringify(cadDraft) !== initialCad.current;
     if (cadChanged && (missingFiles.partTemplate || missingFiles.assemblyTemplate || missingFiles.materialLibrary)) {
@@ -228,27 +228,14 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
             {SECTIONS.map((item) => { const Icon = SECTION_ICONS[item.id]; return <Button variant="ghost" key={item.id} aria-current={active === item.id ? "page" : undefined}
               onClick={() => setActive(item.id)}><Icon size={16} />{item.title}</Button>; })}
           </nav>
-          <div className="settings-content">
+          <div className={`settings-content${active === "general" ? " settings-content--general" : ""}`}>
             <h3>{section.title}</h3>
             <p className="settings-description">{section.description}</p>
 
-            {active === "general" && <>
-              <section className="settings-group"><h4>Экспорт</h4>
-                <label className="file-field">Папка экспорта по умолчанию
-                  <div className="file-field-control"><input value={draft.exportDirectory} onChange={(event) => setDraft({ ...draft, exportDirectory: event.target.value })} /><button type="button" className="secondary" disabled={saving} onClick={() => void (async () => {
-                    try {
-                      const result = await window.pywebview?.api?.choose_export_directory();
-                      if (result?.cancelled) return;
-                      if (!result?.ok || !result.path) { setError(result?.error ?? "Не удалось выбрать папку экспорта."); return; }
-                      setDraft((current) => ({ ...current, exportDirectory: result.path! }));
-                      setError(null);
-                    } catch { setError("Не удалось выбрать папку экспорта."); }
-                  })()}>Обзор…</button></div>
-                </label>
-              </section>
+            {active === "general" && <div className="settings-general-groups">
               <section className="settings-group"><h4>Параметры поддона</h4>
-                <div className="settings-segment-field"><span>Округление поддона по умолчанию</span>
-                  <SegmentedControl label="Округление поддона по умолчанию" value={draft.rounding}
+                <div className="settings-segment-field"><span>Округление размеров по умолчанию</span>
+                  <SegmentedControl label="Округление размеров по умолчанию" value={draft.rounding}
                     options={[{ value: "50", label: "До 50 мм" }, { value: "5", label: "До 5 мм" }, { value: "none", label: "Не округлять" }]}
                     onChange={(rounding) => setDraft({ ...draft, rounding })} />
                 </div>
@@ -257,14 +244,31 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 <label className="settings-check"><Checkbox checked={draft.autosaveEnabled} onChange={(event) => setDraft({ ...draft, autosaveEnabled: event.target.checked })} /> Включить автосохранение</label>
                 <label>Период автосохранения, мин<input type="number" min="1" max="1440" value={draft.autosaveMinutes} disabled={!draft.autosaveEnabled} onChange={(event) => setDraft({ ...draft, autosaveMinutes: Number(event.target.value) })} /></label>
               </section>
-            </>}
+              <section className="settings-group"><h4>Экспорт</h4>
+                <label className="file-field">Папка экспорта по умолчанию
+                  <div className="file-field-control"><input value={draft.exportDirectory} onChange={(event) => setDraft({ ...draft, exportDirectory: event.target.value })} /><Button variant="secondary" disabled={saving} onClick={() => void (async () => {
+                    try {
+                      const result = await window.pywebview?.api?.choose_export_directory();
+                      if (result?.cancelled) return;
+                      if (!result?.ok || !result.path) { setError(result?.error ?? "Не удалось выбрать папку экспорта."); return; }
+                      setDraft((current) => ({ ...current, exportDirectory: result.path! }));
+                      setError(null);
+                    } catch { setError("Не удалось выбрать папку экспорта."); }
+                  })()}>Обзор…</Button></div>
+                </label>
+              </section>
+            </div>}
             {active === "view" && <>
               <section className="settings-group"><h4>Размеры и подсказки</h4>
                 <label className="settings-check"><Checkbox checked={draft.showDimensions} onChange={(event) => setDraft({ ...draft, showDimensions: event.target.checked })} /> Показывать размерные линии поддона</label>
                 <label className="settings-check"><Checkbox checked={draft.showGrid} onChange={(event) => setDraft({ ...draft, showGrid: event.target.checked })} /> Показывать сетку</label>
               </section>
               <section className="settings-group"><h4>Вид по умолчанию</h4>
-                <label>Начальный вид<select value={draft.camera} onChange={(event) => setDraft({ ...draft, camera: event.target.value as AppSettings["camera"] })}><option value="isometric">Изометрия</option><option value="top">Сверху</option><option value="front">Спереди</option><option value="side">Сбоку</option></select></label>
+                <div className="settings-segment-field"><span>Вид по умолчанию в области 3D-просмотра</span>
+                  <SegmentedControl label="Вид по умолчанию в области 3D-просмотра" value={draft.camera}
+                    options={[{ value: "isometric", label: "Изометрия" }, { value: "top", label: "Сверху" }, { value: "front", label: "Спереди" }, { value: "side", label: "Сбоку" }]}
+                    onChange={(camera) => setDraft({ ...draft, camera })} />
+                </div>
               </section>
             </>}
             {active === "cad" && <>
@@ -304,13 +308,13 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
               </section>
             </>}
             {active === "about" && <>
-              <section className="settings-group"><h4>Версия ПО</h4><p>{version ?? "Версия недоступна"}</p></section>
+              <section className="settings-group"><h4>Версия ПО</h4><p>{version ? `Версия: ${version}` : "Версия недоступна"}</p></section>
               <section className="settings-group"><h4>Ссылки и связь с разработчиком</h4>
-                <div className="settings-contact"><label>Репозиторий проекта<input readOnly value={repository} placeholder="Не указан" /></label>
-                  <button type="button" className="secondary" disabled={!repository} onClick={() => void contactAction("copy", repository)} aria-label="Скопировать ссылку на репозиторий">Копировать</button>
+                <div className="settings-contact"><div className="settings-contact-field"><label>Репозиторий<input readOnly value={repository} placeholder="Не указан" /></label>
+                  <Button variant="ghost" disabled={!repository} onClick={() => void contactAction("copy", repository)} aria-label="Скопировать ссылку на репозиторий"><Copy size={16} aria-hidden="true" /></Button></div>
                   <button type="button" className="secondary" disabled={!repository} onClick={() => void contactAction("repository", repository)}>Открыть репозиторий</button></div>
-                <div className="settings-contact"><label>Почта разработчика<input readOnly value={email} placeholder="Не указана" /></label>
-                  <button type="button" className="secondary" disabled={!email} onClick={() => void contactAction("copy", email)} aria-label="Скопировать адрес разработчика">Копировать</button>
+                <div className="settings-contact"><div className="settings-contact-field"><label>Почта для связи<input readOnly value={email} placeholder="Не указана" /></label>
+                  <Button variant="ghost" disabled={!email} onClick={() => void contactAction("copy", email)} aria-label="Скопировать адрес разработчика"><Copy size={16} aria-hidden="true" /></Button></div>
                   <button type="button" className="secondary" disabled={!email} onClick={() => void contactAction("email", email)}>Написать разработчику</button></div>
                 {contactMessage ? <p className={contactMessage.ok ? "success-message" : "error"} role="status">{contactMessage.text}</p> : null}
               </section>
@@ -329,7 +333,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 {["available", "downloading", "ready", "failed"].includes(update.state) ? <p>Закройте настройки, чтобы перейти к обновлению.</p> : null}
               </section>
             </>}
-            <p className="settings-default-hint">Все изменённые параметры «по умолчанию» будут применяться к новым проектам.</p>
+            <p className="settings-default-hint"><Info size={16} aria-hidden="true" />Все изменённые параметры «по умолчанию» будут применяться к новым проектам.</p>
           </div>
         </div>
         <footer className="modal-actions settings-footer">
