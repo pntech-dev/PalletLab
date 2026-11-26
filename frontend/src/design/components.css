@@ -10,6 +10,9 @@ button.ui-button--ghost, button.ui-button--tertiary { color: var(--text-muted); 
 button.ui-button--tertiary { color: var(--accent); }
 button.ui-button--ghost:hover:not(:disabled), button.ui-button--tertiary:hover:not(:disabled) { background: var(--surface-muted); }
 button.ui-button--danger { color: var(--color-white); background: var(--color-red-600); }
+button.ui-button--danger:hover:not(:disabled) { background: var(--color-red-700); }
+button.ui-button--danger:active:not(:disabled) { background: var(--color-red-800); }
+button.ui-button--danger:disabled { color: var(--color-slate-300); background: var(--surface-muted); }
 button.ui-button--ghost:disabled, button.secondary:disabled { color: var(--color-slate-300); background: transparent; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 label { color: var(--text-muted); font-size: var(--font-size-caption); }
@@ -32,13 +35,37 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .viewport { border: 0; border-radius: var(--radius-panel); background: var(--surface-muted); }
 .viewport-floating-toolbar { padding: 0; border: 0; background: transparent; box-shadow: none; overflow-x: auto; }
 .viewport-floating-toolbar button, .viewport-fit-control button { min-width: 36px; min-height: 36px; padding: 8px; border: 0; border-radius: var(--radius-control); color: var(--text-muted); background: var(--surface-panel); box-shadow: none; }
+.viewport-floating-toolbar button.secondary { color: var(--text-muted); background: var(--surface-panel); }
 .viewport-floating-toolbar button:hover:not(:disabled), .viewport-fit-control button:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
+.viewport-floating-toolbar button.secondary:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
+.viewport-toolbar-summary { color: var(--text-muted); }
 .viewport-floating-toolbar .active-tool { color: var(--accent); background: var(--color-neutral-200); }
 .viewport-view-select { color: var(--text-muted); }
 .viewport-view-select select { min-height: 36px; background: var(--surface-panel); color: var(--text-primary); border: 0; }
 .viewport-zoom-control { background: var(--surface-panel); color: var(--text-primary); }
 .pallet-summary-card { border: 0; border-radius: var(--radius-panel); background: var(--surface-panel); }
 .pallet-summary-card h2, .pallet-summary-sizes dd, .pallet-detail strong { color: var(--text-primary); }
+.pallet-summary { gap: var(--space-2); padding-top: var(--space-2); }
+.pallet-summary-card { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4); }
+.pallet-summary-card h2 { margin: 0; font-size: 20px; font-weight: 600; }
+.pallet-summary-sizes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); }
+.pallet-metric { display: flex; align-items: center; min-width: 0; gap: var(--space-2); }
+.pallet-metric-icon { display: grid; flex: none; place-items: center; width: 40px; height: 40px; border-radius: var(--radius-control); background: var(--surface-muted); }
+.pallet-metric-icon img { display: block; width: 24px; height: 24px; }
+.pallet-metric-icon.is-width img { filter: brightness(0) saturate(100%) invert(43%) sepia(98%) saturate(1065%) hue-rotate(99deg) brightness(96%) contrast(105%); }
+.pallet-metric-icon.is-height img { filter: brightness(0) saturate(100%) invert(26%) sepia(99%) saturate(3011%) hue-rotate(221deg) brightness(101%) contrast(98%); }
+.pallet-metric-icon.is-weight img { opacity: .7; }
+.pallet-summary-sizes dt, .pallet-detail span, .pallet-details-card header > span { color: var(--text-muted); font-size: var(--font-size-caption); }
+.pallet-summary-sizes dd { margin: 2px 0 0; font-size: var(--font-size-body); font-weight: 600; }
+.pallet-summary-note { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--text-muted); font-size: var(--font-size-caption); }
+.pallet-summary-note svg { flex: none; }
+.pallet-details-card header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.pallet-details-scroll { flex: 1; align-items: center; gap: var(--space-6); min-height: 64px; }
+.pallet-detail { display: flex; align-items: center; gap: var(--space-2); padding: 0; border: 0; }
+.pallet-detail > img { flex: none; }
+.pallet-detail > div { display: grid; gap: var(--space-1); }
+.pallet-detail strong { font-size: var(--font-size-body); }
+@media (max-width: 1600px) { .pallet-summary-sizes { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .layer-card, .pallet-margins, fieldset { border-color: var(--color-neutral-200); background: var(--surface-panel); }
 .layer-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .layer-card-content { background: var(--surface-panel); border-color: var(--color-neutral-200); }
@@ -70,11 +97,28 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .manual-hud .hud-actions button.ui-button--ghost:hover:not(:disabled) { background: var(--color-neutral-600); }
 .manual-hud .hud-actions button:disabled { color: var(--color-slate-300); background: var(--color-neutral-500); }
 .viewport-hint { padding: var(--space-2); border-radius: var(--radius-control); background: var(--surface-hud); box-shadow: var(--shadow-hud); backdrop-filter: blur(2.5px); color: var(--color-white); font-size: var(--font-size-caption); }
+.viewport-hint-message { display: block; font-weight: 500; }
+.viewport-hint-shortcuts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin-top: var(--space-2); color: var(--color-neutral-200); }
+.viewport-hint-shortcuts > span { white-space: nowrap; }
+.viewport-hint kbd { display: inline-block; padding: 2px 4px; border: 1px solid var(--color-neutral-400); border-radius: 4px; background: var(--color-neutral-600); font: inherit; }
 .viewport-error-toast { display: flex; align-items: center; gap: var(--space-2); border: 0; border-radius: var(--radius-control); background: var(--surface-error); box-shadow: var(--shadow-hud); backdrop-filter: blur(2.5px); color: var(--color-white); font-size: var(--font-size-caption); text-align: left; pointer-events: auto; }
 .viewport-error-toast svg { flex: none; }
 .viewport-error-dismiss, .viewport-error-dismiss:hover:not(:disabled) { min-width: 24px; min-height: 24px; margin-left: auto; padding: 4px; color: var(--color-white); background: transparent; }
+.reset-modal { width: min(512px, 100%); gap: var(--space-6); padding: var(--space-4); }
+.reset-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+.reset-header button { min-width: 36px; padding: 8px; }
+.reset-modal .modal-actions > button { flex: 1 1 0; }
+.ui-message { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-4); border-radius: var(--radius-panel); }
+.ui-message svg { flex: none; }
+.ui-message > div { display: grid; gap: var(--space-2); }
+.ui-message--warning { color: var(--color-yellow-800); background: var(--color-orange-50); }
 .manual-hud .scene-settings-check, .manual-hud .scene-settings-range { color: var(--color-neutral-200); }
 .manual-hud .scene-settings-check input, .manual-hud .scene-settings-range input { accent-color: var(--accent); }
+.manual-hud.scene-settings-panel { width: 384px; max-width: min(384px, calc(100vw - 48px)); padding: var(--space-2); gap: var(--space-4); border: 0; border-radius: var(--radius-control); }
+.scene-settings-panel > strong { font-size: var(--font-size-heading); }
+.manual-hud .scene-settings-check { font-size: var(--font-size-body); }
+.manual-hud .scene-settings-check input { width: 20px; height: 20px; }
+.manual-hud .scene-settings-range { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); }
 .dimension-label { font-family: var(--font-ui); }
 .ui-segmented { display: flex; width: 100%; min-width: 0; min-height: 36px; padding: 2px; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-panel); }
 .ui-segmented-option { position: relative; display: block; flex: 1 1 0; min-width: 0; cursor: pointer; }

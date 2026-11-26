@@ -27,6 +27,8 @@ import { SettingsDialog } from "./SettingsDialog";
 import { Button } from "./design/Button";
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Hud } from "./design/Hud";
+import { PalletSummary } from "./design/PalletSummary";
+import { ResetDialog } from "./design/ResetDialog";
 import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronUp, Info } from "lucide-react";
 import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
@@ -405,6 +407,8 @@ export function App() {
   const [exporting, setExporting] = useState<DrawingCad | null>(null);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exportSetupOpen, setExportSetupOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const closeReset = useCallback(() => setResetOpen(false), []);
   const exportDialog = useRef<HTMLElement>(null);
   const [exportCadSystem, setExportCadSystem] = useState<DrawingCad>("solidworks");
   const [exportDirectory, setExportDirectory] = useState("");
@@ -1446,7 +1450,8 @@ export function App() {
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
-      if (settingsOpen || exportSetupOpen) return;
+      if (settingsOpen || exportSetupOpen || resetOpen) return;
+      if (event.key === "Escape" && event.target instanceof Element && event.target.closest(".scene-settings-anchor")) return;
       if (event.key === "Escape") {
         event.preventDefault();
         stopDimensionEditing();
@@ -1917,6 +1922,7 @@ export function App() {
         <Button variant="ghost" className="app-settings-button" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}><Settings size={16} /> Настройки</Button>
       </header>
       {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} solidworks={solidWorksOptions} initialSection={settingsInitialSection} update={update} lastUpdateCheck={lastUpdateCheck} onCheckUpdates={() => checkForUpdates(true)} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
+      {resetOpen ? <ResetDialog onClose={closeReset} onConfirm={resetProject} /> : null}
       <div className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}`}>
         <aside className="editor-panel" aria-label="Редактор поддона">
           <div className="editor-heading">
@@ -2333,7 +2339,7 @@ export function App() {
                   onChange={setRounding} />
               </fieldset>
               <div className="layer-stack-footer">
-                <button type="button" className="secondary" onClick={() => void resetProject()}>
+                <button type="button" className="secondary" onClick={() => setResetOpen(true)}>
                   Сбросить проект
                 </button>
               </div>
@@ -2423,6 +2429,7 @@ export function App() {
                           : null
                 }
                 toolError={viewportToolError}
+                toolHintCanExit={insertionMode || beamTool !== "none" || dimensionEditing}
                 toolErrorVersion={viewportToolErrorVersion}
                 onFirstFrame={reportFirstViewportFrame}
                 onUndoToolSelection={
@@ -2434,28 +2441,8 @@ export function App() {
               />
             </Suspense>
             <div className="pallet-summary-transition" aria-hidden={viewportExpanded} inert={viewportExpanded}>
-            <div className="pallet-summary">
-              <section className="pallet-summary-card" aria-label="Габариты поддона">
-                <h2>Габариты поддона</h2>
-                <dl className="pallet-summary-sizes">
-                  <div><dt>Длина</dt><dd>{formatMillimetres(calculation.snapshot.pallet.size.length)} <span>мм</span></dd></div>
-                  <div><dt>Ширина</dt><dd>{formatMillimetres(calculation.snapshot.pallet.size.width)} <span>мм</span></dd></div>
-                  <div><dt>Высота</dt><dd>{formatMillimetres(calculation.snapshot.pallet.size.height)} <span>мм</span></dd></div>
-                  <div><dt>Масса</dt><dd>{formatKilograms(calculation.snapshot.pallet.massKg)} <span>кг</span></dd></div>
-                </dl>
-              </section>
-              <section className="pallet-summary-card" aria-label="Детали поддона">
-                <h2>Детали</h2>
-                <div className="pallet-details-scroll" tabIndex={0} aria-label="Список деталей поддона">
-                  {palletDetails(calculation.snapshot.pallet.beams).map((detail) => (
-                    <div className="pallet-detail" key={`${detail.height}-${detail.width}-${detail.length}`}>
-                      <strong>{formatMillimetres(detail.height)} × {formatMillimetres(detail.width)} × {formatMillimetres(detail.length)} мм</strong>
-                      <span>{detail.count} шт.</span>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
+              <PalletSummary size={calculation.snapshot.pallet.size} mass={calculation.snapshot.pallet.massKg}
+                details={palletDetails(calculation.snapshot.pallet.beams)} millimetres={formatMillimetres} kilograms={formatKilograms} />
             </div>
           </>
         ) : null}

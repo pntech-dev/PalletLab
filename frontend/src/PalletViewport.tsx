@@ -15,6 +15,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 import SceneSettings from "./SceneSettings";
 import { BadgeAlert, X } from "lucide-react";
+import { ViewportTip } from "./design/ViewportTip";
 import { betweenFaces } from "./manualBeamBetween";
 export type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 
@@ -418,6 +419,7 @@ export default function PalletViewport({
   toolbar,
   fitViewControl,
   toolHint,
+  toolHintCanExit = false,
   toolError,
   toolErrorVersion = 0,
   onFirstFrame,
@@ -463,13 +465,14 @@ export default function PalletViewport({
   toolbar?: ReactNode;
   fitViewControl?: ReactNode;
   toolHint?: string | null;
+  toolHintCanExit?: boolean;
   toolError?: string | null;
   toolErrorVersion?: number;
   onFirstFrame?: () => void;
   onUndoToolSelection?: () => void;
   beamSelectionEnabled: boolean;
 }) {
-  const [cursor, setCursor] = useState<[number, number]>([16, 16]);
+  const [cursor, setCursor] = useState<[number, number]>([16, 72]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [showDetails, setShowDetails] = useState(false);
@@ -642,7 +645,7 @@ export default function PalletViewport({
         const box = event.currentTarget.getBoundingClientRect();
         setCursor([
           Math.max(8, Math.min(event.clientX - box.left + 14, box.width - 328)),
-          Math.max(8, Math.min(event.clientY - box.top + 14, box.height - 54)),
+          Math.max(8, Math.min(event.clientY - box.top + 14, box.height - 88)),
         ]);
       } : undefined}
       onContextMenu={onUndoToolSelection ? (event) => {
@@ -944,7 +947,7 @@ export default function PalletViewport({
           className="viewport-hint"
           style={{ left: cursor[0], top: cursor[1] }}
         >
-          {toolHint}
+          <ViewportTip text={toolHint} canExit={toolHintCanExit} />
         </div>
       ) : null}
       {errorPresentation ? (

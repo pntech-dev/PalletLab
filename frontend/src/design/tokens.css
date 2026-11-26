@@ -18,7 +18,10 @@
   --color-red-500: #fb2c36;
   --color-red-600: #e7000b;
   --color-red-700: #c10007;
+  --color-red-800: #9f0712;
   --color-green-600: #00a63e;
+  --color-orange-50: #fff7ed;
+  --color-yellow-800: #894b00;
   --color-slate-300: #cad5e2;
   --surface-app: var(--color-neutral-200);
   --surface-panel: var(--color-white);

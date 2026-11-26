@@ -52,9 +52,10 @@ export default function SceneSettings({
             <span>Показывать 3D-модель</span>
           </label>
           <label className="scene-settings-range">
-            <span>Прозрачность <output>{transparency}%</output></span>
+            <span>Прозрачность</span>
             <input type="range" min="0" max="100" step="1" value={transparency} disabled={!modelVisible}
               onChange={(event) => setTransparency(Number(event.target.value))} />
+            <output>{transparency}%</output>
           </label>
           <hr />
         </> : null}
