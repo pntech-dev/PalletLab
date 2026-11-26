@@ -26,7 +26,7 @@ import { manualSectionForSupport } from "./manualBeamSection";
 import { SettingsDialog } from "./SettingsDialog";
 import { Button } from "./design/Button";
 import { SegmentedControl } from "./design/SegmentedControl";
-import { Hud } from "./design/Hud";
+import { Hud, HudHint } from "./design/Hud";
 import { PalletSummary } from "./design/PalletSummary";
 import { ResetDialog } from "./design/ResetDialog";
 import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronUp, Info } from "lucide-react";
@@ -1165,7 +1165,7 @@ export function App() {
 
   function basePointDistance(support: { beam: ViewportBeam; point: ViewportPoint }) {
     const alongX = support.beam.size[0] >= support.beam.size[1];
-    return (alongX ? support.point[0] : support.point[2]) * 1000 - manualSectionFor(support.beam).width / 2;
+    return Number(((alongX ? support.point[0] : support.point[2]) * 1000 - manualSectionFor(support.beam).width / 2).toFixed(2));
   }
 
   function isLocked(layerId: string) {
@@ -1770,11 +1770,13 @@ export function App() {
         {manualReferenceMode === "between" ? "От нулевой точки, мм" : "Расстояние, мм"}
         <input
           type="number"
+          aria-describedby="manual-distance-hint"
           value={manualReferenceMode === "between" ? (manualBetween ? Number(manualBetween.baseDistance.toFixed(2)) : "") : manualDistance}
           disabled={manualReferenceMode === "between"}
           onChange={(event) => setManualDistance(Number(event.target.value))}
         />
       </label>
+      <HudHint id="manual-distance-hint">Расстояние задаёт положение бруса вдоль выбранных опор.</HudHint>
     </Hud>
   ) : null;
   const dimensionHud: ReactNode = dimensionEditing && selectedDimension ? (

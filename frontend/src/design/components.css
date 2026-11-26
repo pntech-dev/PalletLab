@@ -90,6 +90,8 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .hud-content label { color: var(--color-neutral-200); font-size: var(--font-size-caption); }
 .hud-content input:not([type='checkbox']):not([type='radio']):not([type='range']), .hud-content select { width: 100%; min-width: 0; min-height: 36px; color: var(--color-white); border-color: var(--color-neutral-400); background: var(--color-neutral-600); padding: 6px 12px; }
 .hud-content input:disabled, .hud-content select:disabled { color: var(--color-neutral-300) !important; background: var(--color-neutral-500) !important; }
+.hud-hint { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; color: var(--color-neutral-200); font-size: var(--font-size-caption); line-height: var(--line-height-ui); }
+.hud-hint svg { flex: none; }
 .hud-actions { display: flex; gap: var(--space-2); }
 .manual-hud .hud-actions button { flex: 1 1 0; min-width: 0; min-height: 36px; padding: 8px; background: var(--accent); }
 .manual-hud .hud-actions button:hover:not(:disabled) { background: var(--color-blue-700); }
@@ -97,6 +99,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .manual-hud .hud-actions button.ui-button--ghost:hover:not(:disabled) { background: var(--color-neutral-600); }
 .manual-hud .hud-actions button:disabled { color: var(--color-slate-300); background: var(--color-neutral-500); }
 .viewport-hint { padding: var(--space-2); border-radius: var(--radius-control); background: var(--surface-hud); box-shadow: var(--shadow-hud); backdrop-filter: blur(2.5px); color: var(--color-white); font-size: var(--font-size-caption); }
+.viewport-hint { max-width: min(320px, calc(100% - 32px)); }
 .viewport-hint-message { display: block; font-weight: 500; }
 .viewport-hint-shortcuts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin-top: var(--space-2); color: var(--color-neutral-200); }
 .viewport-hint-shortcuts > span { white-space: nowrap; }

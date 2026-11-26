@@ -16,6 +16,7 @@ import type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry
 import SceneSettings from "./SceneSettings";
 import { BadgeAlert, X } from "lucide-react";
 import { ViewportTip } from "./design/ViewportTip";
+import { placeViewportHint, type Rect } from "./viewportHintPlacement";
 import { betweenFaces } from "./manualBeamBetween";
 export type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 
@@ -472,7 +473,31 @@ export default function PalletViewport({
   onUndoToolSelection?: () => void;
   beamSelectionEnabled: boolean;
 }) {
-  const [cursor, setCursor] = useState<[number, number]>([16, 72]);
+  const viewportElement = useRef<HTMLDivElement>(null);
+  const hintElement = useRef<HTMLDivElement>(null);
+  const cursor = useRef<[number, number]>([16, 72]);
+  useEffect(() => {
+    if (!toolHint) return;
+    let frame = 0;
+    const update = () => {
+      const viewport = viewportElement.current;
+      const hint = hintElement.current;
+      if (viewport && hint) {
+        const outer = viewport.getBoundingClientRect();
+        const relative = (rect: DOMRect): Rect => ({ left: rect.left - outer.left, top: rect.top - outer.top, right: rect.right - outer.left, bottom: rect.bottom - outer.top });
+        const toolbar = viewport.querySelector<HTMLElement>(".viewport-floating-toolbar")?.getBoundingClientRect();
+        const footer = Array.from(viewport.querySelectorAll<HTMLElement>(".viewport-fit-control, .viewport-navigation-help"), el => relative(el.getBoundingClientRect()));
+        const bounds = { left: 16, top: toolbar ? toolbar.bottom - outer.top + 16 : 16, right: outer.width - 16, bottom: footer.length ? Math.min(...footer.map(rect => rect.top)) - 16 : outer.height - 16 };
+        const obstacles = Array.from(viewport.querySelectorAll<HTMLElement>(".manual-hud:not([aria-hidden='true']):not([inert]), .viewport-error-toast"), el => relative(el.getBoundingClientRect()));
+        const [x, y] = placeViewportHint(cursor.current, { width: hint.offsetWidth, height: hint.offsetHeight }, bounds, obstacles);
+        hint.style.left = `${x}px`;
+        hint.style.top = `${y}px`;
+      }
+      frame = window.requestAnimationFrame(update);
+    };
+    frame = window.requestAnimationFrame(update);
+    return () => window.cancelAnimationFrame(frame);
+  }, [toolHint]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [showDetails, setShowDetails] = useState(false);
@@ -638,15 +663,13 @@ export default function PalletViewport({
   return (
     <div
       className="viewport"
+      ref={viewportElement}
       onPointerDown={stepFaceSelectionEnabled ? (event) => {
         pointerDown.current = [event.clientX, event.clientY];
       } : undefined}
       onPointerMove={toolHint ? (event) => {
         const box = event.currentTarget.getBoundingClientRect();
-        setCursor([
-          Math.max(8, Math.min(event.clientX - box.left + 14, box.width - 328)),
-          Math.max(8, Math.min(event.clientY - box.top + 14, box.height - 88)),
-        ]);
+        cursor.current = [event.clientX - box.left, event.clientY - box.top];
       } : undefined}
       onContextMenu={onUndoToolSelection ? (event) => {
         event.preventDefault();
@@ -945,7 +968,7 @@ export default function PalletViewport({
       {toolHint ? (
         <div
           className="viewport-hint"
-          style={{ left: cursor[0], top: cursor[1] }}
+          ref={hintElement}
         >
           <ViewportTip text={toolHint} canExit={toolHintCanExit} />
         </div>
