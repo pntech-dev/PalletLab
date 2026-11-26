@@ -21,6 +21,28 @@ input:hover:not(:disabled), select:hover:not(:disabled) { border-color: var(--co
 input:disabled, select:disabled { color: var(--color-slate-300); background: var(--surface-muted); }
 input[aria-invalid='true'] { border-color: var(--danger) !important; }
 input[type='checkbox'], input[type='radio'], input[type='range'], progress { accent-color: var(--accent); }
+.ui-checkbox { position: relative; display: inline-flex; flex: none; width: 20px; height: 20px; }
+.ui-checkbox input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.ui-checkbox-box { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--color-neutral-500); border-radius: var(--space-1); color: transparent; background: transparent; pointer-events: none; }
+.ui-checkbox input:checked + .ui-checkbox-box { color: var(--color-white); border-color: var(--accent); background: var(--accent); }
+.ui-checkbox input:focus-visible + .ui-checkbox-box { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ui-checkbox input:disabled, .export-checkbox .ui-checkbox input:disabled { opacity: 0; cursor: not-allowed; }
+.ui-checkbox input:disabled + .ui-checkbox-box { color: transparent; border-color: var(--color-neutral-300); background: var(--surface-muted); }
+.ui-checkbox input:disabled:checked + .ui-checkbox-box { color: var(--color-white); background: var(--color-neutral-300); }
+.manual-hud .ui-checkbox-box { border-color: var(--color-neutral-400); }
+.progress-modal { width: min(512px, 100%); gap: var(--space-6); padding: var(--space-4); border: 0; border-radius: var(--radius-panel); background: var(--surface-panel); box-shadow: var(--shadow-card); }
+.progress-modal h2 { font-size: 20px; line-height: var(--line-height-ui); font-weight: 600; }
+.progress-modal .modal-actions { margin: 0; }
+.progress-modal .modal-actions > button { flex: 1 1 0; }
+.ui-progress { display: grid; gap: var(--space-2); min-width: 0; }
+.ui-progress-status { display: flex; justify-content: space-between; gap: var(--space-4); color: var(--text-primary); font-size: var(--font-size-body); }
+.ui-progress-status > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.ui-progress-track { position: relative; height: 16px; overflow: hidden; border-radius: var(--radius-control); background: var(--surface-muted); }
+.ui-progress-native { position: absolute; width: 100%; height: 100%; opacity: 0; }
+.ui-progress-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.ui-progress-fill.is-indeterminate { width: 35%; animation: ui-progress-indeterminate 1.4s ease-in-out infinite; }
+@keyframes ui-progress-indeterminate { from { transform: translateX(-100%); } to { transform: translateX(286%); } }
+@media (prefers-reduced-motion: reduce) { .ui-progress-fill.is-indeterminate { animation: none; transform: translateX(93%); } }
 .app-shell { grid-template-rows: 52px minmax(0, 1fr); background: var(--surface-app); }
 .app-header { padding: 0 var(--space-4); gap: var(--space-4); background: var(--surface-panel); border: 0; }
 .app-brand { display: block; width: 166px; height: 32px; object-fit: contain; flex: none; }
@@ -38,7 +60,7 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .viewport-floating-toolbar button.secondary { color: var(--text-muted); background: var(--surface-panel); }
 .viewport-floating-toolbar button:hover:not(:disabled), .viewport-fit-control button:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
 .viewport-floating-toolbar button.secondary:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
-.viewport-toolbar-summary { color: var(--text-muted); }
+.viewport-toolbar-summary { display: flex; align-items: center; justify-content: center; gap: var(--space-2); color: var(--text-muted); font-size: var(--font-size-caption); line-height: var(--line-height-ui); }
 .viewport-floating-toolbar .active-tool { color: var(--accent); background: var(--color-neutral-200); }
 .viewport-view-select { color: var(--text-muted); }
 .viewport-view-select select { min-height: 36px; background: var(--surface-panel); color: var(--text-primary); border: 0; }
@@ -122,6 +144,12 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .manual-hud .scene-settings-check { font-size: var(--font-size-body); }
 .manual-hud .scene-settings-check input { width: 20px; height: 20px; }
 .manual-hud .scene-settings-range { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); }
+.manual-hud .scene-settings-range input.ui-slider { appearance: none; height: 16px; border: 0; border-radius: 0; background: transparent; }
+.ui-slider::-webkit-slider-runnable-track { height: 4px; border-radius: var(--space-1); background: linear-gradient(to right, var(--accent) 0 var(--slider-progress), var(--color-neutral-400) var(--slider-progress) 100%); }
+.ui-slider::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; margin-top: -6px; border: 0; border-radius: 50%; background: var(--accent); }
+.ui-slider::-moz-range-track { height: 4px; border-radius: var(--space-1); background: var(--color-neutral-400); }
+.ui-slider::-moz-range-progress { height: 4px; border-radius: var(--space-1); background: var(--accent); }
+.ui-slider::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--accent); }
 .dimension-label { font-family: var(--font-ui); }
 .ui-segmented { display: flex; width: 100%; min-width: 0; min-height: 36px; padding: 2px; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-panel); }
 .ui-segmented-option { position: relative; display: block; flex: 1 1 0; min-width: 0; cursor: pointer; }
@@ -138,11 +166,16 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .settings-nav button svg { flex: none; }
 .export-modal { width: min(690px, 100%); gap: var(--space-6); padding: var(--space-4); }
 .export-header h2 { margin: 0; }
-.export-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3) var(--space-4); padding: 0; border: 0; }
+.export-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4) var(--space-4); padding: 0; border: 0; }
+.export-option-group { display: grid; align-content: start; gap: var(--space-4); min-width: 0; }
 .export-options legend { padding: 0; margin-bottom: var(--space-1); color: var(--text-muted); font-size: var(--font-size-caption); font-weight: 400; }
 .export-options .modal-hint { grid-column: 1 / -1; }
 .export-checkbox { min-width: 0; color: var(--text-primary); font-size: var(--font-size-body); }
-.export-checkbox input, .settings-check input { flex: none; width: 20px; height: 20px; }
+.export-checkbox, .settings-check { font-size: var(--font-size-body); font-weight: 500; line-height: var(--line-height-ui); }
+.export-checkbox:has(.ui-checkbox input:not(:checked)), .settings-check:has(.ui-checkbox input:not(:checked)) { color: var(--text-muted); }
+.export-checkbox:has(.ui-checkbox input:checked), .settings-check:has(.ui-checkbox input:checked) { color: var(--text-primary); }
+.export-checkbox:has(.ui-checkbox input:disabled), .settings-check:has(.ui-checkbox input:disabled) { color: var(--color-slate-300); cursor: not-allowed; }
+.export-checkbox input, .settings-check input { flex: none; width: 20px; height: 20px; accent-color: var(--accent); }
 .layer-direction-field { display: grid; gap: var(--space-1); color: var(--text-muted); font-size: var(--font-size-caption); }
 .layer-card-content .ui-segmented-option input { min-width: 0; width: 100%; height: 100%; padding: 0; }
 .layer-input-hint { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--text-muted); font-size: var(--font-size-caption); }

@@ -14,7 +14,7 @@ type Props = {
   kilograms: (value: number) => string;
 };
 
-function detailCount(count: number) {
+export function detailCount(count: number) {
   const lastTwo = count % 100;
   const ending = lastTwo >= 11 && lastTwo <= 14 ? "деталей" : count % 10 === 1 ? "деталь" :
     count % 10 >= 2 && count % 10 <= 4 ? "детали" : "деталей";

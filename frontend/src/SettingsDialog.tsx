@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Settings, Box, Info, Axis3D, X } from "lucide-react";
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Button } from "./design/Button";
+import { Checkbox } from "./design/Checkbox";
 import type { AppSettings } from "./appSettings";
 import type { SolidWorksOptions, UpdateStatus } from "./App";
 
@@ -253,14 +254,14 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 </div>
               </section>
               <section className="settings-group"><h4>Автосохранение</h4>
-                <label className="settings-check"><input type="checkbox" checked={draft.autosaveEnabled} onChange={(event) => setDraft({ ...draft, autosaveEnabled: event.target.checked })} /> Включить автосохранение</label>
+                <label className="settings-check"><Checkbox checked={draft.autosaveEnabled} onChange={(event) => setDraft({ ...draft, autosaveEnabled: event.target.checked })} /> Включить автосохранение</label>
                 <label>Период автосохранения, мин<input type="number" min="1" max="1440" value={draft.autosaveMinutes} disabled={!draft.autosaveEnabled} onChange={(event) => setDraft({ ...draft, autosaveMinutes: Number(event.target.value) })} /></label>
               </section>
             </>}
             {active === "view" && <>
               <section className="settings-group"><h4>Размеры и подсказки</h4>
-                <label className="settings-check"><input type="checkbox" checked={draft.showDimensions} onChange={(event) => setDraft({ ...draft, showDimensions: event.target.checked })} /> Показывать размерные линии поддона</label>
-                <label className="settings-check"><input type="checkbox" checked={draft.showGrid} onChange={(event) => setDraft({ ...draft, showGrid: event.target.checked })} /> Показывать сетку</label>
+                <label className="settings-check"><Checkbox checked={draft.showDimensions} onChange={(event) => setDraft({ ...draft, showDimensions: event.target.checked })} /> Показывать размерные линии поддона</label>
+                <label className="settings-check"><Checkbox checked={draft.showGrid} onChange={(event) => setDraft({ ...draft, showGrid: event.target.checked })} /> Показывать сетку</label>
               </section>
               <section className="settings-group"><h4>Вид по умолчанию</h4>
                 <label>Начальный вид<select value={draft.camera} onChange={(event) => setDraft({ ...draft, camera: event.target.value as AppSettings["camera"] })}><option value="isometric">Изометрия</option><option value="top">Сверху</option><option value="front">Спереди</option><option value="side">Сбоку</option></select></label>
@@ -314,7 +315,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 {contactMessage ? <p className={contactMessage.ok ? "success-message" : "error"} role="status">{contactMessage.text}</p> : null}
               </section>
               <section className="settings-group"><h4>Обновление PalletLab</h4>
-                <label className="settings-check"><input type="checkbox" checked={draft.checkUpdates} onChange={(event) => setDraft({ ...draft, checkUpdates: event.target.checked })} /> Проверять обновления при каждом запуске программы</label>
+                <label className="settings-check"><Checkbox checked={draft.checkUpdates} onChange={(event) => setDraft({ ...draft, checkUpdates: event.target.checked })} /> Проверять обновления при каждом запуске программы</label>
                 <div className="settings-update"><span>{checkLabel}</span><button type="button" className="secondary" onClick={() => void checkUpdates()} disabled={checking || ["checking", "downloading", "ready", "installing"].includes(update.state)}>Проверить обновления</button></div>
                 <p role="status">{update.state === "checking" ? "Проверка обновлений…"
                   : update.state === "current" ? "Установлена последняя версия."

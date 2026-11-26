@@ -25,11 +25,13 @@ import { betweenFaces, type BeamReference, type BeamReferenceFace } from "./manu
 import { manualSectionForSupport } from "./manualBeamSection";
 import { SettingsDialog } from "./SettingsDialog";
 import { Button } from "./design/Button";
+import { Checkbox } from "./design/Checkbox";
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Hud, HudHint } from "./design/Hud";
-import { PalletSummary } from "./design/PalletSummary";
+import { detailCount, PalletSummary } from "./design/PalletSummary";
 import { ResetDialog } from "./design/ResetDialog";
-import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronUp, Info } from "lucide-react";
+import { ProgressIndicator } from "./design/ProgressIndicator";
+import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronUp, Info, X } from "lucide-react";
 import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
 
@@ -1871,7 +1873,11 @@ export function App() {
       </div>
       {viewportExpanded && calculation?.snapshot?.pallet ? (
         <span className="viewport-toolbar-summary">
-          Длина: {formatMillimetres(calculation.snapshot.pallet.size.length)} мм · Ширина: {formatMillimetres(calculation.snapshot.pallet.size.width)} мм · Высота: {formatMillimetres(calculation.snapshot.pallet.size.height)} мм · Масса: {formatKilograms(calculation.snapshot.pallet.massKg)} кг · {calculation.snapshot.pallet.beams.length} шт.
+          <span>Длина: {formatMillimetres(calculation.snapshot.pallet.size.length)} мм</span><span aria-hidden="true">•</span>
+          <span>Ширина: {formatMillimetres(calculation.snapshot.pallet.size.width)} мм</span><span aria-hidden="true">•</span>
+          <span>Высота: {formatMillimetres(calculation.snapshot.pallet.size.height)} мм</span><span aria-hidden="true">•</span>
+          <span>Масса: {formatKilograms(calculation.snapshot.pallet.massKg)} кг</span><span aria-hidden="true">•</span>
+          <span>{detailCount(calculation.snapshot.pallet.beams.length)}</span>
         </span>
       ) : <div className="viewport-tool-spacer" />}
       <label className="viewport-view-select">
@@ -1940,8 +1946,7 @@ export function App() {
               <h2 id="update-title">Обновление PalletLab</h2>
               {update.state === "available" ? <p>Доступна версия {update.version}.{update.manualOnly ? " Для этой версии приложения скачайте обновление вручную со страницы релизов." : ""}</p> : null}
               {update.state === "downloading" ? <>
-                <p>Скачивание и проверка обновления…</p>
-                {update.total ? <progress max={update.total} value={update.received ?? 0} /> : <progress />}
+                <ProgressIndicator label="Скачивание и проверка обновления…" value={update.total ? update.received ?? 0 : undefined} max={update.total || 100} />
               </> : null}
               {update.state === "ready" ? <>
                 <p>Версия {update.version} готова к установке. Приложение закроется.</p>
@@ -1961,15 +1966,15 @@ export function App() {
         {exportSetupOpen ? createPortal(
           <div className="modal-backdrop" role="presentation">
             <section ref={exportDialog} tabIndex={-1} className="modal export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
-              <header className="export-header"><h2 id="export-title">Экспорт поддона</h2><Button variant="ghost" aria-label="Закрыть экспорт" onClick={() => setExportSetupOpen(false)}>×</Button></header>
+              <header className="export-header"><h2 id="export-title">Экспорт поддона</h2><Button variant="ghost" aria-label="Закрыть экспорт" onClick={() => setExportSetupOpen(false)}><X size={16} aria-hidden="true" /></Button></header>
               <div className="export-cad-field"><span>CAD-система</span>
                 <SegmentedControl label="CAD-система" value={exportCadSystem} options={[{ value: "solidworks", label: "SolidWorks" }, { value: "kompas", label: "КОМПАС-3D" }]} onChange={setExportCadSystem} />
               </div>
               <fieldset className="export-options">
-                <legend>Состав экспорта</legend>
+                <legend>Что экспортируем</legend>
+                <div className="export-option-group">
                 <label className="export-checkbox">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={includePalletModel}
                     disabled={!includePartModels}
                     onChange={(event) => changePalletModel(event.target.checked)}
@@ -1977,17 +1982,35 @@ export function App() {
                   Модель поддона
                 </label>
                 <label className="export-checkbox">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={includePartModels}
                     onChange={(event) => changePartModels(event.target.checked)}
                   />
                   Модели деталей
                 </label>
+                </div>
+                <div className="export-option-group">
+                <label className="export-checkbox">
+                  <Checkbox
+                    checked={includePalletDrawing}
+                    disabled={!includePartModels || !includePalletModel}
+                    onChange={(event) => setIncludePalletDrawing(event.target.checked)}
+                  />
+                  Чертёж поддона
+                </label>
+                <label className="export-checkbox">
+                  <Checkbox
+                    checked={includePartDrawings}
+                    disabled={!includePartModels}
+                    onChange={(event) => setIncludePartDrawings(event.target.checked)}
+                  />
+                  Чертежи деталей
+                </label>
+                </div>
                 {hasBuiltStepModel ? (
+                  <div className="export-option-group">
                   <label className="export-checkbox">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={includeExportModel}
                       disabled={!includePartModels || !includePalletModel}
                       onChange={(event) => {
@@ -1997,32 +2020,8 @@ export function App() {
                     />
                     Модель упаковки
                   </label>
-                ) : null}
-                {hasBuiltStepModel && includeExportModel && exportCadSystem === "solidworks" ? (
-                  <p className="modal-hint">Если SolidWorks не сможет прочитать исходный STEP, будет создана совместимая копия геометрии. Имена и цвета компонентов могут не сохраниться; копия может быть значительно больше оригинала и потребовать много памяти при импорте. Исходный STEP останется в папке экспорта.</p>
-                ) : null}
-                <label className="export-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={includePalletDrawing}
-                    disabled={!includePartModels || !includePalletModel}
-                    onChange={(event) => setIncludePalletDrawing(event.target.checked)}
-                  />
-                  Чертёж поддона
-                </label>
-                <label className="export-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={includePartDrawings}
-                    disabled={!includePartModels}
-                    onChange={(event) => setIncludePartDrawings(event.target.checked)}
-                  />
-                  Чертежи деталей
-                </label>
-                {hasBuiltStepModel ? (
                   <label className="export-checkbox">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={includePackagingDrawing}
                       disabled={
                         !includeExportModel
@@ -2033,6 +2032,10 @@ export function App() {
                     />
                     Упаковочный чертёж
                   </label>
+                  </div>
+                ) : null}
+                {hasBuiltStepModel && includeExportModel && exportCadSystem === "solidworks" ? (
+                  <p className="modal-hint">Если SolidWorks не сможет прочитать исходный STEP, будет создана совместимая копия геометрии. Имена и цвета компонентов могут не сохраниться; копия может быть значительно больше оригинала и потребовать много памяти при импорте. Исходный STEP останется в папке экспорта.</p>
                 ) : null}
               </fieldset>
               <label className="file-field export-directory-field">
@@ -2068,18 +2071,15 @@ export function App() {
         ) : null}
         {exporting ? (
           <div className="modal-backdrop" role="presentation">
-            <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite">
-              <h2>Экспорт выполняется</h2>
-              <p>
-                {exporting === "solidworks"
+            <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="export-progress-title">
+              <h2 id="export-progress-title">Экспорт выполняется</h2>
+              <ProgressIndicator label={exporting === "solidworks"
                   ? includeExportModel
                     ? "SolidWorks импортирует STEP-модель и формирует упаковочную сборку. Для крупных моделей подготовка может занять несколько минут…"
                     : "SolidWorks создаёт выбранные модели и чертежи…"
                   : includeExportModel
                     ? "КОМПАС-3D импортирует STEP-модель и формирует упаковочную сборку. Импорт крупной модели может занять несколько минут…"
-                    : "КОМПАС-3D создаёт выбранные модели и чертежи…"}
-              </p>
-              <progress aria-label="Процесс экспорта" />
+                    : "КОМПАС-3D создаёт выбранные модели и чертежи…"} />
               <p className="modal-hint">Не закрывайте PalletLab и CAD-систему до завершения операции.</p>
             </section>
           </div>
@@ -2099,10 +2099,8 @@ export function App() {
           <div className="modal-backdrop" role="presentation">
             <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="step-import-title">
               <h2 id="step-import-title">Импорт STEP-модели</h2>
-              <p>{stepImport.state === "completed" ? "Подготавливаем модель к отображению…" : stepImport.label ?? "Подготавливаем STEP-модель…"}</p>
-              {stepImport.state === "completed"
-                ? <progress aria-label="Подготовка STEP-модели" />
-                : <progress max="100" value={stepImport.progress ?? 0} aria-label="Прогресс импорта STEP-модели" />}
+              <ProgressIndicator label={stepImport.state === "completed" ? "Подготавливаем модель к отображению…" : stepImport.label ?? "Подготавливаем STEP-модель…"}
+                value={stepImport.state === "completed" ? undefined : stepImport.progress} />
               <p className="modal-hint">Не изменяйте проект до окончания импорта.</p>
               {stepImport.state === "running" ? (
                 <footer className="modal-actions">

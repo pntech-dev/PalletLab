@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Settings } from "lucide-react";
+import { Checkbox } from "./design/Checkbox";
+import { Slider } from "./design/Slider";
 
 type SceneSettingsProps = {
   hasModel: boolean;
@@ -48,24 +50,24 @@ export default function SceneSettings({
         <strong>Настройки сцены</strong>
         {hasModel ? <>
           <label className="scene-settings-check">
-            <input type="checkbox" checked={modelVisible} onChange={(event) => setModelVisible(event.target.checked)} />
+            <Checkbox checked={modelVisible} onChange={(event) => setModelVisible(event.target.checked)} />
             <span>Показывать 3D-модель</span>
           </label>
           <label className="scene-settings-range">
             <span>Прозрачность</span>
-            <input type="range" min="0" max="100" step="1" value={transparency} disabled={!modelVisible}
+            <Slider min={0} max={100} step={1} value={transparency} disabled={!modelVisible}
               onChange={(event) => setTransparency(Number(event.target.value))} />
             <output>{transparency}%</output>
           </label>
           <hr />
         </> : null}
         <label className="scene-settings-check">
-          <input type="checkbox" checked={dimensionsVisible} onChange={(event) => setDimensionsVisible(event.target.checked)} />
+          <Checkbox checked={dimensionsVisible} onChange={(event) => setDimensionsVisible(event.target.checked)} />
           <span>Показывать размеры</span>
         </label>
         <hr />
         <label className="scene-settings-check">
-          <input type="checkbox" checked={gridVisible} onChange={(event) => setGridVisible(event.target.checked)} />
+          <Checkbox checked={gridVisible} onChange={(event) => setGridVisible(event.target.checked)} />
           <span>Показывать сетку</span>
         </label>
       </div>
