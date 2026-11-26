@@ -10,7 +10,7 @@ type Section = "general" | "view" | "cad" | "about";
 
 const SECTIONS: { id: Section; title: string; description: string }[] = [
   { id: "general", title: "Общее", description: "Параметры по умолчанию для новых проектов." },
-  { id: "view", title: "Вид и управление", description: "Настройки отображения и начального положения камеры." },
+  { id: "view", title: "Вид и управление", description: "Отображение поддона в области 3D-просмотра" },
   { id: "cad", title: "CAD и чертежи", description: "Шаблоны и параметры экспорта в CAD-системы." },
   { id: "about", title: "О программе", description: "Версия PalletLab, связь с разработчиком и обновления." },
 ];
@@ -228,11 +228,11 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
             {SECTIONS.map((item) => { const Icon = SECTION_ICONS[item.id]; return <Button variant="ghost" key={item.id} aria-current={active === item.id ? "page" : undefined}
               onClick={() => setActive(item.id)}><Icon size={16} />{item.title}</Button>; })}
           </nav>
-          <div className={`settings-content${active === "general" ? " settings-content--general" : ""}`}>
+          <div className={`settings-content${active === "general" || active === "view" ? " settings-content--standard" : ""}`}>
             <h3>{section.title}</h3>
             <p className="settings-description">{section.description}</p>
 
-            {active === "general" && <div className="settings-general-groups">
+            {active === "general" && <div className="settings-standard-groups">
               <section className="settings-group"><h4>Параметры поддона</h4>
                 <div className="settings-segment-field"><span>Округление размеров по умолчанию</span>
                   <SegmentedControl label="Округление размеров по умолчанию" value={draft.rounding}
@@ -258,7 +258,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 </label>
               </section>
             </div>}
-            {active === "view" && <>
+            {active === "view" && <div className="settings-standard-groups">
               <section className="settings-group"><h4>Размеры и подсказки</h4>
                 <label className="settings-check"><Checkbox checked={draft.showDimensions} onChange={(event) => setDraft({ ...draft, showDimensions: event.target.checked })} /> Показывать размерные линии поддона</label>
                 <label className="settings-check"><Checkbox checked={draft.showGrid} onChange={(event) => setDraft({ ...draft, showGrid: event.target.checked })} /> Показывать сетку</label>
@@ -270,7 +270,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                     onChange={(camera) => setDraft({ ...draft, camera })} />
                 </div>
               </section>
-            </>}
+            </div>}
             {active === "cad" && <>
               <section className="settings-group"><h4>Автопоиск шаблонов</h4>
                 <p>Поиск шаблонов детали, сборки и чертежа в настройках SolidWorks, реестре Windows и стандартных папках, а также стандартной библиотеки материалов.</p>
