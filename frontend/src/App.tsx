@@ -390,9 +390,22 @@ export function App() {
   const [marginDrafts, setMarginDrafts] = useState<Partial<Record<MarginIndex, string>>>({});
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [expandedLayerId, setExpandedLayerId] = useState<string | null>(null);
-  const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
-  const [dropLayerId, setDropLayerId] = useState<string | null>(null);
-  const [dropAfterLayer, setDropAfterLayer] = useState(false);
+  const [draggedLayer, setDraggedLayer] = useState<{
+    id: string;
+    startIndex: number;
+    targetIndex: number;
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const layerCardRefs = useRef(new Map<string, HTMLElement>());
+  const layerPlaceholderRef = useRef<HTMLDivElement>(null);
+  const floatingLayerRef = useRef<HTMLElement>(null);
+  const directionsRef = useRef<HTMLDivElement>(null);
+  const pendingSiblingTops = useRef<Map<string, number> | null>(null);
+  const pendingDropRect = useRef<{ id: string; rect: DOMRect } | null>(null);
+  const layerFlipAnimations = useRef(new Map<string, Animation>());
   const [hiddenLayerIds, setHiddenLayerIds] = useState<string[]>([]);
   const [camera, setCamera] = useState<CameraPreset>("isometric");
   const [viewportExpanded, setViewportExpanded] = useState(false);
@@ -843,9 +856,7 @@ export function App() {
       : nextProject.pallet.layers.some((layer) => layer.id === current) ? current : null);
     setExpandedLayerId((current) => expandTopLayer
       ? topLayerId
-      : nextProject.pallet.layers.some((layer) => layer.id === current)
-        ? current
-        : nextProject.pallet.layers[0]?.id ?? null);
+      : nextProject.pallet.layers.some((layer) => layer.id === current) ? current : null);
   }
 
   function updateHistory(previous: Project, next: Project) {
@@ -1442,6 +1453,14 @@ export function App() {
     return project?.view.locked_layer_ids?.includes(layerId) ?? false;
   }
 
+  function toggleLayerLock(layerId: string) {
+    if (!project) return;
+    const locked = project.view.locked_layer_ids ?? [];
+    const next = locked.includes(layerId) ? locked.filter((id) => id !== layerId) : [...locked, layerId];
+    clearInteractionState();
+    updateProject({ ...project, view: { ...project.view, locked_layer_ids: next } });
+  }
+
   function toggleBeam(beam: ViewportBeam, point?: ViewportPoint, normal?: ViewportFaceNormal) {
     if (!insertionMode && isLocked(beam.physicalLayerId)) {
       showViewportToolError("Слой заблокирован. Сначала разблокируйте его.");
@@ -1962,18 +1981,195 @@ export function App() {
     if (manualSecondReference?.beam.layerId === layerId) setManualSecondReference(null);
   }
 
-  function moveLayer(sourceId: string, targetId: string, insertAfter: boolean) {
-    if (!project || sourceId === targetId) return;
-    if ((project.view.locked_layer_ids ?? []).length) {
-      showViewportToolError("Для изменения порядка разблокируйте слои.");
+  function reorderLayerToVisualIndex(sourceId: string, targetVisualIndex: number) {
+    if (!project) return;
+    if (isLocked(sourceId)) {
+      showViewportToolError("Слой заблокирован. Сначала разблокируйте его.");
       return;
     }
     const source = project.pallet.layers.find((layer) => layer.id === sourceId);
     const layers = project.pallet.layers.filter((layer) => layer.id !== sourceId);
-    const targetIndex = layers.findIndex((layer) => layer.id === targetId);
-    if (!source || targetIndex < 0) return;
-    layers.splice(targetIndex + (insertAfter ? 1 : 0), 0, source);
+    if (!source) return;
+    const insertAt = Math.max(0, Math.min(layers.length, layers.length - targetVisualIndex));
+    layers.splice(insertAt, 0, source);
     updateProject({ ...project, pallet: { ...project.pallet, layers } });
+  }
+
+  useLayoutEffect(() => {
+    const prevTops = pendingSiblingTops.current;
+    if (prevTops) {
+      pendingSiblingTops.current = null;
+      const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      if (!reducedMotion) {
+        for (const [id, prevTop] of prevTops) {
+          const element = layerCardRefs.current.get(id);
+          if (!element) continue;
+          const nextTop = element.getBoundingClientRect().top;
+          const deltaY = prevTop - nextTop;
+          if (Math.abs(deltaY) < 0.5) continue;
+          layerFlipAnimations.current.get(id)?.cancel();
+          const anim = element.animate(
+            [{ transform: `translate3d(0, ${deltaY}px, 0)` }, { transform: "translate3d(0, 0, 0)" }],
+            { duration: 240, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+          );
+          layerFlipAnimations.current.set(id, anim);
+          void anim.finished.then(() => {
+            if (layerFlipAnimations.current.get(id) === anim) layerFlipAnimations.current.delete(id);
+          }).catch(() => undefined);
+        }
+      }
+    }
+    const drop = pendingDropRect.current;
+    if (drop) {
+      pendingDropRect.current = null;
+      const element = layerCardRefs.current.get(drop.id);
+      const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      if (element && !reducedMotion && typeof element.animate === "function") {
+        const nextRect = element.getBoundingClientRect();
+        const dx = drop.rect.left - nextRect.left;
+        const dy = drop.rect.top - nextRect.top;
+        layerFlipAnimations.current.get(drop.id)?.cancel();
+        const anim = element.animate(
+          [
+            {
+              transform: `translate3d(${dx}px, ${dy}px, 0) scale(1.02)`,
+              boxShadow: "0 14px 32px rgb(0 0 0 / 16%), 0 0 0 1px var(--color-blue-400)",
+            },
+            {
+              transform: "translate3d(0, 0, 0) scale(1)",
+              boxShadow: "0 0 0 0 transparent",
+            },
+          ],
+          { duration: 220, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+        );
+        layerFlipAnimations.current.set(drop.id, anim);
+        void anim.finished.then(() => {
+          if (layerFlipAnimations.current.get(drop.id) === anim) layerFlipAnimations.current.delete(drop.id);
+        }).catch(() => undefined);
+      }
+    }
+  }, [draggedLayer?.id, draggedLayer?.targetIndex, project?.pallet.layers]);
+
+  function startLayerDrag(event: React.PointerEvent<HTMLElement>, layerId: string) {
+    if (event.button !== 0 || !project) return;
+    if (isLocked(layerId)) {
+      showViewportToolError("Слой заблокирован. Сначала разблокируйте его.");
+      return;
+    }
+    const card = layerCardRefs.current.get(layerId);
+    if (!card) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const reversed = [...project.pallet.layers].reverse();
+    const startIndex = reversed.findIndex((item) => item.id === layerId);
+    if (startIndex < 0) return;
+
+    const cardRect = card.getBoundingClientRect();
+    const startClientY = event.clientY;
+    let currentTargetIndex = startIndex;
+    let lastClientY = startClientY;
+    let scrollFrame = 0;
+
+    const captureSiblingTops = () => {
+      const tops = new Map<string, number>();
+      for (const [id, el] of layerCardRefs.current) {
+        if (id !== layerId) tops.set(id, el.getBoundingClientRect().top);
+      }
+      pendingSiblingTops.current = tops;
+    };
+
+    const updateOrderForPointer = (clientY: number) => {
+      const floating = floatingLayerRef.current;
+      if (floating) {
+        floating.style.transform = `translate3d(0, ${clientY - startClientY}px, 0) scale(1.02)`;
+      }
+      const otherLayers = reversed.filter((item) => item.id !== layerId);
+      let nextIndex = currentTargetIndex;
+      // Compare pointer Y against adjacent siblings' layout midpoints to avoid
+      // oscillation when dragging across cards of different heights.
+      while (nextIndex > 0) {
+        const prevLayer = otherLayers[nextIndex - 1];
+        const prevEl = prevLayer ? layerCardRefs.current.get(prevLayer.id) : null;
+        if (!prevEl) break;
+        const rect = prevEl.getBoundingClientRect();
+        if (clientY < rect.top + rect.height / 2) nextIndex -= 1;
+        else break;
+      }
+      while (nextIndex < otherLayers.length) {
+        const nextLayer = otherLayers[nextIndex];
+        const nextEl = nextLayer ? layerCardRefs.current.get(nextLayer.id) : null;
+        if (!nextEl) break;
+        const rect = nextEl.getBoundingClientRect();
+        if (clientY > rect.top + rect.height / 2) nextIndex += 1;
+        else break;
+      }
+      if (nextIndex !== currentTargetIndex) {
+        currentTargetIndex = nextIndex;
+        captureSiblingTops();
+        setDraggedLayer((current) => (current ? { ...current, targetIndex: nextIndex } : current));
+      }
+    };
+
+    const autoScrollStep = () => {
+      const container = directionsRef.current;
+      if (!container) { scrollFrame = 0; return; }
+      const rect = container.getBoundingClientRect();
+      const threshold = 44;
+      let delta = 0;
+      if (lastClientY < rect.top + threshold) {
+        delta = -Math.ceil(((rect.top + threshold - lastClientY) / threshold) * 10);
+      } else if (lastClientY > rect.bottom - threshold) {
+        delta = Math.ceil(((lastClientY - (rect.bottom - threshold)) / threshold) * 10);
+      }
+      if (delta !== 0) {
+        container.scrollTop += delta;
+        updateOrderForPointer(lastClientY);
+        scrollFrame = window.requestAnimationFrame(autoScrollStep);
+      } else {
+        scrollFrame = 0;
+      }
+    };
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      lastClientY = moveEvent.clientY;
+      updateOrderForPointer(moveEvent.clientY);
+      if (!scrollFrame) scrollFrame = window.requestAnimationFrame(autoScrollStep);
+    };
+
+    const finishDrag = (commit: boolean) => {
+      if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      const floating = floatingLayerRef.current;
+      if (floating) pendingDropRect.current = { id: layerId, rect: floating.getBoundingClientRect() };
+      if (commit && currentTargetIndex !== startIndex) {
+        reorderLayerToVisualIndex(layerId, currentTargetIndex);
+      }
+      setDraggedLayer(null);
+    };
+
+    const handlePointerUp = () => finishDrag(true);
+    const handlePointerCancel = () => finishDrag(false);
+
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+    setSelectedLayerId(layerId);
+    setDraggedLayer({
+      id: layerId,
+      startIndex,
+      targetIndex: startIndex,
+      left: cardRect.left,
+      top: cardRect.top,
+      width: cardRect.width,
+      height: cardRect.height,
+    });
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
   }
 
   function removeLayer(layerId: string) {
@@ -2210,7 +2406,7 @@ export function App() {
           {recoveryNotice ? <p className="recovery-notice" role="alert">{recoveryNotice}</p> : null}
           {stepRestoreError ? <p className="error" role="alert">{stepRestoreError}</p> : null}
         {project ? (
-          <div className="directions">
+          <div ref={directionsRef} className="directions">
             <section className="layer-stack" aria-label="Слои поддона">
               <div className="layer-stack-heading">
                 <h2>Слои поддона</h2>
@@ -2220,11 +2416,7 @@ export function App() {
                     title={selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать слой" : "Заблокировать слой"}
                     aria-pressed={selectedLayerId ? isLocked(selectedLayerId) : false}
                     onClick={() => {
-                      if (!selectedLayerId) return;
-                      const locked = project.view.locked_layer_ids ?? [];
-                      const next = locked.includes(selectedLayerId) ? locked.filter((id) => id !== selectedLayerId) : [...locked, selectedLayerId];
-                      clearInteractionState();
-                      updateProject({ ...project, view: { ...project.view, locked_layer_ids: next } });
+                      if (selectedLayerId) toggleLayerLock(selectedLayerId);
                     }}>
                     {selectedLayerId && isLocked(selectedLayerId) ? <LockKeyholeOpen size={16} /> : <LockKeyhole size={16} />}
                   </button>
@@ -2249,47 +2441,51 @@ export function App() {
                 <Plus size={24} /> Добавить новый слой
               </button>
               <div className="layer-stack-list">
-              {[...project.pallet.layers].reverse().map((layer) => {
-                const index = project.pallet.layers.findIndex((item) => item.id === layer.id);
-                return (
-                <section
-                  className={`layer-card${selectedLayerId === layer.id ? " is-selected" : ""}${isLocked(layer.id) ? " is-locked" : ""}${hiddenLayerIds.includes(layer.id) ? " is-hidden" : ""}${expandedLayerId === layer.id ? " is-expanded" : ""}${draggedLayerId === layer.id ? " is-dragging" : ""}${dropLayerId === layer.id ? (dropAfterLayer ? " is-drop-after" : " is-drop-before") : ""}`}
-                  key={layer.id}
-                  onClick={() => setSelectedLayerId(layer.id)}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    const bounds = event.currentTarget.getBoundingClientRect();
-                    setDropLayerId(layer.id);
-                    setDropAfterLayer(event.clientY > bounds.top + bounds.height / 2);
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    const sourceId = event.dataTransfer.getData("text/plain") || draggedLayerId;
-                    const bounds = event.currentTarget.getBoundingClientRect();
-                    if (sourceId) moveLayer(sourceId, layer.id, event.clientY <= bounds.top + bounds.height / 2);
-                    setDraggedLayerId(null);
-                    setDropLayerId(null);
-                  }}
-                >
-                  <div className="layer-card-header">
-                    <span
-                      className="layer-drag-handle"
-                      draggable={!isLocked(layer.id)}
-                      role="img"
-                      aria-label={`Перетащить слой ${layerNumber(layer, index)}`}
-                      title="Перетащить слой"
-                      onDragStart={(event) => {
-                        event.dataTransfer.effectAllowed = "move";
-                        event.dataTransfer.setData("text/plain", layer.id);
-                        setDraggedLayerId(layer.id);
+              {(() => {
+                const reversed = [...project.pallet.layers].reverse();
+                const displayLayers = (() => {
+                  if (!draggedLayer) return reversed;
+                  const source = reversed.find((item) => item.id === draggedLayer.id);
+                  if (!source) return reversed;
+                  const rest = reversed.filter((item) => item.id !== draggedLayer.id);
+                  rest.splice(Math.max(0, Math.min(rest.length, draggedLayer.targetIndex)), 0, source);
+                  return rest;
+                })();
+                return displayLayers.map((layer) => {
+                  const index = project.pallet.layers.findIndex((item) => item.id === layer.id);
+                  const isFloatingDragged = draggedLayer?.id === layer.id;
+                  const cardNode = (
+                    <section
+                      ref={(node) => {
+                        if (isFloatingDragged) {
+                          floatingLayerRef.current = node;
+                        } else if (node) {
+                          layerCardRefs.current.set(layer.id, node);
+                        } else {
+                          layerCardRefs.current.delete(layer.id);
+                        }
                       }}
-                      onDragEnd={() => {
-                        setDraggedLayerId(null);
-                        setDropLayerId(null);
-                      }}
+                      className={`layer-card${selectedLayerId === layer.id ? " is-selected" : ""}${isLocked(layer.id) ? " is-locked" : ""}${hiddenLayerIds.includes(layer.id) ? " is-hidden" : ""}${expandedLayerId === layer.id ? " is-expanded" : ""}${isFloatingDragged ? " is-dragging-floating" : ""}`}
+                      key={layer.id}
+                      style={isFloatingDragged && draggedLayer ? {
+                        left: draggedLayer.left,
+                        top: draggedLayer.top,
+                        width: draggedLayer.width,
+                        height: draggedLayer.height,
+                      } : undefined}
+                      onClick={() => setSelectedLayerId(layer.id)}
                     >
-                      <GripVertical size={24} />
-                    </span>
+                      <div className="layer-card-header">
+                        <span
+                          className="layer-drag-handle"
+                          role="button"
+                          tabIndex={-1}
+                          aria-label={`Перетащить слой ${layerNumber(layer, index)}`}
+                          title="Перетащить слой"
+                          onPointerDown={(event) => startLayerDrag(event, layer.id)}
+                        >
+                          <GripVertical size={24} />
+                        </span>
                     <button
                       type="button"
                       className="layer-toggle"
@@ -2301,7 +2497,19 @@ export function App() {
                       <span>Слой {layerNumber(layer, index)}{isLocked(layer.id) ? <span className="sr-only"> · Заблокирован</span> : null}</span>
                       <small>{layer.axis === "length" ? "Продольный" : "Поперечный"}{calculation?.snapshot?.pallet ? ` • ${calculation.snapshot.pallet.beams.filter((beam) => (beam.physicalLayerId ?? beam.layerId) === layer.id).length} шт` : ""}</small>
                     </button>
-                    {isLocked(layer.id) ? <span className="layer-lock-indicator" title="Слой заблокирован"><LockKeyhole size={16} aria-hidden="true" /></span> : null}
+                    {isLocked(layer.id) ? (
+                      <button
+                        type="button"
+                        className="layer-lock-indicator"
+                        aria-label={`Разблокировать слой ${layerNumber(layer, index)}`}
+                        title="Разблокировать слой"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleLayerLock(layer.id);
+                        }}>
+                        <LockKeyhole size={16} aria-hidden="true" />
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="layer-visibility secondary"
@@ -2400,8 +2608,18 @@ export function App() {
                     </fieldset>
                   ) : null}
                 </section>
-                );
-              })}
+                  );
+                  if (isFloatingDragged && draggedLayer) {
+                    return (
+                      <div key={layer.id} ref={layerPlaceholderRef} className="layer-card-placeholder"
+                        style={{ height: draggedLayer.height }} aria-hidden="true">
+                        {createPortal(cardNode, document.body)}
+                      </div>
+                    );
+                  }
+                  return cardNode;
+                });
+              })()}
               </div>
             </section>
               {project ? <fieldset className="pallet-margins" disabled={(project.view.locked_layer_ids ?? []).length > 0}>

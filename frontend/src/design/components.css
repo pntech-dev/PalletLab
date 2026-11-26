@@ -103,9 +103,11 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .layer-add-button { border: 1px dashed var(--border-default) !important; background: var(--surface-panel) !important; color: var(--text-muted) !important; }
 .modal { border: 0; border-radius: var(--radius-panel); background: var(--surface-panel); box-shadow: var(--shadow-card); }
 .modal h2, .settings-content h3, .settings-group h4 { color: var(--text-primary); }
-.settings-nav { margin: var(--space-4); padding: var(--space-2); border: 0; border-radius: var(--radius-panel); background: var(--surface-muted); }
-.settings-nav button { justify-content: flex-start; color: var(--text-muted); }
-.settings-nav button[aria-current='page'] { color: var(--accent); background: var(--color-neutral-200); }
+.settings-nav { margin: 0; padding: var(--space-2); border: 0; border-radius: var(--radius-panel); background: var(--surface-muted); }
+.settings-nav button { justify-content: flex-start; min-width: 36px; min-height: 36px; padding: var(--space-2); border: 0; font-size: var(--font-size-body); font-weight: 500; line-height: var(--line-height-ui); color: var(--text-muted); background: transparent; }
+.settings-nav button:hover:not(:disabled), .settings-nav button:active:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
+.settings-nav button[aria-current='page'], .settings-nav button[aria-current='page']:hover:not(:disabled), .settings-nav button[aria-current='page']:active:not(:disabled) { color: var(--accent); background: var(--color-neutral-200); font-weight: 500; }
+.settings-nav button:disabled, .settings-nav button[aria-current='page']:disabled { color: var(--color-slate-300); background: transparent; }
 .settings-content .settings-description, .settings-group p, .settings-content .settings-default-hint { color: var(--text-muted); }
 .settings-group { border-color: var(--color-neutral-200); }
 .settings-group > label:not(.settings-check) { width: 100%; }
@@ -114,9 +116,6 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .settings-header, .settings-footer { padding: 0; }
 .settings-header h2 { font-size: 20px; line-height: var(--line-height-ui); font-weight: 600; }
 .settings-layout { grid-template-columns: 181px minmax(0, 1fr); gap: var(--space-4); }
-.settings-nav { margin: 0; }
-.settings-nav button { min-height: 36px; padding: var(--space-2); font-weight: 500; }
-.settings-nav button[aria-current='page'] { font-weight: 500; }
 .settings-content--standard { display: flex; flex-direction: column; padding: 0; }
 .settings-content--standard h3 { margin: 0 0 var(--space-1); font-size: var(--font-size-heading); line-height: var(--line-height-ui); }
 .settings-content--standard .settings-description { font-size: var(--font-size-body); line-height: var(--line-height-ui); }
@@ -262,16 +261,18 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .layer-card .layer-toggle:hover:not(:disabled), .layer-card .layer-toggle:active:not(:disabled) { background: transparent; }
 .layer-card.is-hidden .layer-toggle:hover:not(:disabled), .layer-card.is-hidden .layer-toggle:active:not(:disabled) { color: var(--color-neutral-300); }
 .layer-card-header { display: flex; align-items: center; gap: var(--space-1); }
-.layer-drag-handle { flex: 0 0 24px; color: var(--color-neutral-300); }
+.layer-drag-handle { flex: 0 0 24px; color: var(--color-neutral-300); touch-action: none; }
 .layer-toggle { display: flex; flex: 1 1 0; flex-direction: column; align-items: flex-start; justify-content: center; min-width: 0; min-height: 41px; gap: var(--space-1); padding: 0 var(--space-3); border-radius: var(--radius-control); color: var(--text-primary); font-size: var(--font-size-body); font-weight: 500; }
 .layer-toggle small { color: var(--text-muted); font-size: var(--font-size-caption); }
 .layer-card.is-expanded .layer-toggle { flex-direction: row; align-items: center; justify-content: flex-start; gap: var(--space-4); }
 .layer-visibility[aria-pressed='true'], .layer-lock-indicator { color: var(--accent); background: var(--color-neutral-200); }
+.layer-card-header button.layer-lock-indicator { cursor: pointer; }
 .layer-card-header button.layer-visibility:not([aria-pressed='true']) { color: var(--text-muted); background: transparent; }
-.layer-expand:hover:not(:disabled), .layer-visibility:hover:not(:disabled), .layer-toolbar button:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
-.layer-card.is-drop-before { box-shadow: inset 0 3px var(--accent); }
-.layer-card.is-drop-after { box-shadow: inset 0 -3px var(--accent); }
-.editor-panel fieldset.layer-card-content { gap: var(--space-4); margin-top: var(--space-2); padding: var(--space-2) 0 0; border-color: var(--color-neutral-200); border-radius: 0; background: transparent; }
+.layer-expand:hover:not(:disabled), .layer-visibility:hover:not(:disabled), .layer-toolbar button:hover:not(:disabled), .layer-card-header button.layer-lock-indicator:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
+.layer-card.is-dragging-floating { position: fixed; z-index: 60; margin: 0; pointer-events: none; transform: translate3d(0, 0, 0) scale(1.02); box-shadow: 0 14px 32px rgb(0 0 0 / 16%), 0 0 0 1px var(--color-blue-400); background: var(--surface-panel); will-change: transform; }
+.layer-card.is-dragging-floating .layer-drag-handle { color: var(--accent); cursor: grabbing; }
+.layer-card-placeholder { flex: none; border: 1.5px dashed var(--color-blue-400); border-radius: var(--radius-control); background: var(--color-blue-100); opacity: 0.45; }
+.editor-panel fieldset.layer-card-content, .layer-card.is-dragging-floating fieldset.layer-card-content { gap: var(--space-4); margin-top: var(--space-2); padding: var(--space-2) 0 0; border-color: var(--color-neutral-200); border-radius: 0; background: transparent; }
 .layer-card-content label { display: grid; gap: var(--space-1); color: var(--text-muted); font-size: var(--font-size-caption); }
 .layer-card-content input:not([type='radio']), .layer-card-content select { min-height: 36px; padding: 6px var(--space-4); }
 .layer-card-content input:not([type='radio']):disabled, .layer-card-content select:disabled { color: var(--color-slate-400); border-color: transparent; background: var(--color-neutral-200); }
