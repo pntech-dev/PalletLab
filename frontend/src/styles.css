@@ -12,10 +12,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .app-actions { display: flex; align-items: center; gap: 6px; }
 .app-header button { padding: 7px 10px; font-size: 13px; }
 .app-settings-button { margin-left: auto; }
-.workspace { min-height: 0; overflow: hidden; display: grid; grid-template: "viewport editor" minmax(0, 1fr) / minmax(0, 1fr) minmax(0, 432px); transition: grid-template-columns 360ms ease; }
+.workspace { min-height: 0; overflow: hidden; display: grid; grid-template: "viewport editor" minmax(0, 1fr) / minmax(0, 1fr) minmax(0, 432px); }
 .workspace.is-viewport-expanded { grid-template-columns: minmax(0, 1fr) minmax(0, 0px); }
-.is-viewport-expanded .editor-panel { visibility: hidden; transition: visibility 0s 360ms; }
-.is-viewport-expanded .editor-panel .modal-backdrop { visibility: visible; }
+.workspace.is-viewport-expanded:not(.is-viewport-expanding) .editor-panel { visibility: hidden; }
+
 .viewport-panel { grid-area: viewport; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; padding: 16px; background: #1e2d31; }
 .editor-panel { grid-area: editor; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; padding: 16px; border-left: 1px solid #d8d7d0; background: #f8f7f3; }
 .editor-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
@@ -74,8 +74,8 @@ input:disabled { cursor: default; background: #ecece8; color: #7d8583; }
 
 .viewport { position: relative; height: min(58vh, 680px); margin-top: 16px; overflow: hidden; border: 1px solid #42585a; border-radius: 14px; background: #dfe7e3; }
 .viewport-panel .viewport { flex: 1; height: auto; min-height: 0; margin-top: 0; }
-.pallet-summary-transition { display: grid; grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows 360ms ease, opacity 260ms ease; }
-.is-viewport-expanded .pallet-summary-transition { grid-template-rows: 0fr; opacity: 0; }
+.pallet-summary-transition { display: grid; grid-template-rows: 1fr; }
+
 .pallet-summary { min-height: 0; overflow: hidden; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-top: 12px; }
 .pallet-summary-card { min-width: 0; padding: 12px 14px; border: 1px solid #42585a; border-radius: 12px; background: #f8f7f3; }
 .pallet-summary-card h2 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
@@ -203,7 +203,7 @@ legend { padding: 0 4px; color: #3e4c4b; font-size: 13px; font-weight: 600; }
 @media (max-width: 1040px) { .app-header { gap: 12px; padding: 0 16px; } .app-actions { gap: 4px; } .app-header button { padding: 7px 8px; font-size: 12px; } .workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 40%); } }
 @media (max-width: 780px) { .app-shell { grid-template-rows: auto minmax(0, 1fr); } .app-header { flex-wrap: wrap; padding: 12px 16px; } .app-actions { order: 3; width: 100%; overflow-x: auto; } .app-settings-button { margin-left: auto; } .workspace { grid-template: "viewport" auto "editor" auto / 1fr; } .viewport-panel { min-height: 620px; padding: 16px; } .editor-panel { border-top: 1px solid #d8d7d0; border-left: 0; padding: 16px; } .viewport-floating-toolbar { left: 10px; right: 10px; overflow-x: auto; } }
 @media (max-width: 780px) { .workspace.is-viewport-expanded { grid-template: "viewport" minmax(0, 1fr) / minmax(0, 1fr); } .is-viewport-expanded .editor-panel { position: absolute; } }
-@media (prefers-reduced-motion: reduce) { .workspace, .pallet-summary-transition { transition: none; } .is-viewport-expanded .editor-panel { transition: none; } }
+
 
 .layer-toolbar { display: flex; flex: 1; align-items: center; justify-content: flex-end; gap: 10px; color: #68736f; font-size: 12px; }
 .layer-toolbar button { min-height: 32px; padding: 6px 9px; font-size: 12px; }

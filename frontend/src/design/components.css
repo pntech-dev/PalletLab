@@ -49,13 +49,20 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .app-header button { padding: 8px; font-size: var(--font-size-caption); }
 .app-actions > button { color: var(--text-muted); background: transparent; border: 0; white-space: nowrap; }
 .app-actions > button:hover:not(:disabled) { color: var(--text-primary); background: var(--surface-muted); }
-.workspace { gap: var(--space-2); padding: var(--space-2); grid-template-columns: minmax(0, 1fr) 500px; }
-.workspace.is-viewport-expanded { grid-template-columns: minmax(0, 1fr) 0; }
-.viewport-panel { gap: var(--space-2); padding: 0; background: transparent; }
-.editor-panel { padding: var(--space-4); border: 0; border-radius: var(--radius-panel); background: var(--surface-panel); }
-.editor-heading .eyebrow { color: var(--text-primary); font-size: 20px; font-weight: 600; }
-.viewport { border: 0; border-radius: var(--radius-panel); background: var(--surface-muted); }
-.viewport-floating-toolbar { padding: 0; border: 0; background: transparent; box-shadow: none; overflow-x: auto; }
+.workspace { display: block; position: relative; padding: var(--space-2); }
+.viewport-panel { grid-area: auto; position: absolute; inset: var(--space-2); z-index: 1; padding: 0; background: transparent; }
+.editor-panel { grid-area: auto; position: absolute; top: var(--space-2); right: var(--space-2); bottom: var(--space-2); width: min(500px, calc(100% - 16px)); z-index: 20; padding: var(--space-4); border: 0; border-radius: var(--radius-panel); background: var(--surface-panel); will-change: transform, opacity; }
+.pallet-summary-transition { position: absolute; left: 0; right: calc(min(500px, 100%) + var(--space-2)); bottom: 0; z-index: 19; will-change: transform, opacity; }
+.workspace.is-viewport-expanded:not(.is-viewport-expanding) .editor-panel { visibility: hidden; pointer-events: none; transform: translate3d(calc(100% + 24px), 0, 0); }
+.workspace.is-viewport-expanded:not(.is-viewport-expanding) .pallet-summary-transition { visibility: hidden; pointer-events: none; transform: translate3d(0, calc(100% + 24px), 0); }
+.workspace.is-viewport-expanding .editor-panel, .workspace.is-viewport-expanding .pallet-summary-transition { pointer-events: none; }
+.viewport { width: 100%; height: 100%; margin-top: 0; border: 0; border-radius: var(--radius-panel); background: var(--surface-muted); clip-path: inset(0px var(--viewport-right-inset, 0px) var(--viewport-bottom-inset, 0px) 0px round var(--radius-panel)); contain: layout style; }
+.viewport-floating-toolbar { right: calc(var(--viewport-right-inset, 0px) + 16px); padding: 0; border: 0; background: transparent; box-shadow: none; overflow-x: auto; }
+.workspace.is-viewport-expanding .viewport-floating-toolbar, .workspace.is-viewport-collapsing .viewport-floating-toolbar { overflow: visible; }
+.viewport-toolbar-end { display: flex; align-items: center; gap: 8px; flex: none; will-change: transform; }
+.viewport-fit-control { transform: translate3d(calc(-1 * var(--viewport-right-inset, 0px)), calc(-1 * var(--viewport-bottom-inset, 0px)), 0); will-change: transform; }
+.viewport-navigation-guide { transform: translate3d(0, calc(-1 * var(--viewport-bottom-inset, 0px)), 0); will-change: transform; }
+.viewport-error-toast { left: calc((100% - var(--viewport-right-inset, 0px)) / 2); }
 .viewport-floating-toolbar button, .viewport-fit-control button { min-width: 36px; min-height: 36px; padding: 8px; border: 0; border-radius: var(--radius-control); color: var(--text-muted); background: var(--surface-panel); box-shadow: none; }
 .viewport-floating-toolbar button.secondary { color: var(--text-muted); background: var(--surface-panel); }
 .viewport-floating-toolbar button:hover:not(:disabled), .viewport-fit-control button:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
@@ -175,14 +182,18 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .ui-slider::-moz-range-progress { height: 4px; border-radius: var(--space-1); background: var(--accent); }
 .ui-slider::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--accent); }
 .dimension-label { font-family: var(--font-ui); }
-.ui-segmented { display: flex; width: 100%; min-width: 0; min-height: 36px; padding: 2px; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-panel); }
-.ui-segmented-option { position: relative; display: block; flex: 1 1 0; min-width: 0; cursor: pointer; }
-.ui-segmented-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: .001; cursor: pointer; }
-.ui-segmented-option span { display: flex; align-items: center; justify-content: center; min-height: 30px; padding: 4px 8px; border-radius: 6px; color: var(--text-muted); font-size: var(--font-size-body); font-weight: 500; text-align: center; }
+.ui-segmented { position: relative; display: flex; width: 100%; min-width: 0; min-height: 36px; padding: 2px; border: 1px solid var(--border-default); border-radius: var(--radius-control); background: var(--surface-panel); isolation: isolate; }
+.ui-segmented-indicator { position: absolute; top: 0; left: 0; z-index: 0; border-radius: 6px; background: var(--accent); opacity: 0; pointer-events: none; will-change: transform, width, height; }
+.ui-segmented-option { position: relative; z-index: 1; display: block; flex: 1 1 0; min-width: 0; cursor: pointer; }
+.ui-segmented-option input { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; margin: 0; opacity: .001; cursor: pointer; }
+.ui-segmented-option span { position: relative; z-index: 1; display: flex; align-items: center; justify-content: center; height: 100%; min-height: 30px; padding: 4px 8px; border-radius: 6px; color: var(--text-muted); font-size: var(--font-size-body); font-weight: 500; text-align: center; transition: color 300ms ease, background-color 200ms ease; }
 .ui-segmented-option:hover input:not(:disabled):not(:checked) + span { background: var(--surface-muted); }
-.ui-segmented-option input:checked + span { color: var(--color-white); background: var(--accent); }
+.ui-segmented-option[data-active='true'] span, .ui-segmented-option input:checked + span { color: var(--color-white); background: transparent; transition: color 300ms ease; }
 .ui-segmented-option input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ui-segmented-option input:disabled + span { color: var(--color-slate-300); cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+  .ui-segmented-option span { transition: none; }
+}
 .settings-header, .export-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
 .settings-header button, .export-header button { min-width: 36px; padding: 8px; }
 .settings-segment-field, .export-cad-field { display: grid; gap: var(--space-1); color: var(--text-muted); font-size: var(--font-size-caption); }

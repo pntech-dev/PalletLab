@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -395,6 +396,260 @@ export function App() {
   const [hiddenLayerIds, setHiddenLayerIds] = useState<string[]>([]);
   const [camera, setCamera] = useState<CameraPreset>("isometric");
   const [viewportExpanded, setViewportExpanded] = useState(false);
+  const [viewportTransition, setViewportTransition] = useState<"none" | "expanding" | "collapsing">("none");
+  const [summaryHeight, setSummaryHeight] = useState(0);
+  const [editorWidth, setEditorWidth] = useState(500);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const editorPanelRef = useRef<HTMLElement>(null);
+  const summaryTransitionRef = useRef<HTMLDivElement>(null);
+  const activeViewportAnimations = useRef<Animation[]>([]);
+  const pendingViewportFlip = useRef<{
+    expanding: boolean;
+    wasTransitioning: boolean;
+    fromRightInset: number;
+    fromBottomInset: number;
+    editorOpacity: number;
+    summaryOpacity: number;
+    editorDeltaX: number | null;
+    summaryDeltaY: number | null;
+  } | null>(null);
+  const hasPalletSummary = Boolean(calculation?.ok && calculation.snapshot?.pallet);
+  const collapsedRightInset = editorWidth + 8;
+  const collapsedBottomInset = hasPalletSummary && summaryHeight > 0 ? summaryHeight : 0;
+  const visibleRightInset = viewportExpanded ? 0 : collapsedRightInset;
+  const visibleBottomInset = viewportExpanded ? 0 : collapsedBottomInset;
+
+  useLayoutEffect(() => {
+    const editor = editorPanelRef.current;
+    if (editor) {
+      const measureEditor = () => {
+        const width = editor.offsetWidth;
+        if (width > 0) setEditorWidth((current) => (current === width ? current : width));
+      };
+      measureEditor();
+      if (typeof ResizeObserver !== "undefined") {
+        const observer = new ResizeObserver(measureEditor);
+        observer.observe(editor);
+        return () => observer.disconnect();
+      }
+    }
+    return undefined;
+  }, []);
+
+  useLayoutEffect(() => {
+    const summary = summaryTransitionRef.current;
+    if (!summary || !hasPalletSummary) {
+      setSummaryHeight(0);
+      return undefined;
+    }
+    const measureSummary = () => {
+      const height = summary.offsetHeight;
+      if (height > 0) setSummaryHeight((current) => (current === height ? current : height));
+    };
+    measureSummary();
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(measureSummary);
+      observer.observe(summary);
+      return () => observer.disconnect();
+    }
+    return undefined;
+  }, [hasPalletSummary]);
+
+  const clearInlineViewportStyles = useCallback(() => {
+    const workspace = workspaceRef.current;
+    const viewport = workspace?.querySelector<HTMLElement>(".viewport");
+    if (viewport) viewport.style.clipPath = "";
+    const fitControl = workspace?.querySelector<HTMLElement>(".viewport-fit-control");
+    if (fitControl) fitControl.style.transform = "";
+    const navGuide = workspace?.querySelector<HTMLElement>(".viewport-navigation-guide");
+    if (navGuide) navGuide.style.transform = "";
+    const toolbarEnd = workspace?.querySelector<HTMLElement>(".viewport-toolbar-end");
+    if (toolbarEnd) toolbarEnd.style.transform = "";
+    const editor = editorPanelRef.current;
+    if (editor) {
+      editor.style.transform = "";
+      editor.style.opacity = "";
+    }
+    const summary = summaryTransitionRef.current;
+    if (summary) {
+      summary.style.transform = "";
+      summary.style.opacity = "";
+    }
+  }, []);
+  const cancelViewportMotion = useCallback(() => {
+    for (const animation of activeViewportAnimations.current) animation.cancel();
+    activeViewportAnimations.current = [];
+  }, []);
+  useEffect(() => {
+    if (viewportTransition === "none") return;
+    const fallback = window.setTimeout(() => setViewportTransition("none"), 1000);
+    return () => window.clearTimeout(fallback);
+  }, [viewportTransition]);
+  useLayoutEffect(() => {
+    if (viewportTransition !== "none") return;
+    cancelViewportMotion();
+    clearInlineViewportStyles();
+  }, [viewportTransition, cancelViewportMotion, clearInlineViewportStyles]);
+  useLayoutEffect(() => {
+    const flip = pendingViewportFlip.current;
+    if (!flip) return;
+    pendingViewportFlip.current = null;
+    if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      setViewportTransition("none");
+      return;
+    }
+    const workspace = workspaceRef.current;
+    const viewport = workspace?.querySelector<HTMLElement>(".viewport") ?? null;
+    const fitControl = workspace?.querySelector<HTMLElement>(".viewport-fit-control") ?? null;
+    const navGuide = workspace?.querySelector<HTMLElement>(".viewport-navigation-guide") ?? null;
+    const toolbarEnd = workspace?.querySelector<HTMLElement>(".viewport-toolbar-end") ?? null;
+    const editor = editorPanelRef.current;
+    const summary = summaryTransitionRef.current;
+    if (typeof viewport?.animate !== "function") {
+      setViewportTransition("none");
+      return;
+    }
+    const expandEasing = "cubic-bezier(0.16, 1, 0.3, 1)";
+    const collapseEasing = "linear(0.000, 0.056 5%, 0.191 10%, 0.360 15%, 0.534 20%, 0.692 25%, 0.824 30%, 0.926 35%, 0.998 40%, 1.043 45%, 1.067 50%, 1.075 55%, 1.073 60%, 1.063 65%, 1.051 70%, 1.038 75%, 1.025 80%, 1.015 85%, 1.007 90%, 1.001 95%, 1.000)";
+    const duration = flip.expanding ? 340 : 420;
+    const easing = flip.expanding ? expandEasing : collapseEasing;
+    const toRight = flip.expanding ? 0 : collapsedRightInset;
+    const toBottom = flip.expanding ? 0 : collapsedBottomInset;
+
+    const animations: Animation[] = [];
+    animations.push(viewport.animate(
+      [
+        { clipPath: `inset(0px ${flip.fromRightInset}px ${flip.fromBottomInset}px 0px round 16px)` },
+        { clipPath: `inset(0px ${toRight}px ${toBottom}px 0px round 16px)` },
+      ],
+      { duration, easing, fill: "both" },
+    ));
+    if (fitControl) {
+      animations.push(fitControl.animate(
+        [
+          { transform: `translate3d(${-flip.fromRightInset}px, ${-flip.fromBottomInset}px, 0)` },
+          { transform: `translate3d(${-toRight}px, ${-toBottom}px, 0)` },
+        ],
+        { duration, easing, fill: "both" },
+      ));
+    }
+    if (navGuide) {
+      animations.push(navGuide.animate(
+        [
+          { transform: `translate3d(0, ${-flip.fromBottomInset}px, 0)` },
+          { transform: `translate3d(0, ${-toBottom}px, 0)` },
+        ],
+        { duration, easing, fill: "both" },
+      ));
+    }
+    if (toolbarEnd) {
+      animations.push(toolbarEnd.animate(
+        [
+          { transform: `translate3d(${toRight - flip.fromRightInset}px, 0, 0)` },
+          { transform: "translate3d(0, 0, 0)" },
+        ],
+        { duration, easing },
+      ));
+    }
+    if (editor) {
+      const editorTravel = editorWidth + 24;
+      if (flip.expanding) {
+        const startX = flip.editorDeltaX ?? 0;
+        animations.push(editor.animate(
+          [
+            { opacity: flip.editorOpacity, transform: `translate3d(${startX}px, 0, 0) scale(1)` },
+            { opacity: 0.92, transform: `translate3d(${editorTravel * 0.45}px, 0, 0) scale(0.985)`, offset: 0.45 },
+            { opacity: 0, transform: `translate3d(${editorTravel}px, 0, 0) scale(0.97)` },
+          ],
+          { duration, easing, fill: "both" },
+        ));
+      } else {
+        const startX = flip.wasTransitioning && flip.editorDeltaX !== null ? flip.editorDeltaX : editorTravel;
+        const startOpacity = flip.wasTransitioning ? flip.editorOpacity : 0;
+        animations.push(editor.animate(
+          [
+            { opacity: startOpacity, transform: `translate3d(${startX}px, 0, 0) scale(0.97)` },
+            { opacity: 1, offset: 0.35 },
+            { opacity: 1, transform: "translate3d(0, 0, 0) scale(1)" },
+          ],
+          { duration, easing },
+        ));
+      }
+    }
+    if (summary && collapsedBottomInset > 0) {
+      const summaryTravel = collapsedBottomInset + 24;
+      if (flip.expanding) {
+        const startY = flip.summaryDeltaY ?? 0;
+        animations.push(summary.animate(
+          [
+            { opacity: flip.summaryOpacity, transform: `translate3d(0, ${startY}px, 0) scale(1)` },
+            { opacity: 0.92, transform: `translate3d(0, ${summaryTravel * 0.45}px, 0) scale(0.985)`, offset: 0.45 },
+            { opacity: 0, transform: `translate3d(0, ${summaryTravel}px, 0) scale(0.97)` },
+          ],
+          { duration, easing, fill: "both" },
+        ));
+      } else {
+        const startY = flip.wasTransitioning && flip.summaryDeltaY !== null ? flip.summaryDeltaY : summaryTravel;
+        const startOpacity = flip.wasTransitioning ? flip.summaryOpacity : 0;
+        animations.push(summary.animate(
+          [
+            { opacity: startOpacity, transform: `translate3d(0, ${startY}px, 0) scale(0.97)` },
+            { opacity: 1, offset: 0.35 },
+            { opacity: 1, transform: "translate3d(0, 0, 0) scale(1)" },
+          ],
+          { duration, easing },
+        ));
+      }
+    }
+    activeViewportAnimations.current = animations;
+    void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
+      if (activeViewportAnimations.current === animations) setViewportTransition("none");
+    });
+  }, [viewportExpanded, collapsedRightInset, collapsedBottomInset, editorWidth]);
+  function toggleViewportExpanded() {
+    const next = !viewportExpanded;
+    const workspace = workspaceRef.current;
+    const viewport = workspace?.querySelector<HTMLElement>(".viewport") ?? null;
+    const fitControl = workspace?.querySelector<HTMLElement>(".viewport-fit-control") ?? null;
+    const editor = editorPanelRef.current;
+    const summary = summaryTransitionRef.current;
+    let fromRightInset = viewportExpanded ? 0 : collapsedRightInset;
+    let fromBottomInset = viewportExpanded ? 0 : collapsedBottomInset;
+    if (fitControl && viewport) {
+      const fitRect = fitControl.getBoundingClientRect();
+      const vpRect = viewport.getBoundingClientRect();
+      if (vpRect.width > 0 && vpRect.height > 0) {
+        fromRightInset = Math.max(0, (vpRect.right - 16) - fitRect.right);
+        fromBottomInset = Math.max(0, (vpRect.bottom - 16) - fitRect.bottom);
+      }
+    }
+    let editorDeltaX: number | null = null;
+    if (editor && workspace) {
+      const editorRect = editor.getBoundingClientRect();
+      const wsRect = workspace.getBoundingClientRect();
+      editorDeltaX = editorRect.right - (wsRect.right - 8);
+    }
+    let summaryDeltaY: number | null = null;
+    if (summary && workspace) {
+      const summaryRect = summary.getBoundingClientRect();
+      const wsRect = workspace.getBoundingClientRect();
+      summaryDeltaY = summaryRect.bottom - (wsRect.bottom - 8);
+    }
+    pendingViewportFlip.current = {
+      expanding: next,
+      wasTransitioning: viewportTransition !== "none",
+      fromRightInset,
+      fromBottomInset,
+      editorOpacity: editor ? Number(getComputedStyle(editor).opacity) : 1,
+      summaryOpacity: summary ? Number(getComputedStyle(summary).opacity) : 1,
+      editorDeltaX,
+      summaryDeltaY,
+    };
+    cancelViewportMotion();
+    clearInlineViewportStyles();
+    setViewportExpanded(next);
+    setViewportTransition(next ? "expanding" : "collapsing");
+  }
   const [cameraRequest, setCameraRequest] = useState(0);
   const [fitRequest, setFitRequest] = useState(0);
   const [stepImport, setStepImport] = useState<StepImportOperation | null>(null);
@@ -674,8 +929,9 @@ export function App() {
     async function connect() {
       if (connectionStarted.current) return;
       const api = window.pywebview?.api;
-      if (!api) return;
+      if (!api || typeof api.status !== "function") return;
       connectionStarted.current = true;
+      setRecoveryNotice(null);
       try {
         reportStartupStage("мост Python подключён");
         const [nextStatus, defaultProject, loadedSettings, updateState] = await Promise.all([
@@ -722,14 +978,26 @@ export function App() {
             }
           })
           .catch(() => undefined);
-      } catch {
+      } catch (error) {
+        console.error("[PalletLab] Ошибка запуска:", error);
         setStatus(null);
+        setRecoveryNotice(`Не удалось загрузить проект: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
     window.addEventListener("pywebviewready", connect, { once: true });
-    connect();
-    return () => window.removeEventListener("pywebviewready", connect);
+    void connect();
+    const poll = window.setInterval(() => {
+      if (connectionStarted.current) {
+        window.clearInterval(poll);
+        return;
+      }
+      void connect();
+    }, 100);
+    return () => {
+      window.clearInterval(poll);
+      window.removeEventListener("pywebviewready", connect);
+    };
   }, []);
 
   async function calculateProject() {
@@ -1880,6 +2148,7 @@ export function App() {
           <span>{detailCount(calculation.snapshot.pallet.beams.length)}</span>
         </span>
       ) : <div className="viewport-tool-spacer" />}
+      <div className="viewport-toolbar-end">
       <label className="viewport-view-select">
         <span>Вид</span>
         <select
@@ -1898,9 +2167,10 @@ export function App() {
           <option value="side">Сбоку</option>
         </select>
       </label>
-      <button type="button" className="secondary" onClick={() => setViewportExpanded((value) => !value)} aria-pressed={viewportExpanded} aria-label={viewportExpanded ? "Свернуть область просмотра" : "Развернуть область просмотра"}>
+      <button type="button" className="secondary" onClick={toggleViewportExpanded} aria-pressed={viewportExpanded} aria-label={viewportExpanded ? "Свернуть область просмотра" : "Развернуть область просмотра"}>
         {viewportExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </button>
+      </div>
     </>
   );
 
@@ -1931,183 +2201,14 @@ export function App() {
       </header>
       {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} solidworks={solidWorksOptions} initialSection={settingsInitialSection} update={update} lastUpdateCheck={lastUpdateCheck} onCheckUpdates={() => checkForUpdates(true)} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
       {resetOpen ? <ResetDialog onClose={closeReset} onConfirm={resetProject} /> : null}
-      <div className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}`}>
-        <aside className="editor-panel" aria-label="Редактор поддона">
+      <div ref={workspaceRef} className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}${viewportTransition !== "none" ? ` is-viewport-${viewportTransition}` : ""}`}>
+        <aside ref={editorPanelRef} className="editor-panel" aria-label="Редактор поддона" aria-hidden={viewportExpanded} inert={viewportExpanded}>
           <div className="editor-heading">
             <h1>Редактор</h1>
             <p>Выберите сечение брусьев, введите расстояния между опорами, габаритами и отступы.</p>
           </div>
           {recoveryNotice ? <p className="recovery-notice" role="alert">{recoveryNotice}</p> : null}
-        {!settingsOpen && !updateDismissed && ["available", "downloading", "ready", "failed", "installing"].includes(update.state) ? (
-          <div className="modal-backdrop">
-            <section className="modal progress-modal" role="dialog" aria-modal="true" aria-labelledby="update-title" aria-live="polite">
-              <h2 id="update-title">Обновление PalletLab</h2>
-              {update.state === "available" ? <p>Доступна версия {update.version}.{update.manualOnly ? " Для этой версии приложения скачайте обновление вручную со страницы релизов." : ""}</p> : null}
-              {update.state === "downloading" ? <>
-                <ProgressIndicator label="Скачивание и проверка обновления…" value={update.total ? update.received ?? 0 : undefined} max={update.total || 100} />
-              </> : null}
-              {update.state === "ready" ? <>
-                <p>Версия {update.version} готова к установке. Приложение закроется.</p>
-                {hasUnsavedChanges ? <p>Несохранённые изменения могут быть потеряны. Вы можете сохранить проект перед установкой.</p> : null}
-              </> : null}
-              {update.state === "installing" ? <p>Запускается установка обновления…</p> : null}
-              {update.error ? <p className="error">{update.error}</p> : null}
-              <footer className="modal-actions">
-                {update.state !== "downloading" && update.state !== "installing" ? <button type="button" className="secondary" onClick={() => setUpdateDismissed(true)}>Позже</button> : null}
-                {(update.state === "available" && !update.manualOnly) || update.state === "failed" ? <button type="button" onClick={() => void window.pywebview?.api?.download_update().then(setUpdate)}>Скачать</button> : null}
-                {update.state === "ready" && hasUnsavedChanges ? <button type="button" disabled={saving} onClick={() => void saveProject()}>Сохранить проект</button> : null}
-                {update.state === "ready" ? <button type="button" disabled={saving} onClick={() => void window.pywebview?.api?.install_update().then(setUpdate)}>{hasUnsavedChanges ? "Установить без сохранения" : "Установить"}</button> : null}
-              </footer>
-            </section>
-          </div>
-        ) : null}
-        {exportSetupOpen ? createPortal(
-          <div className="modal-backdrop" role="presentation">
-            <section ref={exportDialog} tabIndex={-1} className="modal export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
-              <header className="export-header"><h2 id="export-title">Экспорт поддона</h2><Button variant="ghost" aria-label="Закрыть экспорт" onClick={() => setExportSetupOpen(false)}><X size={16} aria-hidden="true" /></Button></header>
-              <div className="export-cad-field"><span>CAD-система</span>
-                <SegmentedControl label="CAD-система" value={exportCadSystem} options={[{ value: "solidworks", label: "SolidWorks" }, { value: "kompas", label: "КОМПАС-3D" }]} onChange={setExportCadSystem} />
-              </div>
-              <fieldset className="export-options">
-                <legend>Что экспортируем</legend>
-                <div className="export-option-group">
-                <label className="export-checkbox">
-                  <Checkbox
-                    checked={includePalletModel}
-                    disabled={!includePartModels}
-                    onChange={(event) => changePalletModel(event.target.checked)}
-                  />
-                  Модель поддона
-                </label>
-                <label className="export-checkbox">
-                  <Checkbox
-                    checked={includePartModels}
-                    onChange={(event) => changePartModels(event.target.checked)}
-                  />
-                  Модели деталей
-                </label>
-                </div>
-                <div className="export-option-group">
-                <label className="export-checkbox">
-                  <Checkbox
-                    checked={includePalletDrawing}
-                    disabled={!includePartModels || !includePalletModel}
-                    onChange={(event) => setIncludePalletDrawing(event.target.checked)}
-                  />
-                  Чертёж поддона
-                </label>
-                <label className="export-checkbox">
-                  <Checkbox
-                    checked={includePartDrawings}
-                    disabled={!includePartModels}
-                    onChange={(event) => setIncludePartDrawings(event.target.checked)}
-                  />
-                  Чертежи деталей
-                </label>
-                </div>
-                {hasBuiltStepModel ? (
-                  <div className="export-option-group">
-                  <label className="export-checkbox">
-                    <Checkbox
-                      checked={includeExportModel}
-                      disabled={!includePartModels || !includePalletModel}
-                      onChange={(event) => {
-                        setIncludeExportModel(event.target.checked);
-                        if (!event.target.checked) setIncludePackagingDrawing(false);
-                      }}
-                    />
-                    Модель упаковки
-                  </label>
-                  <label className="export-checkbox">
-                    <Checkbox
-                      checked={includePackagingDrawing}
-                      disabled={
-                        !includeExportModel
-                        || !includePartModels
-                        || !includePalletModel
-                      }
-                      onChange={(event) => setIncludePackagingDrawing(event.target.checked)}
-                    />
-                    Упаковочный чертёж
-                  </label>
-                  </div>
-                ) : null}
-                {hasBuiltStepModel && includeExportModel && exportCadSystem === "solidworks" ? (
-                  <p className="modal-hint">Если SolidWorks не сможет прочитать исходный STEP, будет создана совместимая копия геометрии. Имена и цвета компонентов могут не сохраниться; копия может быть значительно больше оригинала и потребовать много памяти при импорте. Исходный STEP останется в папке экспорта.</p>
-                ) : null}
-              </fieldset>
-              <label className="file-field export-directory-field">
-                Папка сохранения
-                <div className="file-field-control">
-                  <input
-                    type="text"
-                    value={exportDirectory}
-                    placeholder="Путь к папке экспорта"
-                    aria-label="Путь сохранения экспорта"
-                    onChange={(event) => {
-                      setExportDirectory(event.target.value);
-                      setExportDirectoryError(null);
-                    }}
-                  />
-                  <button type="button" className="secondary" onClick={() => void browseExportDirectory()}>
-                    Обзор
-                  </button>
-                </div>
-              </label>
-              {exportDirectoryError ? <p className="error" role="alert">{exportDirectoryError}</p> : null}
-              <footer className="modal-actions">
-                <Button variant="secondary" onClick={() => setExportSetupOpen(false)}>Отмена</Button>
-                <Button
-                  disabled={!includePartModels || !exportDirectory.trim() || exporting !== null}
-                  onClick={() => void exportCad()}
-                >
-                  Экспортировать
-                </Button>
-              </footer>
-            </section>
-          </div>, document.body
-        ) : null}
-        {exporting ? (
-          <div className="modal-backdrop" role="presentation">
-            <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="export-progress-title">
-              <h2 id="export-progress-title">Экспорт выполняется</h2>
-              <ProgressIndicator label={exporting === "solidworks"
-                  ? includeExportModel
-                    ? "SolidWorks импортирует STEP-модель и формирует упаковочную сборку. Для крупных моделей подготовка может занять несколько минут…"
-                    : "SolidWorks создаёт выбранные модели и чертежи…"
-                  : includeExportModel
-                    ? "КОМПАС-3D импортирует STEP-модель и формирует упаковочную сборку. Импорт крупной модели может занять несколько минут…"
-                    : "КОМПАС-3D создаёт выбранные модели и чертежи…"} />
-              <p className="modal-hint">Не закрывайте PalletLab и CAD-систему до завершения операции.</p>
-            </section>
-          </div>
-        ) : null}
-        {exportResult ? (
-          <div className="modal-backdrop" role="presentation">
-            <section className="modal result-modal" role="dialog" aria-modal="true" aria-labelledby="export-result-title">
-              <h2 id="export-result-title">{exportResult.ok ? "Экспорт завершён" : "Не удалось экспортировать"}</h2>
-              <p><strong>{exportResult.target}</strong></p>
-              <p className={exportResult.ok ? "success-message" : "error"}>{exportResult.message}</p>
-              <footer className="modal-actions"><button type="button" onClick={() => setExportResult(null)}>Закрыть</button></footer>
-            </section>
-          </div>
-        ) : null}
-        {stepRestoreError ? <p className="error" role="alert">{stepRestoreError}</p> : null}
-        {stepImport && stepImportPhase(stepImport.state, stepModel !== null, stepRestoreError !== null) ? (
-          <div className="modal-backdrop" role="presentation">
-            <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="step-import-title">
-              <h2 id="step-import-title">Импорт STEP-модели</h2>
-              <ProgressIndicator label={stepImport.state === "completed" ? "Подготавливаем модель к отображению…" : stepImport.label ?? "Подготавливаем STEP-модель…"}
-                value={stepImport.state === "completed" ? undefined : stepImport.progress} />
-              <p className="modal-hint">Не изменяйте проект до окончания импорта.</p>
-              {stepImport.state === "running" ? (
-                <footer className="modal-actions">
-                  <button type="button" className="secondary" onClick={() => void cancelStepImport()}>Отменить импорт</button>
-                </footer>
-              ) : null}
-            </section>
-          </div>
-        ) : null}
+          {stepRestoreError ? <p className="error" role="alert">{stepRestoreError}</p> : null}
         {project ? (
           <div className="directions">
             <section className="layer-stack" aria-label="Слои поддона">
@@ -2417,6 +2518,11 @@ export function App() {
                 toolHintCanExit={insertionMode || beamTool !== "none" || dimensionEditing}
                 toolErrorVersion={viewportToolErrorVersion}
                 onFirstFrame={reportFirstViewportFrame}
+                visibleRightInset={visibleRightInset}
+                visibleBottomInset={visibleBottomInset}
+                animateInsets={viewportTransition !== "none"}
+                insetsExpanding={viewportExpanded}
+                insetsDurationMs={viewportExpanded ? 340 : 420}
                 onUndoToolSelection={
                   (!stepPalletBuilt && !buildingStepPallet && stepModel !== null) || insertionMode || beamTool !== "none" || dimensionEditing
                     ? undoLastToolSelection
@@ -2425,7 +2531,7 @@ export function App() {
                 beamSelectionEnabled={insertionMode || beamTool !== "none"}
               />
             </Suspense>
-            <div className="pallet-summary-transition" aria-hidden={viewportExpanded} inert={viewportExpanded}>
+            <div ref={summaryTransitionRef} className="pallet-summary-transition" aria-hidden={viewportExpanded} inert={viewportExpanded}>
               <PalletSummary size={calculation.snapshot.pallet.size} mass={calculation.snapshot.pallet.massKg}
                 details={palletDetails(calculation.snapshot.pallet.beams)} millimetres={formatMillimetres} kilograms={formatKilograms} />
             </div>
@@ -2433,6 +2539,175 @@ export function App() {
         ) : null}
         </section>
       </div>
+      {!settingsOpen && !updateDismissed && ["available", "downloading", "ready", "failed", "installing"].includes(update.state) ? (
+        <div className="modal-backdrop">
+          <section className="modal progress-modal" role="dialog" aria-modal="true" aria-labelledby="update-title" aria-live="polite">
+            <h2 id="update-title">Обновление PalletLab</h2>
+            {update.state === "available" ? <p>Доступна версия {update.version}.{update.manualOnly ? " Для этой версии приложения скачайте обновление вручную со страницы релизов." : ""}</p> : null}
+            {update.state === "downloading" ? <>
+              <ProgressIndicator label="Скачивание и проверка обновления…" value={update.total ? update.received ?? 0 : undefined} max={update.total || 100} />
+            </> : null}
+            {update.state === "ready" ? <>
+              <p>Версия {update.version} готова к установке. Приложение закроется.</p>
+              {hasUnsavedChanges ? <p>Несохранённые изменения могут быть потеряны. Вы можете сохранить проект перед установкой.</p> : null}
+            </> : null}
+            {update.state === "installing" ? <p>Запускается установка обновления…</p> : null}
+            {update.error ? <p className="error">{update.error}</p> : null}
+            <footer className="modal-actions">
+              {update.state !== "downloading" && update.state !== "installing" ? <button type="button" className="secondary" onClick={() => setUpdateDismissed(true)}>Позже</button> : null}
+              {(update.state === "available" && !update.manualOnly) || update.state === "failed" ? <button type="button" onClick={() => void window.pywebview?.api?.download_update().then(setUpdate)}>Скачать</button> : null}
+              {update.state === "ready" && hasUnsavedChanges ? <button type="button" disabled={saving} onClick={() => void saveProject()}>Сохранить проект</button> : null}
+              {update.state === "ready" ? <button type="button" disabled={saving} onClick={() => void window.pywebview?.api?.install_update().then(setUpdate)}>{hasUnsavedChanges ? "Установить без сохранения" : "Установить"}</button> : null}
+            </footer>
+          </section>
+        </div>
+      ) : null}
+      {exportSetupOpen ? createPortal(
+        <div className="modal-backdrop" role="presentation">
+          <section ref={exportDialog} tabIndex={-1} className="modal export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
+            <header className="export-header"><h2 id="export-title">Экспорт поддона</h2><Button variant="ghost" aria-label="Закрыть экспорт" onClick={() => setExportSetupOpen(false)}><X size={16} aria-hidden="true" /></Button></header>
+            <div className="export-cad-field"><span>CAD-система</span>
+              <SegmentedControl label="CAD-система" value={exportCadSystem} options={[{ value: "solidworks", label: "SolidWorks" }, { value: "kompas", label: "КОМПАС-3D" }]} onChange={setExportCadSystem} />
+            </div>
+            <fieldset className="export-options">
+              <legend>Что экспортируем</legend>
+              <div className="export-option-group">
+              <label className="export-checkbox">
+                <Checkbox
+                  checked={includePalletModel}
+                  disabled={!includePartModels}
+                  onChange={(event) => changePalletModel(event.target.checked)}
+                />
+                Модель поддона
+              </label>
+              <label className="export-checkbox">
+                <Checkbox
+                  checked={includePartModels}
+                  onChange={(event) => changePartModels(event.target.checked)}
+                />
+                Модели деталей
+              </label>
+              </div>
+              <div className="export-option-group">
+              <label className="export-checkbox">
+                <Checkbox
+                  checked={includePalletDrawing}
+                  disabled={!includePartModels || !includePalletModel}
+                  onChange={(event) => setIncludePalletDrawing(event.target.checked)}
+                />
+                Чертёж поддона
+              </label>
+              <label className="export-checkbox">
+                <Checkbox
+                  checked={includePartDrawings}
+                  disabled={!includePartModels}
+                  onChange={(event) => setIncludePartDrawings(event.target.checked)}
+                />
+                Чертежи деталей
+              </label>
+              </div>
+              {hasBuiltStepModel ? (
+                <div className="export-option-group">
+                <label className="export-checkbox">
+                  <Checkbox
+                    checked={includeExportModel}
+                    disabled={!includePartModels || !includePalletModel}
+                    onChange={(event) => {
+                      setIncludeExportModel(event.target.checked);
+                      if (!event.target.checked) setIncludePackagingDrawing(false);
+                    }}
+                  />
+                  Модель упаковки
+                </label>
+                <label className="export-checkbox">
+                  <Checkbox
+                    checked={includePackagingDrawing}
+                    disabled={
+                      !includeExportModel
+                      || !includePartModels
+                      || !includePalletModel
+                    }
+                    onChange={(event) => setIncludePackagingDrawing(event.target.checked)}
+                  />
+                  Упаковочный чертёж
+                </label>
+                </div>
+              ) : null}
+              {hasBuiltStepModel && includeExportModel && exportCadSystem === "solidworks" ? (
+                <p className="modal-hint">Если SolidWorks не сможет прочитать исходный STEP, будет создана совместимая копия геометрии. Имена и цвета компонентов могут не сохраниться; копия может быть значительно больше оригинала и потребовать много памяти при импорте. Исходный STEP останется в папке экспорта.</p>
+              ) : null}
+            </fieldset>
+            <label className="file-field export-directory-field">
+              Папка сохранения
+              <div className="file-field-control">
+                <input
+                  type="text"
+                  value={exportDirectory}
+                  placeholder="Путь к папке экспорта"
+                  aria-label="Путь сохранения экспорта"
+                  onChange={(event) => {
+                    setExportDirectory(event.target.value);
+                    setExportDirectoryError(null);
+                  }}
+                />
+                <button type="button" className="secondary" onClick={() => void browseExportDirectory()}>
+                  Обзор
+                </button>
+              </div>
+            </label>
+            {exportDirectoryError ? <p className="error" role="alert">{exportDirectoryError}</p> : null}
+            <footer className="modal-actions">
+              <Button variant="secondary" onClick={() => setExportSetupOpen(false)}>Отмена</Button>
+              <Button
+                disabled={!includePartModels || !exportDirectory.trim() || exporting !== null}
+                onClick={() => void exportCad()}
+              >
+                Экспортировать
+              </Button>
+            </footer>
+          </section>
+        </div>, document.body
+      ) : null}
+      {exporting ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="export-progress-title">
+            <h2 id="export-progress-title">Экспорт выполняется</h2>
+            <ProgressIndicator label={exporting === "solidworks"
+                ? includeExportModel
+                  ? "SolidWorks импортирует STEP-модель и формирует упаковочную сборку. Для крупных моделей подготовка может занять несколько минут…"
+                  : "SolidWorks создаёт выбранные модели и чертежи…"
+                : includeExportModel
+                  ? "КОМПАС-3D импортирует STEP-модель и формирует упаковочную сборку. Импорт крупной модели может занять несколько минут…"
+                  : "КОМПАС-3D создаёт выбранные модели и чертежи…"} />
+            <p className="modal-hint">Не закрывайте PalletLab и CAD-систему до завершения операции.</p>
+          </section>
+        </div>
+      ) : null}
+      {exportResult ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal result-modal" role="dialog" aria-modal="true" aria-labelledby="export-result-title">
+            <h2 id="export-result-title">{exportResult.ok ? "Экспорт завершён" : "Не удалось экспортировать"}</h2>
+            <p><strong>{exportResult.target}</strong></p>
+            <p className={exportResult.ok ? "success-message" : "error"}>{exportResult.message}</p>
+            <footer className="modal-actions"><button type="button" onClick={() => setExportResult(null)}>Закрыть</button></footer>
+          </section>
+        </div>
+      ) : null}
+      {stepImport && stepImportPhase(stepImport.state, stepModel !== null, stepRestoreError !== null) ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="step-import-title">
+            <h2 id="step-import-title">Импорт STEP-модели</h2>
+            <ProgressIndicator label={stepImport.state === "completed" ? "Подготавливаем модель к отображению…" : stepImport.label ?? "Подготавливаем STEP-модель…"}
+              value={stepImport.state === "completed" ? undefined : stepImport.progress} />
+            <p className="modal-hint">Не изменяйте проект до окончания импорта.</p>
+            {stepImport.state === "running" ? (
+              <footer className="modal-actions">
+                <button type="button" className="secondary" onClick={() => void cancelStepImport()}>Отменить импорт</button>
+              </footer>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
       {historyReadErrorOpen ? (
         <div className="modal-backdrop" role="presentation">
           <section

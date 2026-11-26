@@ -11,7 +11,7 @@ import {
   PerspectiveCamera,
   Vector3,
 } from "three";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 import SceneSettings from "./SceneSettings";
 import { BadgeAlert, X } from "lucide-react";
@@ -137,6 +137,86 @@ function FirstFrameReporter({ onFirstFrame }: { onFirstFrame?: () => void }) {
   return null;
 }
 
+function springProgress(raw: number, durationSeconds: number, stiffness: number, damping: number): number {
+  if (raw <= 0) return 0;
+  if (raw >= 1) return 1;
+  const t = raw * durationSeconds;
+  const w0 = Math.sqrt(stiffness);
+  const zeta = damping / (2 * w0);
+  if (zeta >= 1) {
+    return 1 - (1 + w0 * t) * Math.exp(-w0 * t);
+  }
+  const wd = w0 * Math.sqrt(1 - zeta * zeta);
+  return 1 - Math.exp(-zeta * w0 * t) * (Math.cos(wd * t) + ((zeta * w0) / wd) * Math.sin(wd * t));
+}
+
+function ViewOffsetAnimator({
+  rightInset,
+  bottomInset,
+  animate,
+  expanding,
+  durationMs,
+}: {
+  rightInset: number;
+  bottomInset: number;
+  animate: boolean;
+  expanding: boolean;
+  durationMs: number;
+}) {
+  const { camera, size, invalidate } = useThree();
+  const current = useRef<{ x: number; y: number } | null>(null);
+  const start = useRef({ x: 0, y: 0 });
+  const target = useRef({ x: 0, y: 0 });
+  const startedAt = useRef<number | null>(null);
+
+  const applyOffset = useCallback((right: number, bottom: number) => {
+    const perspective = camera as PerspectiveCamera;
+    if (size.width <= 0 || size.height <= 0) return;
+    if (Math.abs(right) < 0.25 && Math.abs(bottom) < 0.25) {
+      if (perspective.view?.enabled) perspective.clearViewOffset();
+    } else {
+      perspective.setViewOffset(size.width, size.height, right / 2, bottom / 2, size.width, size.height);
+    }
+  }, [camera, size.height, size.width]);
+
+  useLayoutEffect(() => {
+    if (size.width <= 0 || size.height <= 0) return;
+    if (current.current === null || !animate) {
+      current.current = { x: rightInset, y: bottomInset };
+      target.current = { x: rightInset, y: bottomInset };
+      startedAt.current = null;
+      applyOffset(rightInset, bottomInset);
+      invalidate();
+      return;
+    }
+    start.current = { ...current.current };
+    target.current = { x: rightInset, y: bottomInset };
+    startedAt.current = performance.now();
+    invalidate();
+  }, [animate, applyOffset, bottomInset, invalidate, rightInset, size.height, size.width]);
+
+  useFrame(() => {
+    if (startedAt.current === null) return;
+    const elapsed = performance.now() - startedAt.current;
+    const raw = Math.min(1, elapsed / durationMs);
+    const eased = expanding
+      ? 1 - Math.pow(1 - raw, 3)
+      : springProgress(raw, durationMs / 1000, 300, 22);
+    const x = start.current.x + (target.current.x - start.current.x) * eased;
+    const y = start.current.y + (target.current.y - start.current.y) * eased;
+    current.current = { x, y };
+    applyOffset(x, y);
+    if (raw >= 1) {
+      startedAt.current = null;
+      current.current = { ...target.current };
+      applyOffset(target.current.x, target.current.y);
+      return;
+    }
+    invalidate();
+  });
+  return null;
+}
+
 function transformedStepBounds(model: StepModelSnapshot): [ViewportPoint, ViewportPoint] {
   const [xMin, xMax, yMin, yMax, zMin, zMax] = model.bounds;
   const matrix = model.transform;
@@ -210,19 +290,40 @@ function Camera({
   return null;
 }
 
-function FitCamera({ fitRequest, bounds }: { fitRequest: number; bounds: ViewportBounds }) {
+function FitCamera({
+  fitRequest,
+  bounds,
+  visibleRightInset,
+  visibleBottomInset,
+}: {
+  fitRequest: number;
+  bounds: ViewportBounds;
+  visibleRightInset: number;
+  visibleBottomInset: number;
+}) {
   const { camera, size } = useThree();
   const previousRequest = useRef<number | null>(null);
+  const latestSize = useRef(size);
+  latestSize.current = size;
+  const latestInsets = useRef({ right: visibleRightInset, bottom: visibleBottomInset });
+  latestInsets.current = { right: visibleRightInset, bottom: visibleBottomInset };
+  const sizeReady = size.width > 0 && size.height > 0;
 
   useEffect(() => {
-    if (size.width <= 0 || size.height <= 0) return;
+    const currentSize = latestSize.current;
+    if (!sizeReady || currentSize.width <= 0 || currentSize.height <= 0) return;
     const requestedExplicitly = fitRequest !== previousRequest.current;
     previousRequest.current = fitRequest;
 
+    const visibleWidth = Math.max(1, currentSize.width - latestInsets.current.right);
+    const visibleHeight = Math.max(1, currentSize.height - latestInsets.current.bottom);
     const perspective = camera as PerspectiveCamera;
-    const verticalFov = MathUtils.degToRad(perspective.fov);
+    const fullVerticalFov = MathUtils.degToRad(perspective.fov);
+    const verticalFov = 2 * Math.atan(
+      Math.tan(fullVerticalFov / 2) * (visibleHeight / Math.max(1, currentSize.height)),
+    );
     const horizontalFov = 2 * Math.atan(
-      Math.tan(verticalFov / 2) * (size.width / Math.max(1, size.height)),
+      Math.tan(fullVerticalFov / 2) * (visibleWidth / Math.max(1, currentSize.height)),
     );
     const direction = new Vector3();
     camera.getWorldDirection(direction);
@@ -253,7 +354,7 @@ function FitCamera({ fitRequest, bounds }: { fitRequest: number; bounds: Viewpor
     if (!requestedExplicitly && camera.position.distanceTo(target) >= distance) return;
     camera.position.copy(target.addScaledVector(direction, -distance));
     camera.lookAt(...bounds.center);
-  }, [bounds, camera, fitRequest, size.height, size.width]);
+  }, [bounds, camera, fitRequest, sizeReady]);
 
   return null;
 }
@@ -424,6 +525,11 @@ export default function PalletViewport({
   toolError,
   toolErrorVersion = 0,
   onFirstFrame,
+  visibleRightInset = 0,
+  visibleBottomInset = 0,
+  animateInsets = false,
+  insetsExpanding = false,
+  insetsDurationMs = 400,
   onUndoToolSelection,
   beamSelectionEnabled,
 }: {
@@ -470,12 +576,19 @@ export default function PalletViewport({
   toolError?: string | null;
   toolErrorVersion?: number;
   onFirstFrame?: () => void;
+  visibleRightInset?: number;
+  visibleBottomInset?: number;
+  animateInsets?: boolean;
+  insetsExpanding?: boolean;
+  insetsDurationMs?: number;
   onUndoToolSelection?: () => void;
   beamSelectionEnabled: boolean;
 }) {
   const viewportElement = useRef<HTMLDivElement>(null);
   const hintElement = useRef<HTMLDivElement>(null);
   const cursor = useRef<[number, number]>([16, 72]);
+  const visibleInsetsRef = useRef({ right: visibleRightInset, bottom: visibleBottomInset });
+  visibleInsetsRef.current = { right: visibleRightInset, bottom: visibleBottomInset };
   useEffect(() => {
     if (!toolHint) return;
     let frame = 0;
@@ -487,7 +600,7 @@ export default function PalletViewport({
         const relative = (rect: DOMRect): Rect => ({ left: rect.left - outer.left, top: rect.top - outer.top, right: rect.right - outer.left, bottom: rect.bottom - outer.top });
         const toolbar = viewport.querySelector<HTMLElement>(".viewport-floating-toolbar")?.getBoundingClientRect();
         const footer = Array.from(viewport.querySelectorAll<HTMLElement>(".viewport-fit-control, .viewport-navigation-help"), el => relative(el.getBoundingClientRect()));
-        const bounds = { left: 16, top: toolbar ? toolbar.bottom - outer.top + 16 : 16, right: outer.width - 16, bottom: footer.length ? Math.min(...footer.map(rect => rect.top)) - 16 : outer.height - 16 };
+        const bounds = { left: 16, top: toolbar ? toolbar.bottom - outer.top + 16 : 16, right: outer.width - visibleInsetsRef.current.right - 16, bottom: footer.length ? Math.min(...footer.map(rect => rect.top)) - 16 : outer.height - visibleInsetsRef.current.bottom - 16 };
         const obstacles = Array.from(viewport.querySelectorAll<HTMLElement>(".manual-hud:not([aria-hidden='true']):not([inert]), .viewport-error-toast"), el => relative(el.getBoundingClientRect()));
         const [x, y] = placeViewportHint(cursor.current, { width: hint.offsetWidth, height: hint.offsetHeight }, bounds, obstacles);
         hint.style.left = `${x}px`;
@@ -664,6 +777,10 @@ export default function PalletViewport({
     <div
       className="viewport"
       ref={viewportElement}
+      style={{
+        "--viewport-right-inset": `${visibleRightInset}px`,
+        "--viewport-bottom-inset": `${visibleBottomInset}px`,
+      } as CSSProperties}
       onPointerDown={stepFaceSelectionEnabled ? (event) => {
         pointerDown.current = [event.clientX, event.clientY];
       } : undefined}
@@ -684,13 +801,25 @@ export default function PalletViewport({
     >
       <Canvas
         frameloop="demand"
-        resize={{ scroll: true, debounce: 0 }}
+        resize={{ scroll: false, debounce: 0, offsetSize: true }}
         camera={{ position: [5, 4, 5], fov: 42 }}
       >
           <FirstFrameReporter onFirstFrame={revealDetailsAfterFirstFrame} />
+          <ViewOffsetAnimator
+            rightInset={visibleRightInset}
+            bottomInset={visibleBottomInset}
+            animate={animateInsets}
+            expanding={insetsExpanding}
+            durationMs={insetsDurationMs}
+          />
           <DirectionCompassUpdater compass={compass} />
           <Camera preset={preset} presetRequest={presetRequest} bounds={bounds} />
-          <FitCamera fitRequest={fitRequest} bounds={bounds} />
+          <FitCamera
+            fitRequest={fitRequest}
+            bounds={bounds}
+            visibleRightInset={visibleRightInset}
+            visibleBottomInset={visibleBottomInset}
+          />
           <CameraZoom command={zoomCommand} fitRequest={fitRequest} presetRequest={presetRequest} onChange={setZoomPercent} />
         <color attach="background" args={["#edf1f3"]} />
         <ambientLight intensity={1.5} />
