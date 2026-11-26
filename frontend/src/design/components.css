@@ -173,7 +173,7 @@ button.ui-combobox-option.is-selected, button.ui-combobox-option.is-selected:hov
 .manual-hud .hud-actions button.ui-button--ghost:hover:not(:disabled) { background: var(--color-neutral-600); }
 .manual-hud .hud-actions button:disabled { color: var(--color-slate-300); background: var(--color-neutral-500); }
 .viewport-hint { padding: var(--space-2); border-radius: var(--radius-control); background: var(--surface-hud); box-shadow: var(--shadow-hud); backdrop-filter: blur(2.5px); color: var(--color-white); font-size: var(--font-size-caption); }
-.viewport-hint { max-width: min(320px, calc(100% - 32px)); }
+.viewport-hint { left: 0; top: 0; max-width: min(320px, calc(100% - 32px)); opacity: 0; visibility: hidden; transform-origin: top left; will-change: transform, opacity; }
 .viewport-hint-message { display: block; font-weight: 500; }
 .viewport-hint-shortcuts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin-top: var(--space-2); color: var(--color-neutral-200); }
 .viewport-hint-shortcuts > span { white-space: nowrap; }
@@ -304,9 +304,11 @@ button.ui-combobox-option.is-selected, button.ui-combobox-option.is-selected:hov
 .editor-panel .pallet-margins { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .pallet-margins > label { position: relative; display: grid; gap: var(--space-1); min-width: 0; color: var(--text-muted); font-size: var(--font-size-caption); }
 .pallet-margins > label input { width: 100%; min-width: 0; padding-right: 36px; }
-.pallet-margins > label input[type='number'] { appearance: textfield; -moz-appearance: textfield; }
+.pallet-margins > label input[type='number'], .hud-content input[type='number'] { appearance: textfield; -moz-appearance: textfield; }
 .pallet-margins > label input[type='number']::-webkit-inner-spin-button,
-.pallet-margins > label input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+.pallet-margins > label input[type='number']::-webkit-outer-spin-button,
+.hud-content input[type='number']::-webkit-inner-spin-button,
+.hud-content input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
 .pallet-margin-unit { position: absolute; right: 12px; bottom: 9px; color: var(--text-primary); font-size: var(--font-size-body); line-height: var(--line-height-ui); pointer-events: none; }
 .pallet-margins:disabled .pallet-margin-unit { color: var(--color-slate-300); }
 .pallet-margins > p, .rounding > p { margin-top: calc(-1 * var(--space-2)); line-height: var(--line-height-ui); }

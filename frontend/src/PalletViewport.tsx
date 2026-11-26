@@ -586,25 +586,139 @@ export default function PalletViewport({
 }) {
   const viewportElement = useRef<HTMLDivElement>(null);
   const hintElement = useRef<HTMLDivElement>(null);
-  const cursor = useRef<[number, number]>([16, 72]);
+  const cursor = useRef<[number, number] | null>(null);
+  const pointerInViewport = useRef(false);
   const visibleInsetsRef = useRef({ right: visibleRightInset, bottom: visibleBottomInset });
   visibleInsetsRef.current = { right: visibleRightInset, bottom: visibleBottomInset };
+
+  const updateViewportPointer = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const box = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - box.left;
+    const y = event.clientY - box.top;
+    const inside =
+      x >= 0 &&
+      y >= 0 &&
+      x <= box.width - visibleInsetsRef.current.right &&
+      y <= box.height - visibleInsetsRef.current.bottom;
+    pointerInViewport.current = inside;
+    if (inside) cursor.current = [x, y];
+  }, []);
+
+  useEffect(() => {
+    const hidePointer = () => {
+      pointerInViewport.current = false;
+    };
+    window.addEventListener("blur", hidePointer);
+    document.addEventListener("mouseleave", hidePointer);
+    return () => {
+      window.removeEventListener("blur", hidePointer);
+      document.removeEventListener("mouseleave", hidePointer);
+    };
+  }, []);
+
   useEffect(() => {
     if (!toolHint) return;
     let frame = 0;
-    const update = () => {
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    const spring = {
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      scale: 0,
+      vs: 0,
+      opacity: 0,
+      initialized: false,
+      lastTime: performance.now(),
+    };
+    const posStiffness = 500;
+    const posDamping = 50;
+    const scaleStiffness = 460;
+    const scaleDamping = 34;
+
+    const update = (now: number) => {
       const viewport = viewportElement.current;
       const hint = hintElement.current;
+      const dt = Math.min(0.05, Math.max(0.001, (now - spring.lastTime) / 1000));
+      spring.lastTime = now;
+
       if (viewport && hint) {
-        const outer = viewport.getBoundingClientRect();
-        const relative = (rect: DOMRect): Rect => ({ left: rect.left - outer.left, top: rect.top - outer.top, right: rect.right - outer.left, bottom: rect.bottom - outer.top });
-        const toolbar = viewport.querySelector<HTMLElement>(".viewport-floating-toolbar")?.getBoundingClientRect();
-        const footer = Array.from(viewport.querySelectorAll<HTMLElement>(".viewport-fit-control, .viewport-navigation-help"), el => relative(el.getBoundingClientRect()));
-        const bounds = { left: 16, top: toolbar ? toolbar.bottom - outer.top + 16 : 16, right: outer.width - visibleInsetsRef.current.right - 16, bottom: footer.length ? Math.min(...footer.map(rect => rect.top)) - 16 : outer.height - visibleInsetsRef.current.bottom - 16 };
-        const obstacles = Array.from(viewport.querySelectorAll<HTMLElement>(".manual-hud:not([aria-hidden='true']):not([inert]), .viewport-error-toast"), el => relative(el.getBoundingClientRect()));
-        const [x, y] = placeViewportHint(cursor.current, { width: hint.offsetWidth, height: hint.offsetHeight }, bounds, obstacles);
-        hint.style.left = `${x}px`;
-        hint.style.top = `${y}px`;
+        const isVisible = pointerInViewport.current && cursor.current !== null;
+        if (isVisible && cursor.current) {
+          const outer = viewport.getBoundingClientRect();
+          const relative = (rect: DOMRect): Rect => ({
+            left: rect.left - outer.left,
+            top: rect.top - outer.top,
+            right: rect.right - outer.left,
+            bottom: rect.bottom - outer.top,
+          });
+          const toolbar = viewport.querySelector<HTMLElement>(".viewport-floating-toolbar")?.getBoundingClientRect();
+          const footer = Array.from(
+            viewport.querySelectorAll<HTMLElement>(".viewport-fit-control, .viewport-navigation-help"),
+            (el) => relative(el.getBoundingClientRect()),
+          );
+          const bounds = {
+            left: 16,
+            top: toolbar ? toolbar.bottom - outer.top + 16 : 16,
+            right: outer.width - visibleInsetsRef.current.right - 16,
+            bottom: footer.length
+              ? Math.min(...footer.map((rect) => rect.top)) - 16
+              : outer.height - visibleInsetsRef.current.bottom - 16,
+          };
+          const obstacles = Array.from(
+            viewport.querySelectorAll<HTMLElement>(".manual-hud:not([aria-hidden='true']):not([inert]), .viewport-error-toast"),
+            (el) => relative(el.getBoundingClientRect()),
+          );
+          const [targetX, targetY] = placeViewportHint(
+            cursor.current,
+            { width: hint.offsetWidth, height: hint.offsetHeight },
+            bounds,
+            obstacles,
+          );
+
+          if (reducedMotion || !spring.initialized || spring.opacity < 0.02) {
+            spring.x = targetX;
+            spring.y = targetY;
+            spring.vx = 0;
+            spring.vy = 0;
+            spring.initialized = true;
+          } else {
+            const substeps = Math.max(1, Math.ceil(dt * 120));
+            const subDt = dt / substeps;
+            for (let i = 0; i < substeps; i += 1) {
+              const ax = (targetX - spring.x) * posStiffness - spring.vx * posDamping;
+              const ay = (targetY - spring.y) * posStiffness - spring.vy * posDamping;
+              spring.vx += ax * subDt;
+              spring.vy += ay * subDt;
+              spring.x += spring.vx * subDt;
+              spring.y += spring.vy * subDt;
+            }
+          }
+        }
+
+        const targetScale = isVisible ? 1 : 0;
+        const targetOpacity = isVisible ? 1 : 0;
+        if (reducedMotion) {
+          spring.scale = targetScale;
+          spring.vs = 0;
+          spring.opacity = targetOpacity;
+        } else {
+          const substeps = Math.max(1, Math.ceil(dt * 120));
+          const subDt = dt / substeps;
+          for (let i = 0; i < substeps; i += 1) {
+            const as = (targetScale - spring.scale) * scaleStiffness - spring.vs * scaleDamping;
+            spring.vs += as * subDt;
+            spring.scale += spring.vs * subDt;
+          }
+          const alpha = 1 - Math.exp(-22 * dt);
+          spring.opacity += (targetOpacity - spring.opacity) * alpha;
+        }
+
+        const clampedScale = Math.max(0, spring.scale);
+        const clampedOpacity = Math.max(0, Math.min(1, spring.opacity));
+        hint.style.transform = `translate3d(${spring.x.toFixed(2)}px, ${spring.y.toFixed(2)}px, 0) scale(${clampedScale.toFixed(4)})`;
+        hint.style.opacity = `${clampedOpacity.toFixed(4)}`;
+        hint.style.visibility = clampedOpacity > 0.005 ? "visible" : "hidden";
       }
       frame = window.requestAnimationFrame(update);
     };
@@ -781,13 +895,17 @@ export default function PalletViewport({
         "--viewport-right-inset": `${visibleRightInset}px`,
         "--viewport-bottom-inset": `${visibleBottomInset}px`,
       } as CSSProperties}
-      onPointerDown={stepFaceSelectionEnabled ? (event) => {
-        pointerDown.current = [event.clientX, event.clientY];
-      } : undefined}
-      onPointerMove={toolHint ? (event) => {
-        const box = event.currentTarget.getBoundingClientRect();
-        cursor.current = [event.clientX - box.left, event.clientY - box.top];
-      } : undefined}
+      onPointerDown={(event) => {
+        updateViewportPointer(event);
+        if (stepFaceSelectionEnabled) {
+          pointerDown.current = [event.clientX, event.clientY];
+        }
+      }}
+      onPointerEnter={updateViewportPointer}
+      onPointerMove={updateViewportPointer}
+      onPointerLeave={() => {
+        pointerInViewport.current = false;
+      }}
       onContextMenu={onUndoToolSelection ? (event) => {
         event.preventDefault();
         onUndoToolSelection();
