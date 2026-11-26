@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { changePalletMargin, marginLinks, MARGIN_PAIRS, palletMargins, toggleMarginLink } from "../src/palletMargins.ts";
+import { changeIndependentPalletMargin, changePalletMargin, marginLinks, MARGIN_PAIRS, palletMargins, toggleMarginLink } from "../src/palletMargins.ts";
 
 const direction = (positions: number[] | null) => ({
   beam_height: 70, beam_width: 50, support_distances: [500],
@@ -60,4 +60,14 @@ test("relink copies the first displayed value to the second", () => {
   const relinked = toggleMarginLink(changed, MARGIN_PAIRS[1].link);
   assert.deepEqual(palletMargins(relinked), [100, 100, 100, 100]);
   assert.deepEqual(relinked.pallet.manual_beams?.[0].start_point, [250, 300, 70]);
+});
+
+test("independent editor fields unlink only the edited pair in older projects", () => {
+  for (const index of [0, 1, 2, 3] as const) {
+    const result = changeIndependentPalletMargin(example(), index, 130);
+    const expected = [100, 100, 100, 100];
+    expected[index] = 130;
+    assert.deepEqual(palletMargins(result), expected);
+    assert.deepEqual(marginLinks(result), index < 2 ? [false, true] : [true, false]);
+  }
 });

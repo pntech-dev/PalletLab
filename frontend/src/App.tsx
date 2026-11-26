@@ -19,7 +19,7 @@ import type {
   StepModelSnapshot,
 } from "./PalletViewport";
 import type { StepModelPayload } from "./stepModelGeometry";
-import { changePalletMargin, marginLinks, MARGIN_PAIRS, palletMargins, toggleMarginLink, type MarginIndex } from "./palletMargins";
+import { changeIndependentPalletMargin, MARGIN_PAIRS, palletMargins, type MarginIndex } from "./palletMargins";
 import { remainingImportFeedback, stepImportPhase } from "./stepImportUi";
 import { betweenFaces, type BeamReference, type BeamReferenceFace } from "./manualBeamBetween";
 import { manualSectionForSupport } from "./manualBeamSection";
@@ -1575,7 +1575,7 @@ export function App() {
     if (value.trim() === "") return;
     const next = Number(value);
     if (!Number.isFinite(next) || next < 0) return;
-    setProject(changePalletMargin(project, index, next));
+    setProject(changeIndependentPalletMargin(project, index, next));
   }
 
   function layerSectionPreset(layer: Layer): SectionPresetId {
@@ -1934,10 +1934,8 @@ export function App() {
       <div className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}`}>
         <aside className="editor-panel" aria-label="Редактор поддона">
           <div className="editor-heading">
-            <p className="eyebrow">Редактор</p>
-            <p className="status">
-              {status ? `${status.application} ${status.version}` : "Подключение…"}
-            </p>
+            <h1>Редактор</h1>
+            <p>Выберите сечение брусьев, введите расстояния между опорами, габаритами и отступы.</p>
           </div>
           {recoveryNotice ? <p className="recovery-notice" role="alert">{recoveryNotice}</p> : null}
         {!settingsOpen && !updateDismissed && ["available", "downloading", "ready", "failed", "installing"].includes(update.state) ? (
@@ -2114,10 +2112,7 @@ export function App() {
           <div className="directions">
             <section className="layer-stack" aria-label="Слои поддона">
               <div className="layer-stack-heading">
-                <div>
-                  <p className="eyebrow">Конструкция</p>
-                  <h2>Слои поддона</h2>
-                </div>
+                <h2>Слои поддона</h2>
                 <div className="layer-toolbar" role="toolbar" aria-label="Инструменты слоёв">
                   <button type="button" className="secondary" disabled={!selectedLayerId}
                     aria-label={selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать слой" : "Заблокировать слой"}
@@ -2150,14 +2145,14 @@ export function App() {
                 </div>
               </div>
               <button type="button" className="secondary layer-add-button" onClick={addLayer}>
-                <Plus size={16} /> Добавить новый слой
+                <Plus size={24} /> Добавить новый слой
               </button>
               <div className="layer-stack-list">
               {[...project.pallet.layers].reverse().map((layer) => {
                 const index = project.pallet.layers.findIndex((item) => item.id === layer.id);
                 return (
                 <section
-                  className={`layer-card${selectedLayerId === layer.id ? " is-selected" : ""}${isLocked(layer.id) ? " is-locked" : ""}${expandedLayerId === layer.id ? " is-expanded" : ""}${draggedLayerId === layer.id ? " is-dragging" : ""}${dropLayerId === layer.id ? (dropAfterLayer ? " is-drop-after" : " is-drop-before") : ""}`}
+                  className={`layer-card${selectedLayerId === layer.id ? " is-selected" : ""}${isLocked(layer.id) ? " is-locked" : ""}${hiddenLayerIds.includes(layer.id) ? " is-hidden" : ""}${expandedLayerId === layer.id ? " is-expanded" : ""}${draggedLayerId === layer.id ? " is-dragging" : ""}${dropLayerId === layer.id ? (dropAfterLayer ? " is-drop-after" : " is-drop-before") : ""}`}
                   key={layer.id}
                   onClick={() => setSelectedLayerId(layer.id)}
                   onDragOver={(event) => {
@@ -2192,7 +2187,7 @@ export function App() {
                         setDropLayerId(null);
                       }}
                     >
-                      <GripVertical size={16} />
+                      <GripVertical size={24} />
                     </span>
                     <button
                       type="button"
@@ -2202,10 +2197,10 @@ export function App() {
                         setExpandedLayerId((current) => current === layer.id ? null : layer.id)
                       }
                     >
-                      <span>Слой {layerNumber(layer, index)}{isLocked(layer.id) ? " · Заблокирован" : ""}</span>
-                      <small>{layer.axis === "length" ? "Вдоль длины" : "Вдоль ширины"}</small>
-                      {expandedLayerId === layer.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      <span>Слой {layerNumber(layer, index)}{isLocked(layer.id) ? <span className="sr-only"> · Заблокирован</span> : null}</span>
+                      <small>{layer.axis === "length" ? "Продольный" : "Поперечный"}{calculation?.snapshot?.pallet ? ` • ${calculation.snapshot.pallet.beams.filter((beam) => (beam.physicalLayerId ?? beam.layerId) === layer.id).length} шт` : ""}</small>
                     </button>
+                    {isLocked(layer.id) ? <span className="layer-lock-indicator" title="Слой заблокирован"><LockKeyhole size={16} aria-hidden="true" /></span> : null}
                     <button
                       type="button"
                       className="layer-visibility secondary"
@@ -2214,6 +2209,10 @@ export function App() {
                       aria-pressed={hiddenLayerIds.includes(layer.id)}
                     >
                       {hiddenLayerIds.includes(layer.id) ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                    <button type="button" className="layer-expand" aria-label={`${expandedLayerId === layer.id ? "Свернуть" : "Развернуть"} слой ${layerNumber(layer, index)}`}
+                      aria-expanded={expandedLayerId === layer.id} onClick={() => setExpandedLayerId((current) => current === layer.id ? null : layer.id)}>
+                      {expandedLayerId === layer.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </button>
                   </div>
                   {expandedLayerId === layer.id ? (
@@ -2307,29 +2306,14 @@ export function App() {
               {project ? <fieldset className="pallet-margins" disabled={(project.view.locked_layer_ids ?? []).length > 0}>
                 <h2>Отступы поддона</h2>
                 <p>Введите отступы от краёв поддона до размещаемого объекта</p>
-                {MARGIN_PAIRS.map(({ first, second, link, labels: names, description }) => {
-                  const linked = marginLinks(project)[link];
-                  return <div className="pallet-margins-fields" key={link}>
-                    <label>{names[0]}<input type="number" min="0" value={marginDrafts[first] ?? palletMargins(project)[first]}
-                      onFocus={() => { beginFormEdit(); setMarginDrafts((drafts) => ({ ...drafts, [first]: String(palletMargins(project)[first]) })); }}
-                      onBlur={() => { setMarginDrafts((drafts) => { const next = { ...drafts }; delete next[first]; return next; }); finishFormEdit(); }}
-                      onChange={(event) => { setMarginDrafts((drafts) => ({ ...drafts, [first]: event.target.value })); updatePalletMargin(first, event.target.value); }} /></label>
-                    <button type="button" className={`margin-link secondary${linked ? " is-linked" : ""}`}
-                      aria-pressed={linked} aria-label={`${linked ? "Разъединить" : "Связать"} отступы ${description}`}
-                      title={linked ? "Разъединить отступы" : "Связать отступы"}
-                      onClick={() => updateProject(toggleMarginLink(project, link))}>
-                      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M10 13a5 5 0 0 0 7.1 0l2.1-2.1a5 5 0 0 0-7.1-7.1L11 4.9" />
-                        <path d="M14 11a5 5 0 0 0-7.1 0l-2.1 2.1a5 5 0 0 0 7.1 7.1l1.1-1.1" />
-                        {!linked && <path d="M4 4l16 16" />}
-                      </svg>
-                    </button>
-                    <label>{names[1]}<input type="number" min="0" disabled={linked} value={marginDrafts[second] ?? palletMargins(project)[second]}
-                      onFocus={() => { beginFormEdit(); setMarginDrafts((drafts) => ({ ...drafts, [second]: String(palletMargins(project)[second]) })); }}
-                      onBlur={() => { setMarginDrafts((drafts) => { const next = { ...drafts }; delete next[second]; return next; }); finishFormEdit(); }}
-                      onChange={(event) => { setMarginDrafts((drafts) => ({ ...drafts, [second]: event.target.value })); updatePalletMargin(second, event.target.value); }} /></label>
-                  </div>;
-                })}
+                {MARGIN_PAIRS.flatMap(({ first, second, labels }) => [first, second].map((index, position) =>
+                  <label key={index}>{labels[position].replace(", мм", "")}
+                    <input type="number" min="0" value={marginDrafts[index] ?? palletMargins(project)[index]}
+                      onFocus={() => { beginFormEdit(); setMarginDrafts((drafts) => ({ ...drafts, [index]: String(palletMargins(project)[index]) })); }}
+                      onBlur={() => { setMarginDrafts((drafts) => { const next = { ...drafts }; delete next[index]; return next; }); finishFormEdit(); }}
+                      onChange={(event) => { setMarginDrafts((drafts) => ({ ...drafts, [index]: event.target.value })); updatePalletMargin(index, event.target.value); }} />
+                    <span className="pallet-margin-unit" aria-hidden="true">мм</span>
+                  </label>))}
               </fieldset> : null}
               <fieldset className="rounding">
                 <h2>Округление габаритов поддона</h2>
@@ -2339,8 +2323,9 @@ export function App() {
                   onChange={setRounding} />
               </fieldset>
               <div className="layer-stack-footer">
-                <button type="button" className="secondary" onClick={() => setResetOpen(true)}>
-                  Сбросить проект
+                <p><Info size={16} aria-hidden="true" /> Все размеры указаны в миллиметрах</p>
+                <button type="button" className="ui-button--tertiary" onClick={() => setResetOpen(true)}>
+                  Сбросить конфигурацию
                 </button>
               </div>
           </div>

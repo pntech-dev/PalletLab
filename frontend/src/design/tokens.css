@@ -12,6 +12,8 @@
   --color-neutral-800: #262626;
   --color-neutral-950: #0a0a0;
   --color-blue-500: #2b7fff;
+  --color-blue-100: #dbeafe;
+  --color-blue-400: #51a2ff;
   --color-blue-600: #155dfc;
   --color-blue-700: #1447e6;
   --color-blue-800: #193cb8;
@@ -23,6 +25,7 @@
   --color-orange-50: #fff7ed;
   --color-yellow-800: #894b00;
   --color-slate-300: #cad5e2;
+  --color-slate-400: #90a1b9;
   --surface-app: var(--color-neutral-200);
   --surface-panel: var(--color-white);
   --surface-muted: var(--color-neutral-100);

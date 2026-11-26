@@ -72,3 +72,10 @@ export function toggleMarginLink(project: Project, pair: 0 | 1): Project {
   }
   return result;
 }
+
+/** Independent editor fields must also work for projects saved with linked margins. */
+export function changeIndependentPalletMargin(project: Project, index: MarginIndex, next: number): Project {
+  const pair = MARGIN_PAIRS.find((item) => item.first === index || item.second === index)!;
+  const unlinked = marginLinks(project)[pair.link] ? toggleMarginLink(project, pair.link) : project;
+  return changePalletMargin(unlinked, index, next);
+}
