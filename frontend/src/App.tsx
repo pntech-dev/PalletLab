@@ -23,6 +23,9 @@ import { remainingImportFeedback, stepImportPhase } from "./stepImportUi";
 import { betweenFaces, type BeamReference, type BeamReferenceFace } from "./manualBeamBetween";
 import { manualSectionForSupport } from "./manualBeamSection";
 import { SettingsDialog } from "./SettingsDialog";
+import { Button } from "./design/Button";
+import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronUp } from "lucide-react";
+import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
 
 const startupStartedAt = performance.now();
@@ -1821,16 +1824,18 @@ export function App() {
   ) : null;
   const viewportToolbar: ReactNode = (
     <>
-      {viewportExpanded ? <button type="button" className="secondary" onClick={addLayer} disabled={!project}>Добавить слой</button> : null}
+      {viewportExpanded ? <Button variant="ghost" onClick={addLayer} disabled={!project} aria-label="Добавить слой" title="Добавить слой"><Plus size={16} /><span className="toolbar-label">Добавить слой</span></Button> : null}
       <div className="viewport-tool-group viewport-history-actions">
-        <button type="button" className="secondary" onClick={undo} disabled={!project || undoStack.current.length === 0}>Назад</button>
-        <button type="button" className="secondary" onClick={redo} disabled={!project || redoStack.current.length === 0}>Вперёд</button>
+        <Button variant="ghost" onClick={undo} disabled={!project || undoStack.current.length === 0} aria-label="Отменить" title="Отменить"><Undo2 size={16} />{viewportExpanded && <span className="toolbar-label">Отменить</span>}</Button>
+        <Button variant="ghost" onClick={redo} disabled={!project || redoStack.current.length === 0} aria-label="Вернуть" title="Вернуть"><Redo2 size={16} />{viewportExpanded && <span className="toolbar-label">Вернуть</span>}</Button>
       </div>
       <div className="viewport-tool-group viewport-mode-actions">
-        <button type="button" className={insertionMode ? "active-tool" : ""} onClick={() => insertionMode ? stopInsertion() : activateInsertion()}>Добавить брус</button>
+        <Button variant="ghost" className={insertionMode ? "active-tool" : ""} aria-label="Добавить брус" title="Добавить брус" onClick={() => insertionMode ? stopInsertion() : activateInsertion()}><Plus size={16} />{viewportExpanded && <span className="toolbar-label">Добавить брус</span>}</Button>
         <button
           type="button"
           className={beamTool === "delete" ? "active-tool" : ""}
+          aria-label="Удалить брус"
+          title="Удалить брус"
           onClick={() => {
             if (beamTool !== "delete") {
               activateBeamTool("delete");
@@ -1841,10 +1846,10 @@ export function App() {
             }
           }}
         >
-          {beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить брус"}
+          <Trash2 size={16} />{viewportExpanded && <span className="toolbar-label">{beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить брус"}</span>}
         </button>
-        <button type="button" className={beamTool === "section" ? "active-tool" : ""} onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}>Изменить сечение</button>
-        <button type="button" className={dimensionEditing ? "active-tool" : ""} onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}>Изменить расстояние</button>
+        <Button variant="ghost" className={beamTool === "section" ? "active-tool" : ""} aria-label="Изменить сечение" title="Изменить сечение" onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}><PanelsTopLeft size={16} />{viewportExpanded && <span className="toolbar-label">Изменить сечение</span>}</Button>
+        <Button variant="ghost" className={dimensionEditing ? "active-tool" : ""} aria-label="Изменить расстояние" title="Изменить расстояние" onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}><Ruler size={16} />{viewportExpanded && <span className="toolbar-label">Изменить расстояние</span>}</Button>
       </div>
       {viewportExpanded && calculation?.snapshot?.pallet ? (
         <span className="viewport-toolbar-summary">
@@ -1870,7 +1875,7 @@ export function App() {
         </select>
       </label>
       <button type="button" className="secondary" onClick={() => setViewportExpanded((value) => !value)} aria-pressed={viewportExpanded} aria-label={viewportExpanded ? "Свернуть область просмотра" : "Развернуть область просмотра"}>
-        {viewportExpanded ? "Свернуть" : "Развернуть"}
+        {viewportExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </button>
     </>
   );
@@ -1878,27 +1883,27 @@ export function App() {
   return (
     <main className="app-shell">
       <header className="app-header">
-        <strong className="app-brand">PalletLab</strong>
+        <img className="app-brand" src={logo} alt="Pallet Lab" />
         <nav className="app-actions" aria-label="Действия с проектом">
-          <button type="button" className="secondary" onClick={openProject} disabled={!status}>Открыть</button>
-          <button type="button" className="secondary" onClick={() => void saveProject()} disabled={!project || saving || !hasUnsavedChanges}>Сохранить</button>
-          <button type="button" className="secondary" onClick={() => void saveProject(true)} disabled={!project || saving}>Сохранить как</button>
+          <Button variant="ghost" onClick={openProject} disabled={!status}><FolderOpen size={16} /> Открыть</Button>
+          <Button variant="ghost" onClick={() => void saveProject()} disabled={!project || saving || !hasUnsavedChanges}><Save size={16} /> Сохранить</Button>
+          <Button variant="ghost" onClick={() => void saveProject(true)} disabled={!project || saving}><SaveAll size={16} /> Сохранить как</Button>
           <button
             type="button"
             className="secondary"
             onClick={() => void importStepModel()}
             disabled={!status || stepImportPhase(stepImport?.state, stepModel !== null, stepRestoreError !== null) !== null}
           >
-            Импорт
+            <FolderInput size={16} /> Импорт модели…
           </button>
           <button type="button" onClick={openExportSetup} disabled={!project || exporting !== null}>
-            Экспорт
+            <FolderOutput size={16} /> Экспорт…
           </button>
         </nav>
         {updateDismissed && ["available", "ready", "failed"].includes(update.state) ? (
           <button type="button" className="secondary" onClick={() => setUpdateDismissed(false)}>Доступно обновление</button>
         ) : null}
-        <button type="button" className="secondary app-settings-button" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}>Настройки</button>
+        <Button variant="ghost" className="app-settings-button" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}><Settings size={16} /> Настройки</Button>
       </header>
       {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} solidworks={solidWorksOptions} initialSection={settingsInitialSection} update={update} lastUpdateCheck={lastUpdateCheck} onCheckUpdates={() => checkForUpdates(true)} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
       <div className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}`}>
@@ -2103,6 +2108,8 @@ export function App() {
                 </div>
                 <div className="layer-toolbar" role="toolbar" aria-label="Инструменты слоёв">
                   <button type="button" className="secondary" disabled={!selectedLayerId}
+                    aria-label={selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать слой" : "Заблокировать слой"}
+                    title={selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать слой" : "Заблокировать слой"}
                     aria-pressed={selectedLayerId ? isLocked(selectedLayerId) : false}
                     onClick={() => {
                       if (!selectedLayerId) return;
@@ -2111,25 +2118,27 @@ export function App() {
                       clearInteractionState();
                       updateProject({ ...project, view: { ...project.view, locked_layer_ids: next } });
                     }}>
-                    {selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать" : "Заблокировать"}
+                    {selectedLayerId && isLocked(selectedLayerId) ? <LockKeyholeOpen size={16} /> : <LockKeyhole size={16} />}
                   </button>
-                  <button type="button" className="secondary" disabled={!selectedLayerId || duplicateBusy} onClick={() => void duplicateLayer()}>
-                    Дублировать
+                  <button type="button" className="secondary" aria-label="Дублировать слой" title="Дублировать слой" disabled={!selectedLayerId || duplicateBusy} onClick={() => void duplicateLayer()}>
+                    <Copy size={16} />
                   </button>
                   <button
                     type="button"
                     className="secondary"
+                    aria-label="Удалить слой"
+                    title="Удалить слой"
                     disabled={!selectedLayerId || project.pallet.layers.length <= 2 || isLocked(selectedLayerId)}
                     onClick={() => {
                       if (selectedLayerId) removeLayer(selectedLayerId);
                     }}
                   >
-                    Удалить слой
+                    <Trash2 size={16} />
                   </button>
                 </div>
               </div>
               <button type="button" className="secondary layer-add-button" onClick={addLayer}>
-                Добавить слой
+                <Plus size={16} /> Добавить новый слой
               </button>
               <div className="layer-stack-list">
               {[...project.pallet.layers].reverse().map((layer) => {
@@ -2171,7 +2180,7 @@ export function App() {
                         setDropLayerId(null);
                       }}
                     >
-                      ⠿
+                      <GripVertical size={16} />
                     </span>
                     <button
                       type="button"
@@ -2183,14 +2192,16 @@ export function App() {
                     >
                       <span>Слой {layerNumber(layer, index)}{isLocked(layer.id) ? " · Заблокирован" : ""}</span>
                       <small>{layer.axis === "length" ? "Вдоль длины" : "Вдоль ширины"}</small>
+                      {expandedLayerId === layer.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </button>
                     <button
                       type="button"
                       className="layer-visibility secondary"
+                      aria-label={hiddenLayerIds.includes(layer.id) ? `Показать слой ${layerNumber(layer, index)}` : `Скрыть слой ${layerNumber(layer, index)}`}
                       onClick={() => toggleLayerVisibility(layer.id)}
                       aria-pressed={hiddenLayerIds.includes(layer.id)}
                     >
-                      {hiddenLayerIds.includes(layer.id) ? "Показать" : "Скрыть"}
+                      {hiddenLayerIds.includes(layer.id) ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
                   {expandedLayerId === layer.id ? (

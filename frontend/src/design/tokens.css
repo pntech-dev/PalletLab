@@ -1,0 +1,44 @@
+/* Values from the Pallet Lab Figma styles; semantic aliases are used by UI components. */
+:root {
+  --color-white: #fff;
+  --color-neutral-50: #fafafa;
+  --color-neutral-100: #f5f5f5;
+  --color-neutral-200: #e5e5e5;
+  --color-neutral-300: #d4d4d4;
+  --color-neutral-400: #a1a1a1;
+  --color-neutral-500: #737373;
+  --color-neutral-600: #525252;
+  --color-neutral-700: #404040;
+  --color-neutral-800: #262626;
+  --color-neutral-950: #0a0a0;
+  --color-blue-500: #2b7fff;
+  --color-blue-600: #155dfc;
+  --color-blue-700: #1447e6;
+  --color-blue-800: #193cb8;
+  --color-red-500: #fb2c36;
+  --color-red-600: #e7000b;
+  --color-green-600: #00a63e;
+  --color-slate-300: #cad5e2;
+  --surface-app: var(--color-neutral-200);
+  --surface-panel: var(--color-white);
+  --surface-muted: var(--color-neutral-100);
+  --text-primary: var(--color-neutral-700);
+  --text-muted: var(--color-neutral-500);
+  --border-default: var(--color-neutral-300);
+  --accent: var(--color-blue-600);
+  --danger: var(--color-red-500);
+  --font-ui: 'Inter Variable', Inter, sans-serif;
+  --font-size-caption: 12px;
+  --font-size-body: 14px;
+  --font-size-heading: 16px;
+  --line-height-ui: 1.4;
+  --radius-control: 8px;
+  --radius-panel: 16px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --shadow-card: 0 4px 24px rgb(0 0 0 / 8%);
+  --shadow-hud: 0 4px 15px rgb(0 0 0 / 15%);
+}
