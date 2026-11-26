@@ -27,6 +27,7 @@ import { manualSectionForSupport } from "./manualBeamSection";
 import { SettingsDialog } from "./SettingsDialog";
 import { Button } from "./design/Button";
 import { Checkbox } from "./design/Checkbox";
+import { Combobox } from "./design/Combobox";
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Hud, HudHint } from "./design/Hud";
 import { detailCount, PalletSummary } from "./design/PalletSummary";
@@ -2217,20 +2218,20 @@ export function App() {
     <Hud title="Добавить брус" actions={<><Button onClick={addManualBeam} disabled={(manualReferenceMode === "face" && !manualReference) || (manualReferenceMode === "between" && !manualBetween)}>Добавить</Button><Button variant="ghost" onClick={stopInsertion}>Отмена</Button></>}>
       <label>
         Отсчёт расстояния
-        <select
+        <Combobox
           value={manualReferenceMode}
-          onChange={(event) => {
-            const mode = event.target.value as "base" | "face" | "between";
+          options={[
+            { value: "base", label: "От нулевой точки" },
+            { value: "face", label: "От выбранной грани" },
+            { value: "between", label: "Между двух граней" },
+          ]}
+          onChange={(mode) => {
             setManualReferenceMode(mode);
             setManualReference(null);
             setManualSecondReference(null);
             setManualDistance(mode === "base" ? basePointDistance(manualSupports[0]) : 0);
           }}
-        >
-          <option value="base">От нулевой точки</option>
-          <option value="face">От выбранной грани</option>
-          <option value="between">Между двух граней</option>
-        </select>
+        />
       </label>
       <label>
         {manualReferenceMode === "between" ? "От нулевой точки, мм" : "Расстояние, мм"}
@@ -2266,21 +2267,17 @@ export function App() {
     <Hud className="section-hud" title={<>Изменить сечение{selectedBeams.length > 1 ? ` · ${selectedBeams.length}` : ""}</>} actions={<><Button onClick={() => void changeSelectedBeamSections()}>Применить</Button><Button variant="ghost" onClick={() => { setBeamTool("none"); setSelectedBeams([]); }}>Отмена</Button></>}>
       <label>
         Стандартное сечение
-        <select
+        <Combobox
           value={sectionPreset}
-          onChange={(event) => {
-            const presetId = event.target.value as SectionPresetId;
+          options={SECTION_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }))}
+          onChange={(presetId) => {
             setSectionPreset(presetId);
             const preset = SECTION_PRESETS.find((item) => item.id === presetId);
             if (preset && "height" in preset && "width" in preset) {
               setSection({ height: preset.height, width: preset.width });
             }
           }}
-        >
-          {SECTION_PRESETS.map((preset) => (
-            <option key={preset.id} value={preset.id}>{preset.label}</option>
-          ))}
-        </select>
+        />
       </label>
       <div className="section-hud-dimensions">
         <label>
@@ -2347,21 +2344,23 @@ export function App() {
       <div className="viewport-toolbar-end">
       <label className="viewport-view-select">
         <span>Вид</span>
-        <select
+        <Combobox
+          variant="surface"
           value={camera}
-          onChange={(event) => {
+          disabled={!project}
+          options={[
+            { value: "isometric", label: "Изометрия" },
+            { value: "top", label: "Сверху" },
+            { value: "front", label: "Спереди" },
+            { value: "side", label: "Сбоку" },
+          ]}
+          onChange={(preset) => {
             if (!project) return;
-            const preset = event.target.value as CameraPreset;
             setCamera(preset);
             setCameraRequest((value) => value + 1);
             updateProject({ ...project, view: { ...project.view, camera: preset } });
           }}
-        >
-          <option value="isometric">Изометрия</option>
-          <option value="top">Сверху</option>
-          <option value="front">Спереди</option>
-          <option value="side">Сбоку</option>
-        </select>
+        />
       </label>
       <button type="button" className="secondary" onClick={toggleViewportExpanded} aria-pressed={viewportExpanded} aria-label={viewportExpanded ? "Свернуть область просмотра" : "Развернуть область просмотра"}>
         {viewportExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
@@ -2534,10 +2533,11 @@ export function App() {
                       </div>
                       <label className="layer-field-wide">
                         Сечение брусьев (по умолчанию)
-                        <select
+                        <Combobox
                           value={layerSectionPreset(layer)}
-                          onChange={(event) => {
-                            const presetId = event.target.value as SectionPresetId;
+                          disabled={isLocked(layer.id)}
+                          options={SECTION_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }))}
+                          onChange={(presetId) => {
                             if (presetId === "custom") {
                               setCustomLayerSectionIds((current) => current.includes(layer.id) ? current : [...current, layer.id]);
                               return;
@@ -2551,11 +2551,7 @@ export function App() {
                               });
                             }
                           }}
-                        >
-                          {SECTION_PRESETS.map((preset) => (
-                            <option key={preset.id} value={preset.id}>{preset.label}</option>
-                          ))}
-                        </select>
+                        />
                       </label>
                       <div className="layer-section-dimensions">
                         <label>

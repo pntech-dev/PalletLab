@@ -63,14 +63,35 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .viewport-fit-control { transform: translate3d(calc(-1 * var(--viewport-right-inset, 0px)), calc(-1 * var(--viewport-bottom-inset, 0px)), 0); will-change: transform; }
 .viewport-navigation-guide { transform: translate3d(0, calc(-1 * var(--viewport-bottom-inset, 0px)), 0); will-change: transform; }
 .viewport-error-toast { left: calc((100% - var(--viewport-right-inset, 0px)) / 2); }
-.viewport-floating-toolbar button, .viewport-fit-control button { min-width: 36px; min-height: 36px; padding: 8px; border: 0; border-radius: var(--radius-control); color: var(--text-muted); background: var(--surface-panel); box-shadow: none; }
+.viewport-floating-toolbar button:not(.ui-combobox-trigger), .viewport-fit-control button { min-width: 36px; min-height: 36px; padding: 8px; border: 0; border-radius: var(--radius-control); color: var(--text-muted); background: var(--surface-panel); box-shadow: none; }
 .viewport-floating-toolbar button.secondary { color: var(--text-muted); background: var(--surface-panel); }
-.viewport-floating-toolbar button:hover:not(:disabled), .viewport-fit-control button:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
+.viewport-floating-toolbar button:not(.ui-combobox-trigger):hover:not(:disabled), .viewport-fit-control button:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
 .viewport-floating-toolbar button.secondary:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
 .viewport-toolbar-summary { display: flex; align-items: center; justify-content: center; gap: var(--space-2); color: var(--text-muted); font-size: var(--font-size-caption); line-height: var(--line-height-ui); }
 .viewport-floating-toolbar .active-tool { color: var(--accent); background: var(--color-neutral-200); }
 .viewport-view-select { color: var(--text-muted); }
 .viewport-view-select select { min-height: 36px; background: var(--surface-panel); color: var(--text-primary); border: 0; }
+button.ui-combobox-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 36px; min-height: 36px; margin: 0; padding: var(--space-2); border: 0; border-radius: var(--radius-control); font-size: var(--font-size-body); font-weight: 500; line-height: var(--line-height-ui); text-align: left; }
+.ui-combobox-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-combobox-arrow { flex: none; display: block; transform: rotate(0deg); transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+button.ui-combobox-trigger[aria-expanded='true'] .ui-combobox-arrow { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) {
+  .ui-combobox-arrow { transition: none; }
+}
+button.ui-combobox-trigger--surface { min-width: 118px; color: var(--text-muted); background: var(--surface-panel); }
+button.ui-combobox-trigger--surface:hover:not(:disabled), button.ui-combobox-trigger--surface:active:not(:disabled) { color: var(--color-neutral-600); background: var(--color-neutral-50); }
+button.ui-combobox-trigger--surface[aria-expanded='true'], button.ui-combobox-trigger--surface[aria-expanded='true']:hover:not(:disabled), button.ui-combobox-trigger--surface[aria-expanded='true']:active:not(:disabled) { color: var(--text-primary); background: var(--surface-panel); }
+button.ui-combobox-trigger--surface:disabled { color: var(--color-slate-300); background: var(--surface-muted); cursor: not-allowed; }
+button.ui-combobox-trigger--field { width: 100%; min-width: 0; padding: 6px var(--space-3) 6px var(--space-4); border: 1px solid var(--border-default); color: var(--text-primary); background: var(--surface-panel); }
+button.ui-combobox-trigger--field.is-placeholder { color: var(--text-muted); }
+button.ui-combobox-trigger--field:hover:not(:disabled), button.ui-combobox-trigger--field:active:not(:disabled) { border-color: var(--color-neutral-500); color: var(--text-primary); background: var(--surface-panel); }
+button.ui-combobox-trigger--field[aria-expanded='true'], button.ui-combobox-trigger--field[aria-expanded='true']:hover:not(:disabled), button.ui-combobox-trigger--field[aria-expanded='true']:active:not(:disabled) { border-color: var(--accent); color: var(--text-primary); background: var(--surface-panel); }
+button.ui-combobox-trigger--field:disabled { color: var(--color-slate-300); border-color: transparent; background: var(--surface-muted); cursor: not-allowed; }
+.ui-combobox-menu { position: fixed; z-index: 160; display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; border: 0; border-radius: var(--radius-control); background: var(--surface-panel); box-shadow: var(--shadow-card); }
+button.ui-combobox-option { display: flex; align-items: center; justify-content: flex-start; flex: none; width: 100%; min-height: 36px; margin: 0; padding: var(--space-2); border: 0; border-radius: 0; font-size: var(--font-size-body); font-weight: 500; line-height: var(--line-height-ui); text-align: left; white-space: nowrap; color: var(--text-muted); background: var(--surface-panel); }
+button.ui-combobox-option.is-highlighted:not(.is-selected), button.ui-combobox-option:hover:not(:disabled):not(.is-selected) { color: var(--color-neutral-600); background: var(--surface-muted); }
+button.ui-combobox-option:active:not(:disabled):not(.is-selected) { color: var(--text-primary); background: var(--color-neutral-200); }
+button.ui-combobox-option.is-selected, button.ui-combobox-option.is-selected:hover:not(:disabled), button.ui-combobox-option.is-selected:active:not(:disabled) { color: var(--color-white); background: var(--accent); }
 .viewport-zoom-control { background: var(--surface-panel); color: var(--text-primary); }
 .pallet-summary-card { border: 0; border-radius: var(--radius-panel); background: var(--surface-panel); }
 .pallet-summary-card h2, .pallet-summary-sizes dd, .pallet-detail strong { color: var(--text-primary); }
@@ -140,8 +161,9 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .hud-title { font-size: var(--font-size-heading); }
 .hud-content { display: grid; gap: var(--space-2); min-width: 0; }
 .hud-content label { color: var(--color-neutral-200); font-size: var(--font-size-caption); }
-.hud-content input:not([type='checkbox']):not([type='radio']):not([type='range']), .hud-content select { width: 100%; min-width: 0; min-height: 36px; color: var(--color-white); border-color: var(--color-neutral-400); background: var(--color-neutral-600); padding: 6px 12px; }
-.hud-content input:disabled, .hud-content select:disabled { color: var(--color-neutral-300) !important; background: var(--color-neutral-500) !important; }
+.hud-content input:not([type='checkbox']):not([type='radio']):not([type='range']), .hud-content select, .hud-content button.ui-combobox-trigger { width: 100%; min-width: 0; min-height: 36px; color: var(--color-white); border: 1px solid var(--color-neutral-400); background: var(--color-neutral-600); padding: 6px var(--space-3); }
+.hud-content button.ui-combobox-trigger:hover:not(:disabled), .hud-content button.ui-combobox-trigger:active:not(:disabled), .hud-content button.ui-combobox-trigger[aria-expanded='true'], .hud-content button.ui-combobox-trigger[aria-expanded='true']:hover:not(:disabled) { color: var(--color-white); border-color: var(--color-neutral-300); background: var(--color-neutral-500); }
+.hud-content input:disabled, .hud-content select:disabled, .hud-content button.ui-combobox-trigger:disabled { color: var(--color-neutral-300) !important; background: var(--color-neutral-500) !important; }
 .hud-hint { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; color: var(--color-neutral-200); font-size: var(--font-size-caption); line-height: var(--line-height-ui); }
 .hud-hint svg { flex: none; }
 .hud-actions { display: flex; gap: var(--space-2); }
@@ -274,14 +296,17 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .layer-card-placeholder { flex: none; border: 1.5px dashed var(--color-blue-400); border-radius: var(--radius-control); background: var(--color-blue-100); opacity: 0.45; }
 .editor-panel fieldset.layer-card-content, .layer-card.is-dragging-floating fieldset.layer-card-content { gap: var(--space-4); margin-top: var(--space-2); padding: var(--space-2) 0 0; border-color: var(--color-neutral-200); border-radius: 0; background: transparent; }
 .layer-card-content label { display: grid; gap: var(--space-1); color: var(--text-muted); font-size: var(--font-size-caption); }
-.layer-card-content input:not([type='radio']), .layer-card-content select { min-height: 36px; padding: 6px var(--space-4); }
-.layer-card-content input:not([type='radio']):disabled, .layer-card-content select:disabled { color: var(--color-slate-400); border-color: transparent; background: var(--color-neutral-200); }
+.layer-card-content input:not([type='radio']), .layer-card-content select, .layer-card-content button.ui-combobox-trigger { min-height: 36px; padding: 6px var(--space-3) 6px var(--space-4); }
+.layer-card-content input:not([type='radio']):disabled, .layer-card-content select:disabled, .layer-card-content button.ui-combobox-trigger:disabled { color: var(--color-slate-400); border-color: transparent; background: var(--color-neutral-200); }
 .layer-section-dimensions label:first-child { order: 2; }
 .layer-input-hint { margin-top: calc(-1 * var(--space-2)); }
 .editor-panel .pallet-margins, .editor-panel .rounding { gap: var(--space-4) var(--space-2); }
 .editor-panel .pallet-margins { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .pallet-margins > label { position: relative; display: grid; gap: var(--space-1); min-width: 0; color: var(--text-muted); font-size: var(--font-size-caption); }
 .pallet-margins > label input { width: 100%; min-width: 0; padding-right: 36px; }
+.pallet-margins > label input[type='number'] { appearance: textfield; -moz-appearance: textfield; }
+.pallet-margins > label input[type='number']::-webkit-inner-spin-button,
+.pallet-margins > label input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
 .pallet-margin-unit { position: absolute; right: 12px; bottom: 9px; color: var(--text-primary); font-size: var(--font-size-body); line-height: var(--line-height-ui); pointer-events: none; }
 .pallet-margins:disabled .pallet-margin-unit { color: var(--color-slate-300); }
 .pallet-margins > p, .rounding > p { margin-top: calc(-1 * var(--space-2)); line-height: var(--line-height-ui); }

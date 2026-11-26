@@ -3,6 +3,7 @@ import { Settings, Box, Info, Axis3D, X, Copy, TriangleAlert, WandSparkles } fro
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Button } from "./design/Button";
 import { Checkbox } from "./design/Checkbox";
+import { Combobox } from "./design/Combobox";
 import type { AppSettings } from "./appSettings";
 import type { SolidWorksOptions, UpdateStatus } from "./App";
 
@@ -299,11 +300,18 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 </label>
                 <p className="modal-hint">Стандартный путь: <code>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\russian\sldmaterials\solidworks materials.sldmat</code></p>
                 <label className="material-field">Материал SolidWorks
-                  <select value={cadDraft.materialName} disabled={materials.length === 0 || cadBusy || saving} onChange={(event) => setCadDraft({ ...cadDraft, materialName: event.target.value })}>
-                    {cadDraft.materialName && !materials.includes(cadDraft.materialName) ? <option value={cadDraft.materialName}>{cadDraft.materialName}</option> : null}
-                    {!cadDraft.materialName ? <option value="">Сначала выберите библиотеку</option> : null}
-                    {materials.map((name) => <option key={name} value={name}>{name}</option>)}
-                  </select>
+                  <Combobox
+                    value={cadDraft.materialName}
+                    placeholder="Сначала выберите библиотеку"
+                    disabled={materials.length === 0 || cadBusy || saving}
+                    options={[
+                      ...(cadDraft.materialName && !materials.includes(cadDraft.materialName)
+                        ? [{ value: cadDraft.materialName, label: cadDraft.materialName }]
+                        : []),
+                      ...materials.map((name) => ({ value: name, label: name })),
+                    ]}
+                    onChange={(materialName) => setCadDraft({ ...cadDraft, materialName })}
+                  />
                 </label>
                 {cadError ? <p className="error" role="alert">{cadError}</p> : null}
               </section>
