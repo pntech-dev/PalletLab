@@ -12,7 +12,7 @@ const SECTIONS: { id: Section; title: string; description: string }[] = [
   { id: "general", title: "Общее", description: "Параметры по умолчанию для новых проектов." },
   { id: "view", title: "Вид и управление", description: "Отображение поддона в области 3D-просмотра" },
   { id: "cad", title: "CAD и чертежи", description: "Шаблоны файлов для экспорта поддона и его деталей" },
-  { id: "about", title: "О программе", description: "Версия PalletLab, связь с разработчиком и обновления." },
+  { id: "about", title: "О программе", description: "Pallet Lab — приложение для проектирования поддонов" },
 ];
 const SECTION_ICONS = { general: Settings, view: Axis3D, cad: Box, about: Info };
 
@@ -228,7 +228,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
             {SECTIONS.map((item) => { const Icon = SECTION_ICONS[item.id]; return <Button variant="ghost" key={item.id} aria-current={active === item.id ? "page" : undefined}
               onClick={() => setActive(item.id)}><Icon size={16} />{item.title}</Button>; })}
           </nav>
-          <div className={`settings-content${active !== "about" ? " settings-content--standard" : ""}`}>
+          <div className="settings-content settings-content--standard">
             <h3>{section.title}</h3>
             <p className="settings-description">{section.description}</p>
 
@@ -308,20 +308,20 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                 {cadError ? <p className="error" role="alert">{cadError}</p> : null}
               </section>
             </div>}
-            {active === "about" && <>
+            {active === "about" && <div className="settings-standard-groups settings-about-groups">
               <section className="settings-group"><h4>Версия ПО</h4><p>{version ? `Версия: ${version}` : "Версия недоступна"}</p></section>
               <section className="settings-group"><h4>Ссылки и связь с разработчиком</h4>
                 <div className="settings-contact"><div className="settings-contact-field"><label>Репозиторий<input readOnly value={repository} placeholder="Не указан" /></label>
                   <Button variant="ghost" disabled={!repository} onClick={() => void contactAction("copy", repository)} aria-label="Скопировать ссылку на репозиторий"><Copy size={16} aria-hidden="true" /></Button></div>
-                  <button type="button" className="secondary" disabled={!repository} onClick={() => void contactAction("repository", repository)}>Открыть репозиторий</button></div>
+                  <Button variant="secondary" disabled={!repository} onClick={() => void contactAction("repository", repository)}>Открыть репозиторий</Button></div>
                 <div className="settings-contact"><div className="settings-contact-field"><label>Почта для связи<input readOnly value={email} placeholder="Не указана" /></label>
                   <Button variant="ghost" disabled={!email} onClick={() => void contactAction("copy", email)} aria-label="Скопировать адрес разработчика"><Copy size={16} aria-hidden="true" /></Button></div>
-                  <button type="button" className="secondary" disabled={!email} onClick={() => void contactAction("email", email)}>Написать разработчику</button></div>
+                  <Button variant="secondary" disabled={!email} onClick={() => void contactAction("email", email)}>Написать разработчику</Button></div>
                 {contactMessage ? <p className={contactMessage.ok ? "success-message" : "error"} role="status">{contactMessage.text}</p> : null}
               </section>
-              <section className="settings-group"><h4>Обновление PalletLab</h4>
+              <section className="settings-group"><h4>Обновления Pallet Lab</h4>
                 <label className="settings-check"><Checkbox checked={draft.checkUpdates} onChange={(event) => setDraft({ ...draft, checkUpdates: event.target.checked })} /> Проверять обновления при каждом запуске программы</label>
-                <div className="settings-update"><span>{checkLabel}</span><button type="button" className="secondary" onClick={() => void checkUpdates()} disabled={checking || ["checking", "downloading", "ready", "installing"].includes(update.state)}>Проверить обновления</button></div>
+                <div className="settings-update"><span>{checkLabel}</span><Button variant="secondary" onClick={() => void checkUpdates()} disabled={checking || ["checking", "downloading", "ready", "installing"].includes(update.state)}>Проверить обновления</Button></div>
                 <p role="status">{update.state === "checking" ? "Проверка обновлений…"
                   : update.state === "current" ? "Установлена последняя версия."
                   : update.state === "check_failed" ? "Не удалось проверить обновления. Проверьте подключение и повторите попытку."
@@ -333,7 +333,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                   : null}</p>
                 {["available", "downloading", "ready", "failed"].includes(update.state) ? <p>Закройте настройки, чтобы перейти к обновлению.</p> : null}
               </section>
-            </>}
+            </div>}
             <p className="settings-default-hint"><Info size={16} aria-hidden="true" />Все изменённые параметры «по умолчанию» будут применяться к новым проектам.</p>
           </div>
         </div>

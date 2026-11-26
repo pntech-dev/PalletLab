@@ -192,6 +192,10 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .settings-contact-field > label { flex: 1 1 0; min-width: 0; }
 .settings-contact-field > button { min-width: 36px; padding: var(--space-2); }
 .settings-contact > button { margin-left: auto; }
+.settings-about-groups .settings-group p, .settings-about-groups .settings-update { font-size: var(--font-size-body); line-height: var(--line-height-ui); }
+.settings-about-groups .settings-group p:empty { display: none; }
+.settings-about-groups .settings-update { color: var(--text-muted); }
+.settings-about-groups .settings-contact { flex-wrap: wrap; }
 .export-modal { width: min(690px, 100%); gap: var(--space-6); padding: var(--space-4); }
 .export-header h2 { margin: 0; }
 .export-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4) var(--space-4); padding: 0; border: 0; }
