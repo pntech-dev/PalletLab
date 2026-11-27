@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BufferGeometry, DoubleSide, Float32BufferAttribute, Mesh, MeshBasicMaterial, Raycaster, Uint32BufferAttribute, Vector3 } from "three";
-import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from "three-mesh-bvh";
+import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree, MeshBVH } from "three-mesh-bvh";
 import { createStepFaceOverlayGeometry, createStepFaceOverlayMaterial, indexStepFaceRanges } from "../src/stepFaceGeometry.ts";
 
 test("face overlays share model buffers and draw the requested triangles from either side", () => {
@@ -47,4 +47,27 @@ test("BVH picking preserves original STEP triangle-to-face mapping", () => {
     assert.equal(faceIds[hit.faceIndex], expected);
   }
   geometry.disposeBoundsTree(); geometry.dispose(); material.dispose();
+});
+
+test("a transferred indirect BVH preserves face picking after preparation", () => {
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0, 3, 0, 0, 2, 1, 0], 3));
+  geometry.setIndex(new Uint32BufferAttribute([0, 1, 2, 3, 4, 5], 1));
+  const tree = new MeshBVH(geometry, { indirect: true });
+  const serialized = MeshBVH.serialize(tree, { cloneBuffers: false });
+  const indirect = (serialized as typeof serialized & { indirectBuffer: Uint32Array }).indirectBuffer;
+  const transfer = [...serialized.roots, indirect.buffer, geometry.index!.array.buffer] as ArrayBuffer[];
+  const received = structuredClone(serialized, { transfer });
+  const viewport = new BufferGeometry();
+  viewport.setAttribute("position", geometry.getAttribute("position"));
+  viewport.setIndex(new Uint32BufferAttribute(received.index as Uint32Array, 1));
+  viewport.boundsTree = MeshBVH.deserialize(received, viewport, { setIndex: false });
+  const material = new MeshBasicMaterial({ side: DoubleSide });
+  const mesh = new Mesh(viewport, material);
+  mesh.raycast = acceleratedRaycast;
+  mesh.updateMatrixWorld();
+  const ray = new Raycaster(new Vector3(2.2, 0.2, 1), new Vector3(0, 0, -1));
+  ray.firstHitOnly = true;
+  assert.equal(ray.intersectObject(mesh)[0]?.faceIndex, 1);
+  viewport.dispose(); geometry.dispose(); material.dispose();
 });

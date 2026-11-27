@@ -2,18 +2,18 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefO
 import { useThree } from "@react-three/fiber";
 import {
   acceleratedRaycast,
-  computeBoundsTree,
+  MeshBVH,
   disposeBoundsTree,
-  type MeshBVHOptions,
 } from "three-mesh-bvh";
 import {
   BufferGeometry,
   DoubleSide,
-  Float32BufferAttribute,
+  BufferAttribute,
   Matrix4,
   Mesh,
   Raycaster,
-  Uint32BufferAttribute,
+  Sphere,
+  Vector3,
   Vector2,
 } from "three";
 
@@ -49,23 +49,21 @@ export default function StepModelViewport({
   selection.current = { enabled: selectionEnabled, onSelectFace };
   const geometry = useMemo(() => {
     const result = new BufferGeometry();
-    result.setAttribute("position", new Float32BufferAttribute(model.displayPositions, 3));
-    result.setIndex(new Uint32BufferAttribute(model.indices, 1));
-    result.computeVertexNormals();
-    result.computeBoundingSphere();
-    result.computeBoundsTree = computeBoundsTree;
+    result.setAttribute("position", new BufferAttribute(model.displayPositions, 3));
+    result.setAttribute("normal", new BufferAttribute(model.normals, 3));
+    result.setIndex(new BufferAttribute(model.indices, 1));
+    result.boundingSphere = new Sphere(new Vector3(...model.modelSphere.slice(0, 3) as [number, number, number]), model.modelSphere[3]);
     result.disposeBoundsTree = disposeBoundsTree;
-    const boundsTreeOptions: MeshBVHOptions & { indirect: true } = { indirect: true };
-    result.computeBoundsTree(boundsTreeOptions);
+    result.boundsTree = MeshBVH.deserialize(model.boundsTree, result, { setIndex: false });
     return result;
-  }, [model.displayPositions, model.indices]);
+  }, [model.displayPositions, model.indices, model.normals, model.boundsTree, model.modelSphere]);
   const edgeGeometry = useMemo(() => {
     const result = new BufferGeometry();
-    result.setAttribute("position", new Float32BufferAttribute(model.displayEdgePositions, 3));
-    result.setIndex(new Uint32BufferAttribute(model.edgeIndices, 1));
-    result.computeBoundingSphere();
+    result.setAttribute("position", new BufferAttribute(model.displayEdgePositions, 3));
+    result.setIndex(new BufferAttribute(model.edgeIndices, 1));
+    result.boundingSphere = new Sphere(new Vector3(...model.edgeSphere.slice(0, 3) as [number, number, number]), model.edgeSphere[3]);
     return result;
-  }, [model.displayEdgePositions, model.edgeIndices]);
+  }, [model.displayEdgePositions, model.edgeIndices, model.edgeSphere]);
 
   useEffect(() => () => {
     geometry.disposeBoundsTree();

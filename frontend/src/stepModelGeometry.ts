@@ -1,3 +1,5 @@
+import type { SerializedBVH } from "three-mesh-bvh";
+
 export type StepModelPayload = { assetUrl: string };
 
 export type StepModelGeometry = {
@@ -9,7 +11,13 @@ export type StepModelGeometry = {
   edgeIndices: Uint32Array;
   bounds: [number, number, number, number, number, number];
   transform: number[];
+  normals: Float32Array;
+  boundsTree: SerializedBVH;
+  modelSphere: [number, number, number, number];
+  edgeSphere: [number, number, number, number];
 };
+
+type UnpreparedStepModelGeometry = Omit<StepModelGeometry, "normals" | "boundsTree" | "modelSphere" | "edgeSphere">;
 
 type AssetHeader = {
   version: number;
@@ -51,9 +59,9 @@ function edgeSegmentIndices(cells: Uint32Array): Uint32Array {
   return indices;
 }
 
-export async function prepareStepModel(model: StepModelPayload): Promise<StepModelGeometry> {
+export async function prepareStepModel(model: StepModelPayload): Promise<UnpreparedStepModelGeometry> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 30_000);
+  const timeout = globalThis.setTimeout(() => controller.abort(), 30_000);
   let response: Response;
   try {
     response = await fetch(model.assetUrl, { cache: "no-store", signal: controller.signal });
@@ -62,7 +70,7 @@ export async function prepareStepModel(model: StepModelPayload): Promise<StepMod
       ? "Превышено время ожидания бинарной STEP-модели."
       : "Не удалось загрузить бинарную STEP-модель.");
   } finally {
-    window.clearTimeout(timeout);
+    globalThis.clearTimeout(timeout);
   }
   if (!response.ok) throw new Error("Не удалось получить бинарную геометрию STEP-модели.");
   const asset = await response.arrayBuffer();

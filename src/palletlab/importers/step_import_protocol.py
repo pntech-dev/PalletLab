@@ -7,6 +7,7 @@ library output and incomplete lines must never be interpreted as UI commands.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable
 from typing import Any
 
@@ -31,7 +32,14 @@ def _parse_message(raw: object) -> dict[str, object] | None:
         return {"kind": kind, "value": max(0, min(100, int(value))), "label": label}
     if kind == "stage":
         name = raw.get("name")
-        return {"kind": kind, "name": name} if isinstance(name, str) else None
+        if not isinstance(name, str):
+            return None
+        if name == "faces":
+            value = raw.get("progress")
+            if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value):
+                return None
+            return {"kind": kind, "name": name, "progress": max(0, min(100, int(value)))}
+        return {"kind": kind, "name": name}
     if kind == "metrics":
         trace = raw.get("trace")
         return {"kind": kind, "trace": trace} if isinstance(trace, dict) else None

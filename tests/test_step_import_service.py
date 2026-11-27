@@ -54,6 +54,26 @@ def test_step_import_status_and_cancel_reject_unknown_operation_ids():
     }
 
 
+def test_step_face_progress_is_separate_from_unmeasurable_stages():
+    service = StepImportService()
+    service._operations["operation"] = {"ok": True, "state": "running"}
+
+    service._update("operation", progress=10, label="Преобразуем грани")
+    service._set_phase("operation", "faces", 0)
+    assert service.status("operation")["phaseProgress"] == 0
+    service._set_phase("operation", "faces", 100)
+    assert service.status("operation")["phaseProgress"] == 100
+    service._set_phase("operation", "indeterminate")
+    status = service.status("operation")
+    assert status["phase"] == "indeterminate"
+    assert status["phaseProgress"] is None
+    assert status["progress"] == 10
+
+    service.cancel("operation")
+    service._set_phase("operation", "faces", 20)
+    assert service.status("operation")["phase"] == "indeterminate"
+
+
 def test_step_asset_keeps_triangle_to_cad_face_mapping(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     class Mesh:

@@ -244,6 +244,8 @@ class StepImportService:
                             progress=int(message["value"]),
                             label=str(message["label"]),
                         )
+                    elif message["kind"] == "stage" and message["name"] in {"faces", "indeterminate"}:
+                        self._set_phase(operation_id, str(message["name"]), message.get("progress"))
                     elif message["kind"] == "error":
                         worker_error = str(message["message"])
                     elif message["kind"] == "metrics":
@@ -272,6 +274,12 @@ class StepImportService:
             operation = self._operations.get(operation_id)
             if operation is not None and operation["state"] == "running":
                 operation.update(progress=max(0, min(100, progress)), label=label)
+
+    def _set_phase(self, operation_id: str, phase: str, progress: object = None) -> None:
+        with self._lock:
+            operation = self._operations.get(operation_id)
+            if operation is not None and operation["state"] == "running":
+                operation.update(phase=phase, phaseProgress=progress if phase == "faces" else None)
 
     def _finish(self, operation_id: str, state: str, label: str, progress: int | None = None) -> None:
         with self._lock:

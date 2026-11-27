@@ -26,7 +26,13 @@ def main(path: str) -> int:
             _emit("progress", value=value, label=label)
 
         def diagnostics(stage: str, **details: object) -> None:
+            if stage == "face-conversion-progress":
+                processed, total = int(details["processed"]), int(details["total"])
+                _emit("stage", name="faces", progress=round(100 * processed / max(1, total)))
+                return
             trace.checkpoint(stage, **details)
+            if stage == "face-conversion-complete":
+                _emit("stage", name="indeterminate")
 
         model = load_step_model(path, progress, diagnostics=diagnostics)
         trace.checkpoint("tessellation-and-cache", **geometry_footprint(model.mesh, model.edges))

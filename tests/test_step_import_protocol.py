@@ -35,3 +35,11 @@ def test_protocol_preserves_worker_performance_metrics():
 
     assert messages == [{"kind": "metrics", "trace": {"points": [{"stage": "worker-start"}]}}]
     assert tail == ""
+
+
+def test_protocol_validates_face_stage_progress():
+    messages, tail = consume_messages("", encode_message("stage", name="faces", progress=42))
+    assert messages == [{"kind": "stage", "name": "faces", "progress": 42}]
+    assert tail == ""
+    messages, _ = consume_messages("", encode_message("stage", name="faces", progress="unknown"))
+    assert messages == []

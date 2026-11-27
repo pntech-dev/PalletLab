@@ -163,6 +163,9 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [contactMessage, setContactMessage] = useState<{ text: string; ok: boolean } | null>(null);
+  const [contactOpenError, setContactOpenError] = useState(false);
+  const contactErrorDialog = useRef<HTMLElement>(null);
+  const contactTrigger = useRef<HTMLElement | null>(null);
   const repository = (import.meta.env.VITE_PROJECT_REPOSITORY_URL ?? "").trim();
   const email = (import.meta.env.VITE_DEVELOPER_EMAIL ?? "").trim();
   async function copyContactText(value: string): Promise<boolean> {
@@ -190,14 +193,19 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
     }
   }
   async function contactAction(action: "repository" | "email", value: string) {
+    contactTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     try {
       const api = window.pywebview?.api;
       const result = await api?.open_contact(action, value);
-      setContactMessage(result?.ok
-        ? { ok: true, text: "Открывается приложение по умолчанию." }
-        : { ok: false, text: result?.error ?? "Не удалось выполнить действие." });
+      if (!result?.ok) {
+        setContactMessage(null);
+        setContactOpenError(true);
+      } else {
+        setContactMessage(null);
+      }
     } catch {
-      setContactMessage({ ok: false, text: "Не удалось выполнить действие." });
+      setContactMessage(null);
+      setContactOpenError(true);
     }
   }
   const save = async () => {
@@ -228,20 +236,28 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
   }, [active]);
 
   useEffect(() => {
+    if (!contactOpenError) return;
+    contactErrorDialog.current?.focus();
+    return () => { contactTrigger.current?.focus(); };
+  }, [contactOpenError]);
+
+  useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog.current?.focus();
     const handleKey = (event: KeyboardEvent) => {
+      const activeDialog = contactErrorDialog.current ?? dialog.current;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        onClose();
+        if (contactErrorDialog.current) setContactOpenError(false);
+        else onClose();
       }
-      if (event.key === "Tab" && dialog.current) {
-        const elements = Array.from(dialog.current.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex='0']"));
+      if (event.key === "Tab" && activeDialog) {
+        const elements = Array.from(activeDialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex='0']"));
         if (!elements.length) return;
         const first = elements[0];
         const last = elements[elements.length - 1];
-        if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) {
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === activeDialog)) {
           event.preventDefault(); last.focus();
         } else if (!event.shiftKey && document.activeElement === last) {
           event.preventDefault(); first.focus();
@@ -255,7 +271,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
   const section = SECTIONS.find((item) => item.id === active)!;
   return (
     <div className="modal-backdrop" role="presentation">
-      <section ref={dialog} tabIndex={-1} className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <section ref={dialog} tabIndex={-1} className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" inert={contactOpenError}>
         <header className="settings-header"><h2 id="settings-title">Настройки Pallet Lab</h2><Button variant="ghost" aria-label="Закрыть настройки" onClick={onClose} disabled={saving}><X size={16} aria-hidden="true" /></Button></header>
         <div className="settings-layout">
           <nav className="settings-nav" aria-label="Разделы настроек">
@@ -429,6 +445,18 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
           <Button onClick={() => void save()} disabled={saving || cadBusy}>Сохранить</Button>
         </footer>
       </section>
+      {contactOpenError ? (
+        <div className="modal-backdrop contact-error-backdrop" role="presentation">
+          <section ref={contactErrorDialog} tabIndex={-1} className="modal result-modal" role="alertdialog" aria-modal="true" aria-labelledby="contact-error-title" aria-describedby="contact-error-description">
+            <header className="result-header">
+              <h2 id="contact-error-title">Ошибка открытия</h2>
+              <Button variant="ghost" aria-label="Закрыть" onClick={() => setContactOpenError(false)}><X size={16} aria-hidden="true" /></Button>
+            </header>
+            <MessageBox id="contact-error-description" variant="error" title="Не удалось открыть приложение" text="Программе не удалось открыть приложение по умолчанию" />
+            <footer className="modal-actions"><Button onClick={() => setContactOpenError(false)}>Закрыть</Button></footer>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

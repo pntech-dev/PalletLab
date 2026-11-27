@@ -38,7 +38,7 @@ import { Scrollbar } from "./design/Scrollbar";
 import { ResetDialog } from "./design/ResetDialog";
 import { ProgressIndicator } from "./design/ProgressIndicator";
 import { MessageBox } from "./design/MessageBox";
-import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo, Redo, Plus, Trash2, SquareDimensions, RulerDimensionLine, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronRight, Info, X, ScanSquare, LayersPlus } from "lucide-react";
+import { FolderOpen, Save, SavePen, FolderInput, FolderOutput, Settings, Undo, Redo, Plus, Trash2, SquareDimensions, RulerDimensionLine, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronRight, Info, X, ScanSquare, LayersPlus } from "lucide-react";
 import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
 
@@ -206,6 +206,8 @@ type StepImportOperation = {
   operationId?: string;
   state?: "running" | "cancelling" | "completed" | "cancelled" | "failed";
   progress?: number;
+  phase?: "faces" | "indeterminate";
+  phaseProgress?: number | null;
   label?: string;
   error?: string;
   path?: string;
@@ -1407,14 +1409,27 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let preparationWorker: Worker | null = null;
     async function loadPreparedModel() {
       const api = window.pywebview?.api;
       if (!api || !stepImport?.operationId || stepImport.state !== "completed") return;
       try {
         const response = await api.step_model_snapshot(stepImport.operationId);
         if (response.ok && response.assetUrl) {
-          const { prepareStepModel } = await import("./stepModelGeometry");
-          const prepared = await prepareStepModel({ assetUrl: response.assetUrl } satisfies StepModelPayload);
+          const assetUrl = response.assetUrl;
+          if (cancelled) return;
+          preparationWorker = new Worker(new URL("./stepModelPreparation.worker.ts", import.meta.url), { type: "module" });
+          const prepared = await new Promise<StepModelSnapshot>((resolve, reject) => {
+            preparationWorker!.onmessage = (event: MessageEvent<{ model?: StepModelSnapshot; error?: string }>) => {
+              if (event.data.model) resolve(event.data.model);
+              else reject(new Error(event.data.error ?? "Не удалось подготовить STEP-модель для просмотра."));
+            };
+            preparationWorker!.onerror = () => reject(new Error("Не удалось подготовить STEP-модель для просмотра."));
+            preparationWorker!.onmessageerror = () => reject(new Error("Не удалось получить подготовленную STEP-модель."));
+            preparationWorker!.postMessage({ assetUrl } satisfies StepModelPayload);
+          });
+          preparationWorker.terminate();
+          preparationWorker = null;
           const remaining = remainingImportFeedback(stepImportStartedAt.current, performance.now());
           if (remaining > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
           if (cancelled) return;
@@ -1425,11 +1440,13 @@ export function App() {
           if (!cancelled) setStepRestoreError(response.error ?? "Не удалось подготовить STEP-модель для просмотра.");
         }
       } catch (error) {
+        preparationWorker?.terminate();
+        preparationWorker = null;
         if (!cancelled) setStepRestoreError(error instanceof Error ? error.message : "Не удалось подготовить STEP-модель для просмотра.");
       }
     }
     void loadPreparedModel();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; preparationWorker?.terminate(); };
   }, [stepImport?.operationId, stepImport?.state]);
 
   async function buildStepPallet(faceIndex = selectedStepFace) {
@@ -2552,13 +2569,13 @@ export function App() {
         <img className="app-brand" src={logo} alt="Pallet Lab" />
         <nav className="app-actions" aria-label="Действия с проектом">
           <Tooltip content="Открыть сохранённый проект поддона">
-            <Button variant="ghost" onClick={openProject} disabled={!status}><FolderOpen size={16} /> Открыть</Button>
+            <Button variant="ghost" onClick={openProject} disabled={!status}><FolderOpen className="header-icon header-icon--folder-open" size={16} aria-hidden="true" /> Открыть</Button>
           </Tooltip>
           <Tooltip content="Сохранить изменения в текущем проекте">
-            <Button variant="ghost" onClick={() => void saveProject()} disabled={!project || saving || !hasUnsavedChanges}><Save size={16} /> Сохранить</Button>
+            <Button variant="ghost" onClick={() => void saveProject()} disabled={!project || saving || !hasUnsavedChanges}><Save className="header-icon header-icon--save" size={16} aria-hidden="true" /> Сохранить</Button>
           </Tooltip>
           <Tooltip content="Сохранить проект в новый файл">
-            <Button variant="ghost" onClick={() => void saveProject(true)} disabled={!project || saving}><SaveAll size={16} /> Сохранить как</Button>
+            <Button variant="ghost" onClick={() => void saveProject(true)} disabled={!project || saving}><SavePen className="header-icon header-icon--save-pen" size={16} aria-hidden="true" /> Сохранить как</Button>
           </Tooltip>
           <span className="app-header-separator" aria-hidden="true" />
           <Tooltip content="Загрузить 3D-модель изделия в формате STEP для создания поддона">
@@ -2567,13 +2584,13 @@ export function App() {
               onClick={() => void importStepModel()}
               disabled={!status || stepImportPhase(stepImport?.state, stepModel !== null, stepRestoreError !== null) !== null}
             >
-              <FolderInput size={16} /> Импорт модели…
+              <FolderInput className="header-icon header-icon--folder-input" size={16} aria-hidden="true" /> Импорт модели…
             </Button>
           </Tooltip>
           <span className="app-header-separator" aria-hidden="true" />
           <Tooltip content="Настроить и выполнить экспорт поддона и чертежей">
             <Button variant="ghost" onClick={openExportSetup} disabled={!project || exporting !== null}>
-              <FolderOutput size={16} /> Экспорт…
+              <FolderOutput className="header-icon header-icon--folder-output" size={16} aria-hidden="true" /> Экспорт…
             </Button>
           </Tooltip>
         </nav>
@@ -2583,7 +2600,7 @@ export function App() {
           </Tooltip>
         ) : null}
         <Tooltip content="Открыть настройки программы, 3D-вида и шаблонов CAD" className="app-settings-button">
-          <Button variant="ghost" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}><Settings size={16} /> Настройки</Button>
+          <Button variant="ghost" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}><Settings className="header-icon header-icon--settings" size={16} aria-hidden="true" /> Настройки</Button>
         </Tooltip>
       </header>
       {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} solidworks={solidWorksOptions} initialSection={settingsInitialSection} update={update} lastUpdateCheck={lastUpdateCheck} onCheckUpdates={() => checkForUpdates(true)} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
@@ -3175,7 +3192,7 @@ export function App() {
             </header>
             <ProgressIndicator
               label={stepImport.state === "completed" ? "Подготавливаем модель..." : stepImport.label ?? "Подготавливаем STEP-модель…"}
-              value={stepImport.state === "completed" ? undefined : stepImport.progress}
+              value={stepImport.state === "running" && stepImport.phase === "faces" ? stepImport.phaseProgress ?? undefined : undefined}
             />
           </section>
         </div>

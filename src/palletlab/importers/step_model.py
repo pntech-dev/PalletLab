@@ -315,6 +315,10 @@ def load_step_model(filename: str | Path, progress=None, diagnostics=None) -> Im
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
     index = 0
     processed = 0
+    if progress:
+        progress(10, f"Преобразуем грани: 0/{face_count:,}")
+    if diagnostics:
+        diagnostics("face-conversion-progress", processed=0, total=face_count)
     while explorer.More():
         face = TopoDS.Face_s(explorer.Current())
         triangles = _face_triangles(face)
@@ -337,10 +341,15 @@ def load_step_model(filename: str | Path, progress=None, diagnostics=None) -> Im
         processed += 1
         if progress and (processed % max(1, face_count // 100) == 0 or processed == face_count):
             progress(10 + round(85 * processed / max(1, face_count)), f"Преобразуем грани: {processed:,}/{face_count:,}")
+            if diagnostics:
+                diagnostics("face-conversion-progress", processed=processed, total=face_count)
     if diagnostics:
+        diagnostics("face-conversion-complete")
         diagnostics("face-triangles-collected", faceCount=len(faces), triangleCount=sum(len(block) for block in face_index_blocks))
     if not faces:
         raise ValueError("В STEP-модели не найдено отображаемых граней.")
+    if progress:
+        progress(93, "Подготавливаем геометрию…")
     mesh = pv.PolyData(np.vstack(point_blocks), np.concatenate(cell_blocks).reshape(-1))
     mesh.cell_data["step_face_index"] = np.concatenate(face_index_blocks)
     mesh.compute_normals(cell_normals=False, point_normals=True, inplace=True)
@@ -362,7 +371,7 @@ def load_step_model(filename: str | Path, progress=None, diagnostics=None) -> Im
     if diagnostics:
         diagnostics("vtk-cache-written")
     if progress:
-        progress(100, "Модель готова.")
+        progress(100, "Подготавливаем модель…")
     return model
 
 

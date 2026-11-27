@@ -29,7 +29,7 @@ export function MessageBox({
   const body = text ?? children;
   return (
     <div className={["ui-message", `ui-message--${variant}`, className].filter(Boolean).join(" ")} {...props}>
-      <Icon size={24} aria-hidden="true" />
+      <Icon key={variant} size={24} aria-hidden="true" />
       <div>
         <strong>{title}</strong>
         {body ? <p>{body}</p> : null}
