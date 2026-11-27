@@ -146,9 +146,11 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 .viewport-fit-control { gap: var(--space-2); transform: translate3d(calc(-1 * var(--viewport-right-inset, 0px)), calc(-1 * var(--viewport-bottom-inset, 0px)), 0); will-change: transform; }
 .viewport-navigation-guide { max-width: calc(100% - var(--viewport-right-inset, 0px) - 245px); transform: translate3d(0, calc(-1 * var(--viewport-bottom-inset, 0px)), 0); will-change: transform; }
 .workspace.is-viewport-expanded .viewport-navigation-guide { max-width: calc(100% - 420px); }
-.viewport-navigation-help { gap: var(--space-2) 32px; color: var(--text-muted); font-size: var(--font-size-caption); line-height: var(--line-height-ui); }
-.viewport-navigation-tip { display: inline-flex; align-items: center; gap: var(--space-2); }
+.viewport-navigation-help { gap: var(--space-2) 32px; color: var(--color-stone-400); font-size: var(--font-size-caption); line-height: var(--line-height-ui); }
+.viewport-navigation-tip { display: inline-flex; align-items: center; gap: var(--space-2); transition: color 150ms ease; }
+.viewport-navigation-tip.is-active { color: var(--color-neutral-600); }
 .viewport-navigation-tip svg { flex: none; display: block; }
+@media (prefers-reduced-motion: reduce) { .viewport-navigation-tip { transition: none; } }
 .viewport-error-toast { left: calc((100% - var(--viewport-right-inset, 0px)) / 2); }
 .viewport-toolbar-end button:not(.ui-combobox-trigger), .viewport-fit-control button { display: inline-flex; align-items: center; justify-content: center; min-width: 36px; min-height: 36px; padding: var(--space-2); border: 0; border-radius: var(--radius-control); color: var(--text-muted); background: var(--surface-panel); box-shadow: none; }
 .viewport-fit-control .scene-settings-toggle { display: inline-flex; align-items: center; justify-content: center; width: auto; min-width: 36px; min-height: 36px; padding: var(--space-2); }
@@ -171,6 +173,49 @@ button.viewport-toolbar-btn:disabled { color: var(--color-slate-300); background
 .toolbar-label { display: inline-block; white-space: nowrap; }
 .viewport-toolbar-toggle { width: 36px; }
 .viewport-toolbar-chevron { will-change: transform; }
+/* Viewport actions: Lucide Animated motions and matching project-specific motions. */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .viewport button:not(:disabled):hover .lucide-undo path:first-of-type { transform-box: view-box; transform-origin: center; animation: viewport-undo 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-redo path:first-of-type { transform-box: view-box; transform-origin: center; animation: viewport-redo 600ms ease-in-out; }
+  .viewport-toolbar-bar button:not(:disabled):hover .lucide-plus { animation: viewport-plus 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-layers-plus path:first-of-type { animation: viewport-layer 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-layers-plus path:nth-of-type(2),
+  .viewport button:not(:disabled):hover .lucide-layers-plus path:nth-of-type(3) { transform-box: fill-box; transform-origin: center; animation: viewport-icon-pop 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover :is(.lucide-trash, .lucide-trash-2) path:nth-of-type(n+4) { animation: viewport-trash-lid 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-square-dimensions path:first-of-type { animation: viewport-top-left 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-square-dimensions path:last-of-type { animation: viewport-bottom-right 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-ruler-dimension-line :is(path, rect) { animation: viewport-ruler 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .viewport-toolbar-chevron path { animation: viewport-chevron-right 500ms ease-in-out; }
+  .viewport button.ui-combobox-trigger:not(:disabled):hover .ui-combobox-arrow path { animation: settings-chevron 500ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-maximize-2 path:nth-of-type(-n+2),
+  .viewport button:not(:disabled):hover .lucide-minimize-2 path:nth-of-type(n+3) { animation: viewport-top-right 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-maximize-2 path:nth-of-type(n+3),
+  .viewport button:not(:disabled):hover .lucide-minimize-2 path:nth-of-type(-n+2) { animation: viewport-bottom-left 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-settings-2 circle:first-of-type { animation: viewport-setting-right 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-settings-2 circle:last-of-type { animation: viewport-setting-left 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-scan-square path:nth-of-type(1) { animation: viewport-top-left 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-scan-square path:nth-of-type(2) { animation: viewport-top-right 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-scan-square path:nth-of-type(3) { animation: viewport-bottom-right 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-scan-square path:nth-of-type(4) { animation: viewport-bottom-left 600ms ease-in-out; }
+  .viewport-zoom-control button:not(:disabled):hover .lucide-plus { animation: viewport-zoom-in 500ms ease-in-out; }
+  .viewport-zoom-control button:not(:disabled):hover .lucide-minus { animation: viewport-zoom-out 500ms ease-in-out; }
+}
+@keyframes viewport-undo { 0%, 100% { transform: translate(0, 0) rotate(0); } 45% { transform: translate(1.4px, -.9px) rotate(12deg); } }
+@keyframes viewport-redo { 0%, 100% { transform: translate(0, 0) rotate(0); } 45% { transform: translate(-1.4px, -.9px) rotate(-12deg); } }
+@keyframes viewport-plus { from { transform: rotate(0); } to { transform: rotate(180deg); } }
+@keyframes viewport-layer { 0%, 100% { transform: translateY(0); } 45% { transform: translateY(-1.5px); } }
+@keyframes viewport-icon-pop { 0%, 100% { transform: scale(1); } 45% { transform: scale(1.3); } }
+@keyframes viewport-trash-lid { 0%, 100% { transform: translateY(0); } 45% { transform: translateY(-1.5px); } }
+@keyframes viewport-top-left { 0%, 100% { transform: translate(0, 0); } 45% { transform: translate(-1px, -1px); } }
+@keyframes viewport-top-right { 0%, 100% { transform: translate(0, 0); } 45% { transform: translate(1px, -1px); } }
+@keyframes viewport-bottom-left { 0%, 100% { transform: translate(0, 0); } 45% { transform: translate(-1px, 1px); } }
+@keyframes viewport-bottom-right { 0%, 100% { transform: translate(0, 0); } 45% { transform: translate(1px, 1px); } }
+@keyframes viewport-ruler { 0%, 100% { transform: translateX(0); } 35% { transform: translateX(-1px); } 65% { transform: translateX(1px); } }
+@keyframes viewport-chevron-right { 0%, 100% { transform: translateX(0); } 40% { transform: translateX(1.333px); } }
+@keyframes viewport-setting-right { 0%, 100% { transform: translateX(0); } 45% { transform: translateX(-2px); } }
+@keyframes viewport-setting-left { 0%, 100% { transform: translateX(0); } 45% { transform: translateX(2px); } }
+@keyframes viewport-zoom-in { 0%, 100% { transform: scale(1); } 45% { transform: scale(1.2); } }
+@keyframes viewport-zoom-out { 0%, 100% { transform: scale(1); } 45% { transform: scale(.8); } }
 .viewport-toolbar-summary { display: flex; align-items: center; justify-content: center; gap: var(--space-2); color: var(--text-muted); font-size: var(--font-size-caption); line-height: var(--line-height-ui); }
 button.ui-combobox-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 36px; min-height: 36px; margin: 0; padding: var(--space-2); border: 0; border-radius: var(--radius-control); font-size: var(--font-size-body); font-weight: 500; line-height: var(--line-height-ui); text-align: left; }
 .ui-combobox-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -467,6 +512,22 @@ button.ui-copy-button:active:not(:disabled) { transform: scale(0.92); }
 .layer-toolbar button, button.layer-visibility, button.layer-expand, button.layer-lock-indicator { display: grid; place-items: center; flex: none; width: 36px; height: 36px; min-height: 36px; margin: 0; padding: var(--space-2); border: 0; border-radius: var(--radius-control); color: var(--text-muted); background: transparent; }
 .layer-toolbar button:disabled { color: var(--color-slate-300); background: transparent; }
 .layer-add-button { min-height: 42px; gap: var(--space-4); }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .editor-panel button:not(:disabled):hover .lucide-plus { animation: viewport-plus 600ms ease-in-out; }
+  .editor-panel .layer-toolbar .lucide-copy :is(rect, path) { transition: transform 400ms cubic-bezier(.22, 1.25, .36, 1); }
+  .editor-panel .layer-toolbar button:not(:disabled):hover .lucide-copy rect { transform: translate(-2px, -2px); }
+  .editor-panel .layer-toolbar button:not(:disabled):hover .lucide-copy path { transform: translate(2px, 2px); }
+  .editor-panel button:not(:disabled):hover :is(.lucide-lock-keyhole, .lucide-lock-keyhole-open) { animation: editor-lock 700ms ease-in-out; }
+  .editor-panel button:not(:disabled):hover :is(.lucide-trash, .lucide-trash-2) path:nth-of-type(n+4) { animation: viewport-trash-lid 600ms ease-in-out; }
+  .editor-panel button:not(:disabled):hover .lucide-eye { animation: editor-eye-blink 400ms ease-in-out; }
+  .editor-panel button:not(:disabled):hover .lucide-eye-off path:last-of-type { animation: editor-eye-slash 600ms ease-in-out; }
+  .editor-panel button:not(:disabled):hover .lucide-chevron-down path { animation: settings-chevron 500ms ease-in-out; }
+  .editor-panel .layer-drag-handle:hover .lucide-grip-vertical circle { transform-box: fill-box; transform-origin: center; animation: editor-grip 600ms ease-in-out; }
+}
+@keyframes editor-lock { 0%, 100% { transform: rotate(0) scale(1); } 30% { transform: rotate(-3deg) scale(.95); } 60% { transform: rotate(2deg) scale(1.05); } }
+@keyframes editor-eye-blink { 0%, 100% { transform: scaleY(1); opacity: 1; } 50% { transform: scaleY(.15); opacity: .4; } }
+@keyframes editor-eye-slash { 0%, 100% { opacity: 1; } 40% { opacity: .3; } }
+@keyframes editor-grip { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .4; transform: scale(.85); } }
 .layer-add-button:hover:not(:disabled) { border-color: var(--text-primary) !important; color: var(--text-primary) !important; }
 .layer-card { padding: var(--space-2); border: 0; border-radius: var(--radius-control); background: var(--color-neutral-50); }
 .layer-card:not(.is-selected):not(.is-expanded):not(.is-hidden):not(.is-locked):hover { background: var(--surface-muted); }

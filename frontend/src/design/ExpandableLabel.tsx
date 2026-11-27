@@ -1,9 +1,9 @@
 import { useLayoutEffect, useRef } from "react";
 
-const EXPAND_DURATION_MS = 380;
-const COLLAPSE_DURATION_MS = 320;
-const BOUNCY_SPRING = sampleSpring(430, 19, EXPAND_DURATION_MS, 28);
-const COLLAPSE_SPRING = sampleSpring(460, 28, COLLAPSE_DURATION_MS, 24);
+export const TOOLBAR_EXPAND_DURATION_MS = 520;
+export const TOOLBAR_COLLAPSE_DURATION_MS = 420;
+export const TOOLBAR_EXPAND_SPRING = sampleSpring(240, 20, TOOLBAR_EXPAND_DURATION_MS, 40);
+export const TOOLBAR_COLLAPSE_SPRING = sampleSpring(300, 26, TOOLBAR_COLLAPSE_DURATION_MS, 36);
 
 export function sampleSpring(stiffness: number, damping: number, durationMs: number, steps = 28): number[] {
   const dt = durationMs / 1000 / steps;
@@ -59,10 +59,9 @@ export function ExpandableLabel({ text, expanded, animate = true }: { text: stri
 
     prevExpandedRef.current = expanded;
     const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    animRef.current?.cancel();
-    animRef.current = null;
-
     if (reducedMotion) {
+      animRef.current?.cancel();
+      animRef.current = null;
       applyRestStyles(expanded);
       return;
     }
@@ -72,12 +71,14 @@ export function ExpandableLabel({ text, expanded, animate = true }: { text: stri
     const fromMargin = parseFloat(computed.marginLeft) || 0;
     const fromOpacity = Number(computed.opacity);
     const startOpacity = Number.isFinite(fromOpacity) ? fromOpacity : (expanded ? 0 : 1);
+    animRef.current?.cancel();
+    animRef.current = null;
 
     const targetWidth = expanded ? Math.ceil(inner.scrollWidth) : 0;
     const targetMargin = expanded ? 8 : 0;
     const targetOpacity = expanded ? 1 : 0;
-    const curve = expanded ? BOUNCY_SPRING : COLLAPSE_SPRING;
-    const duration = expanded ? EXPAND_DURATION_MS : COLLAPSE_DURATION_MS;
+    const curve = expanded ? TOOLBAR_EXPAND_SPRING : TOOLBAR_COLLAPSE_SPRING;
+    const duration = expanded ? TOOLBAR_EXPAND_DURATION_MS : TOOLBAR_COLLAPSE_DURATION_MS;
 
     const keyframes: Keyframe[] = curve.map((p) => {
       const width = Math.max(0, fromWidth + (targetWidth - fromWidth) * p);

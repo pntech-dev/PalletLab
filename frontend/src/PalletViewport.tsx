@@ -586,6 +586,7 @@ export default function PalletViewport({
   beamSelectionEnabled: boolean;
 }) {
   const viewportElement = useRef<HTMLDivElement>(null);
+  const [navigationButtons, setNavigationButtons] = useState(0);
   const hintElement = useRef<HTMLDivElement>(null);
   const hintCardElement = useRef<HTMLDivElement>(null);
   const cursor = useRef<[number, number] | null>(null);
@@ -595,6 +596,26 @@ export default function PalletViewport({
   const visibleInsetsRef = useRef({ right: visibleRightInset, bottom: visibleBottomInset });
   visibleInsetsRef.current = { right: visibleRightInset, bottom: visibleBottomInset };
   const hasHint = Boolean(toolHint);
+
+  useEffect(() => {
+    const buttonMask = (button: number) => button === 0 ? 1 : button === 1 ? 4 : button === 2 ? 2 : 0;
+    const press = (event: MouseEvent) => {
+      if (!(event.target instanceof HTMLCanvasElement) || !viewportElement.current?.contains(event.target)) return;
+      setNavigationButtons((buttons) => buttons | buttonMask(event.button));
+    };
+    const release = (event: MouseEvent) => setNavigationButtons((buttons) => buttons & ~buttonMask(event.button));
+    const reset = () => setNavigationButtons(0);
+    document.addEventListener("mousedown", press);
+    document.addEventListener("mouseup", release);
+    document.addEventListener("pointercancel", reset);
+    window.addEventListener("blur", reset);
+    return () => {
+      document.removeEventListener("mousedown", press);
+      document.removeEventListener("mouseup", release);
+      document.removeEventListener("pointercancel", reset);
+      window.removeEventListener("blur", reset);
+    };
+  }, []);
 
   const updateViewportPointer = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
@@ -1345,9 +1366,9 @@ export default function PalletViewport({
           ))}
         </svg>
         <div className="viewport-navigation-help">
-          <div className="viewport-navigation-tip"><MouseLeft size={16} aria-hidden="true" /><span>ЛКМ (зажать) – вращать</span></div>
-          <div className="viewport-navigation-tip"><Mouse size={16} aria-hidden="true" /><span>Колёсико мыши (зажать) – изменить масштаб</span></div>
-          <div className="viewport-navigation-tip"><MouseRight size={16} aria-hidden="true" /><span>ПКМ (зажать) – двигать</span></div>
+          <div className={`viewport-navigation-tip${navigationButtons & 1 ? " is-active" : ""}`}><MouseLeft size={16} aria-hidden="true" /><span>ЛКМ (зажать) – вращать</span></div>
+          <div className={`viewport-navigation-tip${navigationButtons & 4 ? " is-active" : ""}`}><Mouse size={16} aria-hidden="true" /><span>Колёсико мыши (зажать) – изменить масштаб</span></div>
+          <div className={`viewport-navigation-tip${navigationButtons & 2 ? " is-active" : ""}`}><MouseRight size={16} aria-hidden="true" /><span>ПКМ (зажать) – двигать</span></div>
         </div>
       </div>
       {toolbar ? <div className="viewport-floating-toolbar">{toolbar}</div> : null}

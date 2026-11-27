@@ -30,7 +30,7 @@ import { Button } from "./design/Button";
 import { Checkbox } from "./design/Checkbox";
 import { Combobox } from "./design/Combobox";
 import { SegmentedControl } from "./design/SegmentedControl";
-import { ExpandableLabel, sampleSpring } from "./design/ExpandableLabel";
+import { ExpandableLabel, TOOLBAR_COLLAPSE_DURATION_MS, TOOLBAR_COLLAPSE_SPRING, TOOLBAR_EXPAND_DURATION_MS, TOOLBAR_EXPAND_SPRING } from "./design/ExpandableLabel";
 import { Tooltip, TooltipProvider } from "./design/Tooltip";
 import { Hud, HudHint } from "./design/Hud";
 import { detailCount, PalletSummary } from "./design/PalletSummary";
@@ -421,6 +421,7 @@ export function App() {
   const [toolbarManualExpanded, setToolbarManualExpanded] = useState<boolean | null>(null);
   const toolbarExpanded = toolbarManualExpanded ?? viewportExpanded;
   const toolbarChevronRef = useRef<SVGSVGElement | null>(null);
+  const toolbarChevronAnimation = useRef<Animation | null>(null);
   const prevToolbarExpandedRef = useRef<boolean | null>(null);
   useLayoutEffect(() => {
     const chevron = toolbarChevronRef.current;
@@ -433,17 +434,26 @@ export function App() {
     if (prevToolbarExpandedRef.current === toolbarExpanded) return;
     prevToolbarExpandedRef.current = toolbarExpanded;
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      toolbarChevronAnimation.current?.cancel();
+      toolbarChevronAnimation.current = null;
       chevron.style.transform = `rotate(${toolbarExpanded ? 180 : 0}deg)`;
       return;
     }
-    const fromDeg = toolbarExpanded ? 0 : 180;
+    const matrix = new DOMMatrixReadOnly(window.getComputedStyle(chevron).transform);
+    let fromDeg = Math.atan2(matrix.b, matrix.a) * 180 / Math.PI;
+    if (fromDeg < -90) fromDeg += 360;
+    toolbarChevronAnimation.current?.cancel();
     const toDeg = toolbarExpanded ? 180 : 0;
-    const spring = sampleSpring(430, 19, 380, 28);
+    const spring = toolbarExpanded ? TOOLBAR_EXPAND_SPRING : TOOLBAR_COLLAPSE_SPRING;
+    const duration = toolbarExpanded ? TOOLBAR_EXPAND_DURATION_MS : TOOLBAR_COLLAPSE_DURATION_MS;
     const anim = chevron.animate(
       spring.map((p) => ({ transform: `rotate(${(fromDeg + (toDeg - fromDeg) * p).toFixed(2)}deg)` })),
-      { duration: 380, easing: "linear", fill: "forwards" },
+      { duration, easing: "linear", fill: "forwards" },
     );
+    toolbarChevronAnimation.current = anim;
     anim.onfinish = () => {
+      if (toolbarChevronAnimation.current !== anim) return;
+      toolbarChevronAnimation.current = null;
       anim.cancel();
       chevron.style.transform = `rotate(${toDeg}deg)`;
     };
