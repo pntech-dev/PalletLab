@@ -1,5 +1,4 @@
 import type { InputHTMLAttributes, ReactNode } from "react";
-import { Check } from "lucide-react";
 
 type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
   label?: ReactNode;
@@ -10,7 +9,11 @@ export function Checkbox({ label, className = "", ...props }: Props) {
   const control = (
     <span className={["ui-checkbox", label === undefined ? className : ""].filter(Boolean).join(" ")}>
       <input {...props} type="checkbox" />
-      <span className="ui-checkbox-box" aria-hidden="true"><Check size={16} /></span>
+      <span className="ui-checkbox-box" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 12 9 17 20 6" />
+        </svg>
+      </span>
     </span>
   );
   if (label === undefined) return control;

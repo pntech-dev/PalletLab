@@ -1,23 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { Settings, Box, Info, Axis3D, X, Copy, Check, WandSparkles } from "lucide-react";
+import { Settings, Box, Info, Angle, X, Copy, Check, WandSparkles } from "lucide-react";
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Button } from "./design/Button";
 import { CopyButton, CopyButtonIcon } from "./design/CopyButton";
 import { Checkbox } from "./design/Checkbox";
 import { Combobox } from "./design/Combobox";
 import { MessageBox } from "./design/MessageBox";
+import { Scrollbar } from "./design/Scrollbar";
+import { Tooltip } from "./design/Tooltip";
 import type { AppSettings } from "./appSettings";
 import type { SolidWorksOptions, UpdateStatus } from "./App";
 
 type Section = "general" | "view" | "cad" | "about";
 
 const SECTIONS: { id: Section; title: string; description: string }[] = [
-  { id: "general", title: "Общее", description: "Параметры по умолчанию для новых проектов." },
+  { id: "general", title: "Общие", description: "Параметры по умолчанию для новых проектов." },
   { id: "view", title: "Вид и управление", description: "Отображение поддона в области 3D-просмотра" },
   { id: "cad", title: "CAD и чертежи", description: "Шаблоны файлов для экспорта поддона и его деталей" },
   { id: "about", title: "О программе", description: "Pallet Lab — приложение для проектирования поддонов" },
 ];
-const SECTION_ICONS = { general: Settings, view: Axis3D, cad: Box, about: Info };
+const SECTION_ICONS = { general: Settings, view: Angle, cad: Box, about: Info };
 
 export function SettingsDialog({ version, settings, solidworks, initialSection = "general", update, lastUpdateCheck, onCheckUpdates, onSave, onClose }: {
   version?: string; settings: AppSettings; solidworks: SolidWorksOptions | null; initialSection?: Section;
@@ -28,7 +30,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
   const [checking, setChecking] = useState(false);
   const parsedCheck = lastUpdateCheck ? new Date(lastUpdateCheck) : null;
   const checkLabel = parsedCheck && !Number.isNaN(parsedCheck.getTime())
-    ? `Последняя проверка ${parsedCheck.toLocaleDateString("ru-RU")} в ${parsedCheck.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`
+    ? `Последняя проверка: ${parsedCheck.toLocaleDateString("ru-RU")} в ${parsedCheck.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`
     : "Проверка ещё не выполнялась";
   async function checkUpdates() {
     setChecking(true);
@@ -219,6 +221,11 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
   };
   const [active, setActive] = useState<Section>(initialSection);
   const dialog = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    contentRef.current?.scrollTo({ top: 0 });
+  }, [active]);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -249,13 +256,20 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
   return (
     <div className="modal-backdrop" role="presentation">
       <section ref={dialog} tabIndex={-1} className="modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <header className="settings-header"><h2 id="settings-title">Настройки Pallet Lab</h2><Button variant="ghost" aria-label="Закрыть настройки" onClick={onClose} disabled={saving}><X size={16} /></Button></header>
+        <header className="settings-header"><h2 id="settings-title">Настройки Pallet Lab</h2><Button variant="ghost" aria-label="Закрыть настройки" onClick={onClose} disabled={saving}><X size={16} aria-hidden="true" /></Button></header>
         <div className="settings-layout">
           <nav className="settings-nav" aria-label="Разделы настроек">
-            {SECTIONS.map((item) => { const Icon = SECTION_ICONS[item.id]; return <Button variant="ghost" key={item.id} aria-current={active === item.id ? "page" : undefined}
-              onClick={() => setActive(item.id)}><Icon size={16} />{item.title}</Button>; })}
+            {SECTIONS.map((item) => {
+              const Icon = SECTION_ICONS[item.id];
+              return (
+                <Button key={item.id} variant="ghost" aria-current={active === item.id ? "page" : undefined} onClick={() => setActive(item.id)}>
+                  <Icon size={16} aria-hidden="true" />{item.title}
+                </Button>
+              );
+            })}
           </nav>
-          <div className="settings-content settings-content--standard">
+          <div className="settings-scroll-frame">
+          <div ref={contentRef} className="settings-content settings-content--standard">
             <h3>{section.title}</h3>
             <p className="settings-description">{section.description}</p>
 
@@ -273,7 +287,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
               </section>
               <section className="settings-group"><h4>Экспорт</h4>
                 <label className="file-field">Папка экспорта по умолчанию
-                  <div className="file-field-control"><input value={draft.exportDirectory} onChange={(event) => setDraft({ ...draft, exportDirectory: event.target.value })} /><Button variant="secondary" disabled={saving} onClick={() => void (async () => {
+                  <div className="file-field-control"><input value={draft.exportDirectory} placeholder="Путь к папке экспорта" onChange={(event) => setDraft({ ...draft, exportDirectory: event.target.value })} /><Tooltip content="Выбрать папку экспорта по умолчанию"><Button variant="secondary" disabled={saving} onClick={() => void (async () => {
                     try {
                       const result = await window.pywebview?.api?.choose_export_directory();
                       if (result?.cancelled) return;
@@ -281,7 +295,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                       setDraft((current) => ({ ...current, exportDirectory: result.path! }));
                       setError(null);
                     } catch { setError("Не удалось выбрать папку экспорта."); }
-                  })()}>Обзор</Button></div>
+                  })()}>Обзор</Button></Tooltip></div>
                 </label>
               </section>
             </div>}
@@ -302,26 +316,30 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
               <section className="settings-cad-search" aria-label="Автопоиск шаблонов">
                 {searchMessage && Object.values(missingFiles).some(Boolean) ? (
                   <MessageBox variant="warning" role="status" title="Не все файлы найдены" text={searchMessage} />
-                ) : searchMessage ? <p className="settings-cad-search-status" role="status">{searchMessage}</p> : null}
-                <Button disabled={cadBusy || saving} onClick={() => void searchCadFiles()}><WandSparkles size={16} aria-hidden="true" />{searching ? "Поиск…" : "Заполнить автоматически"}</Button>
+                ) : searchMessage ? (
+                  <MessageBox variant="info" role="status" title="Файлы найдены" text={searchMessage.replace(/^Файлы найдены\.\s*/, "")} />
+                ) : null}
+                <Tooltip content="Автоматически найти шаблоны и библиотеку материалов SolidWorks" className="ui-tooltip-trigger--full">
+                  <Button disabled={cadBusy || saving} onClick={() => void searchCadFiles()}><WandSparkles size={16} aria-hidden="true" />{searching ? "Поиск…" : "Заполнить автоматически"}</Button>
+                </Tooltip>
               </section>
               <section className="settings-group settings-cad-group"><h4>SolidWorks</h4>
                 <p>Выберите шаблоны детали, сборки и чертежа, библиотеку материалов и материал для экспорта.</p>
                 {initialSection === "cad" && (!solidworks || [solidworks.partTemplate, solidworks.assemblyTemplate, solidworks.drawingTemplate, solidworks.materialLibrary, solidworks.materialName].some((value) => !value.trim())) ? <p>Для экспорта в SolidWorks сначала заполните и сохраните эти настройки.</p> : null}
                 <label className="file-field">Шаблон детали (.prtdot)
-                  <div className="file-field-control"><input value={cadDraft.partTemplate} placeholder="Не выбран" disabled={searching} aria-invalid={missingFiles.partTemplate} aria-describedby={missingFiles.partTemplate ? "part-template-error" : undefined} onChange={(event) => { setMissingFiles((current) => ({ ...current, partTemplate: false })); setCadDraft((current) => ({ ...current, partTemplate: event.target.value })); }} /><button type="button" className="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("part")}>Обзор</button></div>
+                  <div className="file-field-control"><input value={cadDraft.partTemplate} placeholder="Не выбран" disabled={searching} aria-invalid={missingFiles.partTemplate} aria-describedby={missingFiles.partTemplate ? "part-template-error" : undefined} onChange={(event) => { setMissingFiles((current) => ({ ...current, partTemplate: false })); setCadDraft((current) => ({ ...current, partTemplate: event.target.value })); }} /><Tooltip content="Выбрать файл шаблона детали SolidWorks (.prtdot)"><Button variant="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("part")}>Обзор</Button></Tooltip></div>
                   {missingFiles.partTemplate ? <span id="part-template-error" className="field-error">Шаблон детали не найден.</span> : null}
                 </label>
                 <label className="file-field">Шаблон сборки (.asmdot)
-                  <div className="file-field-control"><input value={cadDraft.assemblyTemplate} placeholder="Не выбран" disabled={searching} aria-invalid={missingFiles.assemblyTemplate} aria-describedby={missingFiles.assemblyTemplate ? "assembly-template-error" : undefined} onChange={(event) => { setMissingFiles((current) => ({ ...current, assemblyTemplate: false })); setCadDraft((current) => ({ ...current, assemblyTemplate: event.target.value })); }} /><button type="button" className="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("assembly")}>Обзор</button></div>
+                  <div className="file-field-control"><input value={cadDraft.assemblyTemplate} placeholder="Не выбран" disabled={searching} aria-invalid={missingFiles.assemblyTemplate} aria-describedby={missingFiles.assemblyTemplate ? "assembly-template-error" : undefined} onChange={(event) => { setMissingFiles((current) => ({ ...current, assemblyTemplate: false })); setCadDraft((current) => ({ ...current, assemblyTemplate: event.target.value })); }} /><Tooltip content="Выбрать файл шаблона сборки SolidWorks (.asmdot)"><Button variant="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("assembly")}>Обзор</Button></Tooltip></div>
                   {missingFiles.assemblyTemplate ? <span id="assembly-template-error" className="field-error">Шаблон сборки не найден.</span> : null}
                 </label>
                 <label className="file-field">Шаблон чертежа (.drwdot)
-                  <div className="file-field-control"><input value={cadDraft.drawingTemplate} placeholder="Не выбран" disabled={searching} aria-invalid={missingFiles.drawingTemplate} aria-describedby={missingFiles.drawingTemplate ? "drawing-template-error" : undefined} onChange={(event) => { setMissingFiles((current) => ({ ...current, drawingTemplate: false })); setCadDraft((current) => ({ ...current, drawingTemplate: event.target.value })); }} /><button type="button" className="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("drawing")}>Обзор</button></div>
+                  <div className="file-field-control"><input value={cadDraft.drawingTemplate} placeholder="Не выбран" disabled={searching} aria-invalid={missingFiles.drawingTemplate} aria-describedby={missingFiles.drawingTemplate ? "drawing-template-error" : undefined} onChange={(event) => { setMissingFiles((current) => ({ ...current, drawingTemplate: false })); setCadDraft((current) => ({ ...current, drawingTemplate: event.target.value })); }} /><Tooltip content="Выбрать файл шаблона чертежа SolidWorks (.drwdot)"><Button variant="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("drawing")}>Обзор</Button></Tooltip></div>
                   {missingFiles.drawingTemplate ? <span id="drawing-template-error" className="field-error">Шаблон чертежа не найден.</span> : null}
                 </label>
                 <label className="file-field">Библиотека материалов (.sldmat)
-                  <div className="file-field-control"><input value={cadDraft.materialLibrary} placeholder="Не выбрана" disabled={searching} aria-invalid={missingFiles.materialLibrary} aria-describedby={missingFiles.materialLibrary ? "material-library-error" : undefined} onChange={(event) => changeLibraryPath(event.target.value)} onBlur={(event) => { if (!(event.relatedTarget instanceof HTMLElement && event.relatedTarget.dataset.libraryBrowse)) void loadTypedLibrary(event.target.value); }} /><button type="button" className="secondary" disabled={cadBusy || saving} data-library-browse="true" onClick={() => void selectLibrary()}>Обзор</button></div>
+                  <div className="file-field-control"><input value={cadDraft.materialLibrary} placeholder="Не выбрана" disabled={searching} aria-invalid={missingFiles.materialLibrary} aria-describedby={missingFiles.materialLibrary ? "material-library-error" : undefined} onChange={(event) => changeLibraryPath(event.target.value)} onBlur={(event) => { if (!(event.relatedTarget instanceof HTMLElement && event.relatedTarget.dataset.libraryBrowse)) void loadTypedLibrary(event.target.value); }} /><Tooltip content="Выбрать библиотеку материалов SolidWorks (.sldmat)"><Button variant="secondary" disabled={cadBusy || saving} data-library-browse="true" onClick={() => void selectLibrary()}>Обзор</Button></Tooltip></div>
                   {missingFiles.materialLibrary ? <span id="material-library-error" className="field-error">Библиотека материалов не найдена.</span> : null}
                 </label>
                 <p className="modal-hint">Стандартный путь: <code>C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\lang\russian\sldmaterials\solidworks materials.sldmat</code></p>
@@ -345,39 +363,49 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
             {active === "about" && <div className="settings-standard-groups settings-about-groups">
               <section className="settings-group"><h4>Версия ПО</h4><p>{version ? `Версия: ${version}` : "Версия недоступна"}</p></section>
               <section className="settings-group"><h4>Ссылки и связь с разработчиком</h4>
+                <div className="settings-contacts">
                 <div className="settings-contact"><div className="settings-contact-field"><label>Репозиторий<input readOnly value={repository} placeholder="Не указан" /></label>
-                  <CopyButton
-                    variant="ghost"
-                    content={repository}
-                    disabled={!repository}
-                    onCopy={copyContactText}
-                    aria-label="Скопировать ссылку на репозиторий"
-                  >
-                    <CopyButtonIcon
-                      icon={<Copy size={16} aria-hidden="true" />}
-                      copiedIcon={<Check size={16} aria-hidden="true" />}
-                    />
-                  </CopyButton></div>
-                  <Button variant="secondary" disabled={!repository} onClick={() => void contactAction("repository", repository)}>Открыть репозиторий</Button></div>
+                  <Tooltip content="Скопировать ссылку на репозиторий">
+                    <CopyButton
+                      variant="ghost"
+                      content={repository}
+                      disabled={!repository}
+                      onCopy={copyContactText}
+                      aria-label="Скопировать ссылку на репозиторий"
+                    >
+                      <CopyButtonIcon
+                        icon={<Copy size={16} aria-hidden="true" />}
+                        copiedIcon={<Check size={16} aria-hidden="true" />}
+                      />
+                    </CopyButton>
+                  </Tooltip></div>
+                  <Tooltip content="Открыть страницу проекта в браузере" className="ui-tooltip-trigger--full">
+                    <Button variant="secondary" disabled={!repository} onClick={() => void contactAction("repository", repository)}>Открыть репозиторий</Button>
+                  </Tooltip></div>
                 <div className="settings-contact"><div className="settings-contact-field"><label>Почта для связи<input readOnly value={email} placeholder="Не указана" /></label>
-                  <CopyButton
-                    variant="ghost"
-                    content={email}
-                    disabled={!email}
-                    onCopy={copyContactText}
-                    aria-label="Скопировать адрес разработчика"
-                  >
-                    <CopyButtonIcon
-                      icon={<Copy size={16} aria-hidden="true" />}
-                      copiedIcon={<Check size={16} aria-hidden="true" />}
-                    />
-                  </CopyButton></div>
-                  <Button variant="secondary" disabled={!email} onClick={() => void contactAction("email", email)}>Написать разработчику</Button></div>
+                  <Tooltip content="Скопировать адрес электронной почты">
+                    <CopyButton
+                      variant="ghost"
+                      content={email}
+                      disabled={!email}
+                      onCopy={copyContactText}
+                      aria-label="Скопировать адрес разработчика"
+                    >
+                      <CopyButtonIcon
+                        icon={<Copy size={16} aria-hidden="true" />}
+                        copiedIcon={<Check size={16} aria-hidden="true" />}
+                      />
+                    </CopyButton>
+                  </Tooltip></div>
+                  <Tooltip content="Написать разработчику по электронной почте" className="ui-tooltip-trigger--full">
+                    <Button variant="secondary" disabled={!email} onClick={() => void contactAction("email", email)}>Написать разработчику</Button>
+                  </Tooltip></div>
+                </div>
                 {contactMessage ? <p className={contactMessage.ok ? "success-message" : "error"} role="status">{contactMessage.text}</p> : null}
               </section>
               <section className="settings-group"><h4>Обновления Pallet Lab</h4>
                 <label className="settings-check"><Checkbox checked={draft.checkUpdates} onChange={(event) => setDraft({ ...draft, checkUpdates: event.target.checked })} /> Проверять обновления при каждом запуске программы</label>
-                <div className="settings-update"><span>{checkLabel}</span><Button variant="secondary" onClick={() => void checkUpdates()} disabled={checking || ["checking", "downloading", "ready", "installing"].includes(update.state)}>Проверить обновления</Button></div>
+                <div className="settings-update"><span>{checkLabel}</span><Tooltip content="Проверить наличие новой версии Pallet Lab"><Button variant="secondary" onClick={() => void checkUpdates()} disabled={checking || ["checking", "downloading", "ready", "installing"].includes(update.state)}>Проверить обновления</Button></Tooltip></div>
                 <p role="status">{update.state === "checking" ? "Проверка обновлений…"
                   : update.state === "current" ? "Установлена последняя версия."
                   : update.state === "check_failed" ? "Не удалось проверить обновления. Проверьте подключение и повторите попытку."
@@ -392,10 +420,12 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
             </div>}
             <p className="settings-default-hint"><Info size={16} aria-hidden="true" />Все изменённые параметры «по умолчанию» будут применяться к новым проектам.</p>
           </div>
+          <Scrollbar orientation="vertical" targetRef={contentRef} ariaLabel="Прокрутка раздела настроек" />
+          </div>
         </div>
         <footer className="modal-actions settings-footer">
           {error ? <p className="error settings-save-error" role="alert">{error}</p> : null}
-          <Button variant="secondary" onClick={onClose} disabled={saving}>Отмена</Button>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Отменить</Button>
           <Button onClick={() => void save()} disabled={saving || cadBusy}>Сохранить</Button>
         </footer>
       </section>

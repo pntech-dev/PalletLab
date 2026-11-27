@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
+import { Scrollbar } from "./Scrollbar";
 
 export type ComboboxOption<T extends string = string> = {
   value: T;
@@ -53,6 +54,7 @@ export function Combobox<T extends string = string>({
   }, [open]);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const listboxId = useId();
 
@@ -102,7 +104,10 @@ export function Combobox<T extends string = string>({
       return;
     }
     updatePosition();
-    const onViewportChange = () => updatePosition();
+    const onViewportChange = (event: Event) => {
+      if (event.type === "scroll" && event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      updatePosition();
+    };
     window.addEventListener("resize", onViewportChange);
     window.addEventListener("scroll", onViewportChange, true);
     return () => {
@@ -207,8 +212,6 @@ export function Combobox<T extends string = string>({
       {open && menuPos ? createPortal(
         <div
           ref={menuRef}
-          id={listboxId}
-          role="listbox"
           className="ui-combobox-menu"
           data-in-viewport={triggerRef.current?.closest(".viewport") ? "true" : undefined}
           style={{
@@ -220,32 +223,35 @@ export function Combobox<T extends string = string>({
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
-          {options.map((option, index) => {
-            const selected = option.value === value;
-            const highlighted = index === highlightedIndex;
-            return (
-              <button
-                key={option.value}
-                ref={(el) => {
-                  optionRefs.current[index] = el;
-                }}
-                id={`${listboxId}-opt-${index}`}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                tabIndex={-1}
-                className={[
-                  "ui-combobox-option",
-                  selected ? "is-selected" : "",
-                  highlighted ? "is-highlighted" : "",
-                ].filter(Boolean).join(" ")}
-                onMouseEnter={() => setHighlightedIndex(index)}
-                onClick={() => commitSelection(option)}
-              >
-                {option.label}
-              </button>
-            );
-          })}
+          <div ref={listRef} id={listboxId} role="listbox" className="ui-combobox-list">
+            {options.map((option, index) => {
+              const selected = option.value === value;
+              const highlighted = index === highlightedIndex;
+              return (
+                <button
+                  key={option.value}
+                  ref={(el) => {
+                    optionRefs.current[index] = el;
+                  }}
+                  id={`${listboxId}-opt-${index}`}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  tabIndex={-1}
+                  className={[
+                    "ui-combobox-option",
+                    selected ? "is-selected" : "",
+                    highlighted ? "is-highlighted" : "",
+                  ].filter(Boolean).join(" ")}
+                  onMouseEnter={() => setHighlightedIndex(index)}
+                  onClick={() => commitSelection(option)}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+          <Scrollbar targetRef={listRef} orientation="vertical" ariaLabel="Прокрутка списка" />
         </div>,
         document.body,
       ) : null}
