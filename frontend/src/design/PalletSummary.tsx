@@ -1,4 +1,6 @@
+import { useRef } from "react";
 import { Info } from "lucide-react";
+import { Scrollbar } from "./Scrollbar";
 import lengthIcon from "../assets/summary/length.svg";
 import widthIcon from "../assets/summary/width.svg";
 import heightIcon from "../assets/summary/height.svg";
@@ -22,6 +24,7 @@ export function detailCount(count: number) {
 }
 
 export function PalletSummary({ size, mass, details, millimetres, kilograms }: Props) {
+  const detailsScrollRef = useRef<HTMLDivElement>(null);
   const metrics = [
     { label: "Длина", value: `${millimetres(size.length)} мм`, icon: lengthIcon, color: "length" },
     { label: "Ширина", value: `${millimetres(size.width)} мм`, icon: widthIcon, color: "width" },
@@ -38,14 +41,27 @@ export function PalletSummary({ size, mass, details, millimetres, kilograms }: P
       </div>)}</dl>
       <p className="pallet-summary-note"><Info size={16} aria-hidden="true" /> Габариты поддона указаны без учёта размещённых на нём моделей</p>
     </section>
-    <section className="pallet-summary-card pallet-details-card" aria-label="Детали поддона">
-      <header><h2>Детали</h2><span>{detailCount(total)}</span></header>
-      <div className="pallet-details-scroll" tabIndex={0} aria-label="Список деталей поддона">
+    <section className="pallet-summary-card pallet-details-card" aria-label="Материалы поддона">
+      <header><h2>Материалы</h2><span>{detailCount(total)}</span></header>
+      <div
+        ref={detailsScrollRef}
+        className="pallet-details-scroll"
+        tabIndex={0}
+        aria-label="Список материалов поддона"
+        onWheel={(event) => {
+          const el = event.currentTarget;
+          if (el.scrollWidth <= el.clientWidth + 1) return;
+          if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+            el.scrollLeft += event.deltaY;
+          }
+        }}
+      >
         {details.map((detail) => <div className="pallet-detail" key={`${detail.height}-${detail.width}-${detail.length}`}>
           <img src={beamPreview} alt="" />
-          <div><strong>Брус {millimetres(detail.height)} × {millimetres(detail.width)} × {millimetres(detail.length)} мм</strong><span>Кол-во: {detail.count} шт.</span></div>
+          <div><strong>Брус {millimetres(detail.height)}×{millimetres(detail.width)}×{millimetres(detail.length)}</strong><span>Кол-во: {detail.count} шт.</span></div>
         </div>)}
       </div>
+      <Scrollbar orientation="horizontal" targetRef={detailsScrollRef} ariaLabel="Прокрутка списка материалов" />
     </section>
   </div>;
 }

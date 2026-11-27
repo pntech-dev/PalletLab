@@ -34,9 +34,10 @@ import { ExpandableLabel, sampleSpring } from "./design/ExpandableLabel";
 import { Tooltip, TooltipProvider } from "./design/Tooltip";
 import { Hud, HudHint } from "./design/Hud";
 import { detailCount, PalletSummary } from "./design/PalletSummary";
+import { Scrollbar } from "./design/Scrollbar";
 import { ResetDialog } from "./design/ResetDialog";
 import { ProgressIndicator } from "./design/ProgressIndicator";
-import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronRight, ChevronUp, Info, X, ScanSquare, LayersPlus } from "lucide-react";
+import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo, Redo, Plus, Trash2, SquareDimensions, RulerDimensionLine, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronRight, ChevronUp, Info, X, ScanSquare, LayersPlus } from "lucide-react";
 import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
 
@@ -446,7 +447,7 @@ export function App() {
   }, [toolbarExpanded]);
   const [viewportTransition, setViewportTransition] = useState<"none" | "expanding" | "collapsing">("none");
   const [summaryHeight, setSummaryHeight] = useState(0);
-  const [editorWidth, setEditorWidth] = useState(500);
+  const [editorWidth, setEditorWidth] = useState(512);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const editorPanelRef = useRef<HTMLElement>(null);
   const summaryTransitionRef = useRef<HTMLDivElement>(null);
@@ -2365,7 +2366,7 @@ export function App() {
               disabled={!project || undoStack.current.length === 0}
               aria-label="Отменить"
             >
-              <Undo2 size={16} />{renderToolbarLabel("Отменить")}
+              <Undo size={16} />{renderToolbarLabel("Отменить")}
             </button>
           </Tooltip>
           <Tooltip content="Вернуть отменённое действие">
@@ -2376,7 +2377,7 @@ export function App() {
               disabled={!project || redoStack.current.length === 0}
               aria-label="Вернуть"
             >
-              <Redo2 size={16} />{renderToolbarLabel("Вернуть")}
+              <Redo size={16} />{renderToolbarLabel("Вернуть")}
             </button>
           </Tooltip>
           <Tooltip content="Добавить новый брус">
@@ -2417,7 +2418,7 @@ export function App() {
               aria-label="Изменить сечение"
               onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}
             >
-              <PanelsTopLeft size={16} />{renderToolbarLabel("Изменить сечение")}
+              <SquareDimensions size={16} />{renderToolbarLabel("Изменить сечение")}
             </button>
           </Tooltip>
           <Tooltip content="Изменить расстояние между опорами">
@@ -2428,7 +2429,7 @@ export function App() {
               aria-label="Изменить расстояние"
               onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}
             >
-              <Ruler size={16} />{renderToolbarLabel("Изменить расстояние")}
+              <RulerDimensionLine size={16} />{renderToolbarLabel("Изменить расстояние")}
             </button>
           </Tooltip>
         </div>
@@ -2506,7 +2507,7 @@ export function App() {
             <Button variant="ghost" onClick={() => void saveProject(true)} disabled={!project || saving}><SaveAll size={16} /> Сохранить как</Button>
           </Tooltip>
           <span className="app-header-separator" aria-hidden="true" />
-          <Tooltip content="Загрузить 3D-модель изделия в формате STEP для подбора поддона">
+          <Tooltip content="Загрузить 3D-модель изделия в формате STEP для создания поддона">
             <Button
               variant="ghost"
               onClick={() => void importStepModel()}
@@ -2542,6 +2543,7 @@ export function App() {
           {recoveryNotice ? <p className="recovery-notice" role="alert">{recoveryNotice}</p> : null}
           {stepRestoreError ? <p className="error" role="alert">{stepRestoreError}</p> : null}
         {project ? (
+          <div className="editor-scroll-frame">
           <div ref={directionsRef} className="directions">
             <section className="layer-stack" aria-label="Слои поддона">
               <div className="layer-stack-heading">
@@ -2780,6 +2782,8 @@ export function App() {
                   Сбросить конфигурацию
                 </button>
               </div>
+          </div>
+          <Scrollbar orientation="vertical" targetRef={directionsRef} ariaLabel="Прокрутка редактора" />
           </div>
         ) : null}
         </aside>
