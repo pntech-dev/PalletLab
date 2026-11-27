@@ -11,9 +11,14 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import {
+  computeTooltipBounds,
+  placeTooltip,
+  type TooltipAlign,
+  type TooltipSide,
+} from "./tooltipPlacement";
 
-export type TooltipSide = "top" | "bottom";
-export type TooltipAlign = "start" | "center" | "end";
+export type { TooltipAlign, TooltipSide } from "./tooltipPlacement";
 
 type ActiveTooltip = {
   id: string;
@@ -39,49 +44,31 @@ const GLIDE_DURATION_MS = 220;
 const GROUP_CLOSE_GRACE_MS = 90;
 const GLIDE_EASING = "cubic-bezier(0.2, 0.8, 0.2, 1)";
 
+function getViewportBounds(trigger: HTMLElement) {
+  const viewport = trigger.closest<HTMLElement>(".viewport");
+  if (!viewport) {
+    return computeTooltipBounds(window.innerWidth, window.innerHeight, null);
+  }
+  const rect = viewport.getBoundingClientRect();
+  const styles = getComputedStyle(viewport);
+  return computeTooltipBounds(window.innerWidth, window.innerHeight, {
+    rect,
+    rightInset: Number.parseFloat(styles.getPropertyValue("--viewport-right-inset")) || 0,
+    bottomInset: Number.parseFloat(styles.getPropertyValue("--viewport-bottom-inset")) || 0,
+  });
+}
+
 function computePosition(item: ActiveTooltip, tip: HTMLElement) {
   const rect = item.trigger.getBoundingClientRect();
-  const margin = 8;
-  const tipWidth = tip.offsetWidth;
-  const tipHeight = tip.offsetHeight;
-
-  let top = item.side === "bottom"
-    ? rect.bottom + item.sideOffset
-    : rect.top - item.sideOffset - tipHeight;
-  let resolvedSide = item.side;
-  if (item.side === "bottom" && top + tipHeight > window.innerHeight - margin) {
-    const above = rect.top - item.sideOffset - tipHeight;
-    if (above >= margin) {
-      top = above;
-      resolvedSide = "top";
-    }
-  } else if (item.side === "top" && top < margin) {
-    const below = rect.bottom + item.sideOffset;
-    if (below + tipHeight <= window.innerHeight - margin) {
-      top = below;
-      resolvedSide = "bottom";
-    }
-  }
-  top = Math.max(margin, Math.min(top, window.innerHeight - tipHeight - margin));
-
-  let rawLeft = rect.left + rect.width / 2 - tipWidth / 2;
-  if (item.align === "start") rawLeft = rect.left;
-  else if (item.align === "end") rawLeft = rect.right - tipWidth;
-  rawLeft += item.alignOffset;
-  const left = Math.max(margin, Math.min(rawLeft, window.innerWidth - tipWidth - margin));
-
-  const triggerCenter = rect.left + rect.width / 2;
-  const originX = Math.max(8, Math.min(tipWidth - 8, triggerCenter - left));
-  const originY = resolvedSide === "bottom" ? 0 : tipHeight;
-
-  return {
-    top,
-    left,
-    width: tipWidth,
-    height: tipHeight,
-    side: resolvedSide,
-    transformOrigin: `${originX.toFixed(1)}px ${originY.toFixed(1)}px`,
-  };
+  const bounds = getViewportBounds(item.trigger);
+  const availableWidth = Math.max(120, bounds.maxRight - bounds.minLeft);
+  tip.style.maxWidth = `${Math.min(280, availableWidth)}px`;
+  return placeTooltip(
+    rect,
+    { width: tip.offsetWidth, height: tip.offsetHeight },
+    bounds,
+    item,
+  );
 }
 
 /** Coordinates shared tooltip state and smooth compositor glide/scale transitions across triggers. */
@@ -294,6 +281,7 @@ type TooltipProps = {
   sideOffset?: number;
   align?: TooltipAlign;
   alignOffset?: number;
+  disabled?: boolean;
   className?: string;
   children: ReactNode;
 };
@@ -305,6 +293,7 @@ export function Tooltip({
   sideOffset = 6,
   align = "center",
   alignOffset = 0,
+  disabled = false,
   className = "",
   children,
 }: TooltipProps) {
@@ -314,7 +303,7 @@ export function Tooltip({
   const isOpen = context?.activeId === tooltipId;
 
   const triggerShow = useCallback((immediate = false) => {
-    if (!context || !triggerRef.current) return;
+    if (disabled || !context || !triggerRef.current) return;
     context.show({
       id: tooltipId,
       content,
@@ -324,11 +313,15 @@ export function Tooltip({
       align,
       alignOffset,
     }, immediate);
-  }, [align, alignOffset, content, context, side, sideOffset, tooltipId]);
+  }, [align, alignOffset, content, context, disabled, side, sideOffset, tooltipId]);
 
   useEffect(() => {
+    if (disabled) {
+      if (isOpen) context?.hide(tooltipId, true);
+      return;
+    }
     if (isOpen) context?.updateContent(tooltipId, content);
-  }, [content, context, isOpen, tooltipId]);
+  }, [content, context, disabled, isOpen, tooltipId]);
 
   return (
     <span
@@ -336,13 +329,13 @@ export function Tooltip({
       className={["ui-tooltip-trigger", className].filter(Boolean).join(" ")}
       aria-describedby={isOpen ? tooltipId : undefined}
       onPointerEnter={(event) => {
-        if (event.pointerType === "touch") return;
+        if (disabled || event.pointerType === "touch") return;
         triggerShow(false);
       }}
       onPointerLeave={() => context?.hide(tooltipId, false)}
       onPointerDown={() => context?.hide(tooltipId, true)}
       onFocus={(event) => {
-        if (event.target instanceof Element && event.target.matches(":focus-visible")) {
+        if (!disabled && event.target instanceof Element && event.target.matches(":focus-visible")) {
           triggerShow(true);
         }
       }}

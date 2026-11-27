@@ -22,6 +22,7 @@ import type {
 import type { StepModelPayload } from "./stepModelGeometry";
 import { changeIndependentPalletMargin, MARGIN_PAIRS, palletMargins, type MarginIndex } from "./palletMargins";
 import { remainingImportFeedback, stepImportPhase } from "./stepImportUi";
+import { nextToolbarManualExpanded } from "./viewportToolbarState";
 import { betweenFaces, type BeamReference, type BeamReferenceFace } from "./manualBeamBetween";
 import { manualSectionForSupport } from "./manualBeamSection";
 import { SettingsDialog } from "./SettingsDialog";
@@ -29,12 +30,13 @@ import { Button } from "./design/Button";
 import { Checkbox } from "./design/Checkbox";
 import { Combobox } from "./design/Combobox";
 import { SegmentedControl } from "./design/SegmentedControl";
+import { ExpandableLabel, sampleSpring } from "./design/ExpandableLabel";
 import { Tooltip, TooltipProvider } from "./design/Tooltip";
 import { Hud, HudHint } from "./design/Hud";
 import { detailCount, PalletSummary } from "./design/PalletSummary";
 import { ResetDialog } from "./design/ResetDialog";
 import { ProgressIndicator } from "./design/ProgressIndicator";
-import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronUp, Info, X } from "lucide-react";
+import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo2, Redo2, Plus, Trash2, PanelsTopLeft, Ruler, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronRight, ChevronUp, Info, X, ScanSquare, LayersPlus } from "lucide-react";
 import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
 
@@ -410,7 +412,38 @@ export function App() {
   const layerFlipAnimations = useRef(new Map<string, Animation>());
   const [hiddenLayerIds, setHiddenLayerIds] = useState<string[]>([]);
   const [camera, setCamera] = useState<CameraPreset>("isometric");
+  const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
   const [viewportExpanded, setViewportExpanded] = useState(false);
+  const [toolbarManualExpanded, setToolbarManualExpanded] = useState<boolean | null>(null);
+  const toolbarExpanded = toolbarManualExpanded ?? viewportExpanded;
+  const toolbarChevronRef = useRef<SVGSVGElement | null>(null);
+  const prevToolbarExpandedRef = useRef<boolean | null>(null);
+  useLayoutEffect(() => {
+    const chevron = toolbarChevronRef.current;
+    if (!chevron) return;
+    if (prevToolbarExpandedRef.current === null) {
+      prevToolbarExpandedRef.current = toolbarExpanded;
+      chevron.style.transform = `rotate(${toolbarExpanded ? 180 : 0}deg)`;
+      return;
+    }
+    if (prevToolbarExpandedRef.current === toolbarExpanded) return;
+    prevToolbarExpandedRef.current = toolbarExpanded;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      chevron.style.transform = `rotate(${toolbarExpanded ? 180 : 0}deg)`;
+      return;
+    }
+    const fromDeg = toolbarExpanded ? 0 : 180;
+    const toDeg = toolbarExpanded ? 180 : 0;
+    const spring = sampleSpring(430, 19, 380, 28);
+    const anim = chevron.animate(
+      spring.map((p) => ({ transform: `rotate(${(fromDeg + (toDeg - fromDeg) * p).toFixed(2)}deg)` })),
+      { duration: 380, easing: "linear", fill: "forwards" },
+    );
+    anim.onfinish = () => {
+      anim.cancel();
+      chevron.style.transform = `rotate(${toDeg}deg)`;
+    };
+  }, [toolbarExpanded]);
   const [viewportTransition, setViewportTransition] = useState<"none" | "expanding" | "collapsing">("none");
   const [summaryHeight, setSummaryHeight] = useState(0);
   const [editorWidth, setEditorWidth] = useState(500);
@@ -2304,34 +2337,112 @@ export function App() {
       </div>
     </Hud>
   ) : null;
+  const renderToolbarLabel = (text: string) => (
+    <ExpandableLabel text={text} expanded={toolbarExpanded} />
+  );
   const viewportToolbar: ReactNode = (
     <>
-      {viewportExpanded ? <Button variant="ghost" onClick={addLayer} disabled={!project} aria-label="Добавить слой" title="Добавить слой"><Plus size={16} /><span className="toolbar-label">Добавить слой</span></Button> : null}
-      <div className="viewport-tool-group viewport-history-actions">
-        <Button variant="ghost" onClick={undo} disabled={!project || undoStack.current.length === 0} aria-label="Отменить" title="Отменить"><Undo2 size={16} />{viewportExpanded && <span className="toolbar-label">Отменить</span>}</Button>
-        <Button variant="ghost" onClick={redo} disabled={!project || redoStack.current.length === 0} aria-label="Вернуть" title="Вернуть"><Redo2 size={16} />{viewportExpanded && <span className="toolbar-label">Вернуть</span>}</Button>
-      </div>
-      <div className="viewport-tool-group viewport-mode-actions">
-        <Button variant="ghost" className={insertionMode ? "active-tool" : ""} aria-label="Добавить брус" title="Добавить брус" onClick={() => insertionMode ? stopInsertion() : activateInsertion()}><Plus size={16} />{viewportExpanded && <span className="toolbar-label">Добавить брус</span>}</Button>
-        <button
-          type="button"
-          className={beamTool === "delete" ? "active-tool" : ""}
-          aria-label="Удалить брус"
-          title="Удалить брус"
-          onClick={() => {
-            if (beamTool !== "delete") {
-              activateBeamTool("delete");
-            } else if (selectedBeams.length > 0) {
-              void deleteSelectedBeams();
-            } else {
-              setBeamTool("none");
-            }
-          }}
-        >
-          <Trash2 size={16} />{viewportExpanded && <span className="toolbar-label">{beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить брус"}</span>}
-        </button>
-        <Button variant="ghost" className={beamTool === "section" ? "active-tool" : ""} aria-label="Изменить сечение" title="Изменить сечение" onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}><PanelsTopLeft size={16} />{viewportExpanded && <span className="toolbar-label">Изменить сечение</span>}</Button>
-        <Button variant="ghost" className={dimensionEditing ? "active-tool" : ""} aria-label="Изменить расстояние" title="Изменить расстояние" onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}><Ruler size={16} />{viewportExpanded && <span className="toolbar-label">Изменить расстояние</span>}</Button>
+      <div className={`viewport-toolbar-bar${toolbarExpanded ? " is-expanded" : ""}`}>
+        {viewportExpanded ? (
+          <Tooltip content="Добавить новый слой поддона">
+            <button
+              type="button"
+              className="viewport-toolbar-btn viewport-toolbar-standalone"
+              onClick={addLayer}
+              disabled={!project}
+              aria-label="Добавить слой"
+            >
+              <LayersPlus size={16} />{renderToolbarLabel("Добавить слой")}
+            </button>
+          </Tooltip>
+        ) : null}
+        <div className="viewport-tools-pill" role="toolbar" aria-label="Инструменты области просмотра">
+          <Tooltip content="Отменить последнее действие">
+            <button
+              type="button"
+              className="viewport-toolbar-btn"
+              onClick={undo}
+              disabled={!project || undoStack.current.length === 0}
+              aria-label="Отменить"
+            >
+              <Undo2 size={16} />{renderToolbarLabel("Отменить")}
+            </button>
+          </Tooltip>
+          <Tooltip content="Вернуть отменённое действие">
+            <button
+              type="button"
+              className="viewport-toolbar-btn"
+              onClick={redo}
+              disabled={!project || redoStack.current.length === 0}
+              aria-label="Вернуть"
+            >
+              <Redo2 size={16} />{renderToolbarLabel("Вернуть")}
+            </button>
+          </Tooltip>
+          <Tooltip content="Добавить новый брус">
+            <button
+              type="button"
+              className={`viewport-toolbar-btn is-selectable${insertionMode ? " is-selected" : ""}`}
+              aria-pressed={insertionMode}
+              aria-label="Добавить брус"
+              onClick={() => insertionMode ? stopInsertion() : activateInsertion()}
+            >
+              <Plus size={16} />{renderToolbarLabel("Добавить брус")}
+            </button>
+          </Tooltip>
+          <Tooltip content="Выбрать и удалить брусья со сцены">
+            <button
+              type="button"
+              className={`viewport-toolbar-btn is-selectable${beamTool === "delete" ? " is-selected" : ""}`}
+              aria-pressed={beamTool === "delete"}
+              aria-label="Удалить брус"
+              onClick={() => {
+                if (beamTool !== "delete") {
+                  activateBeamTool("delete");
+                } else if (selectedBeams.length > 0) {
+                  void deleteSelectedBeams();
+                } else {
+                  setBeamTool("none");
+                }
+              }}
+            >
+              <Trash2 size={16} />{renderToolbarLabel(beamTool === "delete" ? `Удалить (${selectedBeams.length})` : "Удалить брус")}
+            </button>
+          </Tooltip>
+          <Tooltip content="Изменить размеры сечения выбранных брусьев">
+            <button
+              type="button"
+              className={`viewport-toolbar-btn is-selectable${beamTool === "section" ? " is-selected" : ""}`}
+              aria-pressed={beamTool === "section"}
+              aria-label="Изменить сечение"
+              onClick={() => beamTool === "section" ? (setBeamTool("none"), setSelectedBeams([])) : activateBeamTool("section")}
+            >
+              <PanelsTopLeft size={16} />{renderToolbarLabel("Изменить сечение")}
+            </button>
+          </Tooltip>
+          <Tooltip content="Изменить расстояние между опорами">
+            <button
+              type="button"
+              className={`viewport-toolbar-btn is-selectable${dimensionEditing ? " is-selected" : ""}`}
+              aria-pressed={dimensionEditing}
+              aria-label="Изменить расстояние"
+              onClick={() => dimensionEditing ? stopDimensionEditing() : activateDimensionEditing()}
+            >
+              <Ruler size={16} />{renderToolbarLabel("Изменить расстояние")}
+            </button>
+          </Tooltip>
+        </div>
+        <Tooltip content={toolbarExpanded ? "Свернуть подписи инструментов" : "Развернуть подписи инструментов"}>
+          <button
+            type="button"
+            className="viewport-toolbar-btn viewport-toolbar-standalone viewport-toolbar-toggle"
+            onClick={() => setToolbarManualExpanded(nextToolbarManualExpanded(toolbarExpanded, viewportExpanded))}
+            aria-expanded={toolbarExpanded}
+            aria-label={toolbarExpanded ? "Свернуть тулбар" : "Развернуть тулбар"}
+          >
+            <ChevronRight ref={toolbarChevronRef} size={16} className="viewport-toolbar-chevron" aria-hidden="true" />
+          </button>
+        </Tooltip>
       </div>
       {viewportExpanded && calculation?.snapshot?.pallet ? (
         <span className="viewport-toolbar-summary">
@@ -2343,36 +2454,45 @@ export function App() {
         </span>
       ) : <div className="viewport-tool-spacer" />}
       <div className="viewport-toolbar-end">
-      <label className="viewport-view-select">
-        <span>Вид</span>
-        <Combobox
-          variant="surface"
-          value={camera}
-          disabled={!project}
-          options={[
-            { value: "isometric", label: "Изометрия" },
-            { value: "top", label: "Сверху" },
-            { value: "front", label: "Спереди" },
-            { value: "side", label: "Сбоку" },
-          ]}
-          onChange={(preset) => {
-            if (!project) return;
-            setCamera(preset);
-            setCameraRequest((value) => value + 1);
-            updateProject({ ...project, view: { ...project.view, camera: preset } });
-          }}
-        />
-      </label>
-      <button type="button" className="secondary" onClick={toggleViewportExpanded} aria-pressed={viewportExpanded} aria-label={viewportExpanded ? "Свернуть область просмотра" : "Развернуть область просмотра"}>
-        {viewportExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-      </button>
+        <Tooltip content="Выбрать стандартный ракурс камеры" disabled={cameraMenuOpen}>
+          <Combobox
+            variant="surface"
+            value={camera}
+            ariaLabel="Вид камеры"
+            disabled={!project}
+            onOpenChange={setCameraMenuOpen}
+            options={[
+              { value: "isometric", label: "Изометрия" },
+              { value: "top", label: "Сверху" },
+              { value: "front", label: "Спереди" },
+              { value: "side", label: "Сбоку" },
+            ]}
+            onChange={(preset) => {
+              if (!project) return;
+              setCamera(preset);
+              setCameraRequest((value) => value + 1);
+              updateProject({ ...project, view: { ...project.view, camera: preset } });
+            }}
+          />
+        </Tooltip>
+        <Tooltip content={viewportExpanded ? "Свернуть область просмотра в обычный режим" : "Развернуть область просмотра на весь экран"}>
+          <button
+            type="button"
+            className="viewport-toolbar-btn viewport-toolbar-standalone"
+            onClick={toggleViewportExpanded}
+            aria-pressed={viewportExpanded}
+            aria-label={viewportExpanded ? "Свернуть область просмотра" : "Развернуть область просмотра"}
+          >
+            {viewportExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+        </Tooltip>
       </div>
     </>
   );
 
   return (
+    <TooltipProvider delay={0}>
     <main className="app-shell">
-      <TooltipProvider delay={0}>
       <header className="app-header">
         <img className="app-brand" src={logo} alt="Pallet Lab" />
         <nav className="app-actions" aria-label="Действия с проектом">
@@ -2411,7 +2531,6 @@ export function App() {
           <Button variant="ghost" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}><Settings size={16} /> Настройки</Button>
         </Tooltip>
       </header>
-      </TooltipProvider>
       {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} solidworks={solidWorksOptions} initialSection={settingsInitialSection} update={update} lastUpdateCheck={lastUpdateCheck} onCheckUpdates={() => checkForUpdates(true)} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
       {resetOpen ? <ResetDialog onClose={closeReset} onConfirm={resetProject} /> : null}
       <div ref={workspaceRef} className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}${viewportTransition !== "none" ? ` is-viewport-${viewportTransition}` : ""}`}>
@@ -2724,7 +2843,19 @@ export function App() {
                 dimensionHud={dimensionHud}
                 sectionHud={sectionHud}
                 toolbar={viewportToolbar}
-                fitViewControl={<button type="button" className="secondary" onClick={() => setFitRequest((value) => value + 1)}>Вписать</button>}
+                fitViewControl={
+                  <Tooltip content="Поместить поддон и модель целиком в центр кадра" side="top">
+                    <button
+                      type="button"
+                      className="secondary viewport-fit-action"
+                      aria-label="Вписать поддон в область просмотра"
+                      onClick={() => setFitRequest((value) => value + 1)}
+                    >
+                      <ScanSquare size={16} aria-hidden="true" />
+                      <ExpandableLabel text="Вписать" expanded={viewportExpanded} animate={false} />
+                    </button>
+                  </Tooltip>
+                }
                 toolHint={
                   !stepPalletBuilt && !buildingStepPallet && stepModel !== null
                     ? selectedStepFace === null
@@ -2960,5 +3091,6 @@ export function App() {
         </div>
       ) : null}
     </main>
+    </TooltipProvider>
   );
 }

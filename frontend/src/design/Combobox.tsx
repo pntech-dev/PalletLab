@@ -18,6 +18,7 @@ type ComboboxProps<T extends string = string> = {
   variant?: "surface" | "field";
   ariaLabel?: string;
   ariaLabelledBy?: string;
+  onOpenChange?: (open: boolean) => void;
 };
 
 type MenuPosition = {
@@ -39,10 +40,17 @@ export function Combobox<T extends string = string>({
   variant = "field",
   ariaLabel,
   ariaLabelledBy,
+  onOpenChange,
 }: ComboboxProps<T>) {
   const [open, setOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [menuPos, setMenuPos] = useState<MenuPosition | null>(null);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+
+  useEffect(() => {
+    onOpenChangeRef.current?.(open);
+  }, [open]);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);

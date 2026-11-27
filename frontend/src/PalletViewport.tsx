@@ -14,7 +14,8 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import type { StepModelGeometry as StepModelSnapshot } from "./stepModelGeometry";
 import SceneSettings from "./SceneSettings";
-import { BadgeAlert, X } from "lucide-react";
+import { Tooltip } from "./design/Tooltip";
+import { BadgeAlert, Minus, Mouse, MouseLeft, MouseRight, Plus, X } from "lucide-react";
 import { ViewportTip } from "./design/ViewportTip";
 import { placeViewportHint, type Rect } from "./viewportHintPlacement";
 import { betweenFaces } from "./manualBeamBetween";
@@ -1344,22 +1345,26 @@ export default function PalletViewport({
           ))}
         </svg>
         <div className="viewport-navigation-help">
-          <div>ЛКМ (зажать) – вращать</div>
-          <div>Колёсико мыши (зажать) – изменить масштаб</div>
-          <div>ПКМ (зажать) – двигать</div>
+          <div className="viewport-navigation-tip"><MouseLeft size={16} aria-hidden="true" /><span>ЛКМ (зажать) – вращать</span></div>
+          <div className="viewport-navigation-tip"><Mouse size={16} aria-hidden="true" /><span>Колёсико мыши (зажать) – изменить масштаб</span></div>
+          <div className="viewport-navigation-tip"><MouseRight size={16} aria-hidden="true" /><span>ПКМ (зажать) – двигать</span></div>
         </div>
       </div>
       {toolbar ? <div className="viewport-floating-toolbar">{toolbar}</div> : null}
-      <div className="viewport-fit-control">
+      <div className={`viewport-fit-control${insetsExpanding ? " is-expanded" : ""}`}>
         <SceneSettings hasModel={!!stepModel} modelVisible={modelVisible} setModelVisible={setModelVisible}
           transparency={modelTransparency} setTransparency={setModelTransparency}
           dimensionsVisible={dimensionsVisible} setDimensionsVisible={onDimensionsVisibleChange}
-          gridVisible={gridVisible} setGridVisible={onGridVisibleChange} />
+          gridVisible={gridVisible} setGridVisible={onGridVisibleChange} expanded={insetsExpanding} />
         {fitViewControl}
         <div className="viewport-zoom-control" aria-label="Масштаб просмотра">
-          <button type="button" onClick={() => zoomCommand.current?.(1.2)} aria-label="Уменьшить масштаб">−</button>
-          <span aria-live="polite">{zoomPercent}%</span>
-          <button type="button" onClick={() => zoomCommand.current?.(1 / 1.2)} aria-label="Увеличить масштаб">+</button>
+          <Tooltip content="Отдалить камеру (уменьшить масштаб)" side="top">
+            <button type="button" onClick={() => zoomCommand.current?.(1.2)} aria-label="Уменьшить масштаб"><Minus size={16} aria-hidden="true" /></button>
+          </Tooltip>
+          <span className="viewport-zoom-value" aria-live="polite">{zoomPercent}%</span>
+          <Tooltip content="Приблизить камеру (увеличить масштаб)" side="top">
+            <button type="button" onClick={() => zoomCommand.current?.(1 / 1.2)} aria-label="Увеличить масштаб"><Plus size={16} aria-hidden="true" /></button>
+          </Tooltip>
         </div>
       </div>
       {toolHint ? (

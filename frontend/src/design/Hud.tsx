@@ -1,11 +1,25 @@
-import type { ReactNode } from "react";
+import type { ReactNode, SyntheticEvent } from "react";
 import { Info } from "lucide-react";
 
 type Props = { title: ReactNode; children: ReactNode; actions: ReactNode; className?: string };
 
+function stopViewportPropagation(event: SyntheticEvent) {
+  event.stopPropagation();
+}
+
 /** Shared surface for contextual 3D editing tools. */
 export function Hud({ title, children, actions, className = "" }: Props) {
-  return <div className={`manual-hud ${className}`}>
+  return <div
+    className={`manual-hud ${className}`}
+    onPointerDown={stopViewportPropagation}
+    onPointerUp={stopViewportPropagation}
+    onPointerCancel={stopViewportPropagation}
+    onMouseDown={stopViewportPropagation}
+    onTouchStart={stopViewportPropagation}
+    onWheel={stopViewportPropagation}
+    onClick={stopViewportPropagation}
+    onContextMenu={stopViewportPropagation}
+  >
     <strong className="hud-title">{title}</strong>
     <div className="hud-content">{children}</div>
     <div className="hud-actions">{actions}</div>

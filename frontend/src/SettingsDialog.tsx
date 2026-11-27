@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Settings, Box, Info, Axis3D, X, Copy, TriangleAlert, WandSparkles } from "lucide-react";
+import { Settings, Box, Info, Axis3D, X, Copy, Check, TriangleAlert, WandSparkles } from "lucide-react";
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Button } from "./design/Button";
+import { CopyButton, CopyButtonIcon } from "./design/CopyButton";
 import { Checkbox } from "./design/Checkbox";
 import { Combobox } from "./design/Combobox";
 import type { AppSettings } from "./appSettings";
@@ -161,12 +162,36 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
   const [contactMessage, setContactMessage] = useState<{ text: string; ok: boolean } | null>(null);
   const repository = (import.meta.env.VITE_PROJECT_REPOSITORY_URL ?? "").trim();
   const email = (import.meta.env.VITE_DEVELOPER_EMAIL ?? "").trim();
-  async function contactAction(action: "copy" | "repository" | "email", value: string) {
+  async function copyContactText(value: string): Promise<boolean> {
     try {
       const api = window.pywebview?.api;
-      const result = action === "copy" ? await api?.copy_text(value) : await api?.open_contact(action, value);
+      if (api?.copy_text) {
+        const result = await api.copy_text(value);
+        if (result?.ok) {
+          setContactMessage(null);
+          return true;
+        }
+        setContactMessage({ ok: false, text: result?.error ?? "Не удалось скопировать в буфер обмена." });
+        return false;
+      }
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        setContactMessage(null);
+        return true;
+      }
+      setContactMessage({ ok: false, text: "Не удалось скопировать в буфер обмена." });
+      return false;
+    } catch {
+      setContactMessage({ ok: false, text: "Не удалось скопировать в буфер обмена." });
+      return false;
+    }
+  }
+  async function contactAction(action: "repository" | "email", value: string) {
+    try {
+      const api = window.pywebview?.api;
+      const result = await api?.open_contact(action, value);
       setContactMessage(result?.ok
-        ? { ok: true, text: action === "copy" ? "Скопировано в буфер обмена." : "Открывается приложение по умолчанию." }
+        ? { ok: true, text: "Открывается приложение по умолчанию." }
         : { ok: false, text: result?.error ?? "Не удалось выполнить действие." });
     } catch {
       setContactMessage({ ok: false, text: "Не удалось выполнить действие." });
@@ -320,10 +345,32 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
               <section className="settings-group"><h4>Версия ПО</h4><p>{version ? `Версия: ${version}` : "Версия недоступна"}</p></section>
               <section className="settings-group"><h4>Ссылки и связь с разработчиком</h4>
                 <div className="settings-contact"><div className="settings-contact-field"><label>Репозиторий<input readOnly value={repository} placeholder="Не указан" /></label>
-                  <Button variant="ghost" disabled={!repository} onClick={() => void contactAction("copy", repository)} aria-label="Скопировать ссылку на репозиторий"><Copy size={16} aria-hidden="true" /></Button></div>
+                  <CopyButton
+                    variant="ghost"
+                    content={repository}
+                    disabled={!repository}
+                    onCopy={copyContactText}
+                    aria-label="Скопировать ссылку на репозиторий"
+                  >
+                    <CopyButtonIcon
+                      icon={<Copy size={16} aria-hidden="true" />}
+                      copiedIcon={<Check size={16} aria-hidden="true" />}
+                    />
+                  </CopyButton></div>
                   <Button variant="secondary" disabled={!repository} onClick={() => void contactAction("repository", repository)}>Открыть репозиторий</Button></div>
                 <div className="settings-contact"><div className="settings-contact-field"><label>Почта для связи<input readOnly value={email} placeholder="Не указана" /></label>
-                  <Button variant="ghost" disabled={!email} onClick={() => void contactAction("copy", email)} aria-label="Скопировать адрес разработчика"><Copy size={16} aria-hidden="true" /></Button></div>
+                  <CopyButton
+                    variant="ghost"
+                    content={email}
+                    disabled={!email}
+                    onCopy={copyContactText}
+                    aria-label="Скопировать адрес разработчика"
+                  >
+                    <CopyButtonIcon
+                      icon={<Copy size={16} aria-hidden="true" />}
+                      copiedIcon={<Check size={16} aria-hidden="true" />}
+                    />
+                  </CopyButton></div>
                   <Button variant="secondary" disabled={!email} onClick={() => void contactAction("email", email)}>Написать разработчику</Button></div>
                 {contactMessage ? <p className={contactMessage.ok ? "success-message" : "error"} role="status">{contactMessage.text}</p> : null}
               </section>

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Settings } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import { Checkbox } from "./design/Checkbox";
+import { ExpandableLabel } from "./design/ExpandableLabel";
 import { Slider } from "./design/Slider";
+import { Tooltip } from "./design/Tooltip";
 
 type SceneSettingsProps = {
   hasModel: boolean;
@@ -13,11 +15,12 @@ type SceneSettingsProps = {
   setDimensionsVisible: (value: boolean) => void;
   gridVisible: boolean;
   setGridVisible: (value: boolean) => void;
+  expanded?: boolean;
 };
 
 export default function SceneSettings({
   hasModel, modelVisible, setModelVisible, transparency, setTransparency,
-  dimensionsVisible, setDimensionsVisible, gridVisible, setGridVisible,
+  dimensionsVisible, setDimensionsVisible, gridVisible, setGridVisible, expanded = false,
 }: SceneSettingsProps) {
   const [open, setOpen] = useState(false);
   const container = useRef<HTMLDivElement>(null);
@@ -41,10 +44,13 @@ export default function SceneSettings({
   return (
     <div className="scene-settings-anchor" ref={container}
       onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-      <button type="button" className="scene-settings-toggle" aria-label="Настройки сцены"
-        aria-expanded={open} aria-controls="scene-settings-panel" onClick={() => setOpen((value) => !value)}>
-        <Settings size={16} aria-hidden="true" />
-      </button>
+      <Tooltip content="Настроить видимость модели, размеров и сетки" side="top" disabled={open}>
+        <button type="button" className="scene-settings-toggle viewport-fit-action" aria-label="Настройки сцены"
+          aria-expanded={open} aria-controls="scene-settings-panel" onClick={() => setOpen((value) => !value)}>
+          <Settings2 size={16} aria-hidden="true" />
+          <ExpandableLabel text="Настройки сцены" expanded={expanded} animate={false} />
+        </button>
+      </Tooltip>
       <div id="scene-settings-panel" className={`manual-hud scene-settings-panel${open ? " is-open" : ""}`}
         aria-hidden={!open} inert={!open}>
         <strong>Настройки сцены</strong>
