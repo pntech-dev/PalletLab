@@ -202,6 +202,7 @@ export function Combobox<T extends string = string>({
           id={listboxId}
           role="listbox"
           className="ui-combobox-menu"
+          data-in-viewport={triggerRef.current?.closest(".viewport") ? "true" : undefined}
           style={{
             top: `${menuPos.top}px`,
             left: `${menuPos.left}px`,

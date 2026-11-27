@@ -586,10 +586,14 @@ export default function PalletViewport({
 }) {
   const viewportElement = useRef<HTMLDivElement>(null);
   const hintElement = useRef<HTMLDivElement>(null);
+  const hintCardElement = useRef<HTMLDivElement>(null);
   const cursor = useRef<[number, number] | null>(null);
   const pointerInViewport = useRef(false);
+  const layoutDirtyRef = useRef(true);
+  const wakeHintRef = useRef<(() => void) | null>(null);
   const visibleInsetsRef = useRef({ right: visibleRightInset, bottom: visibleBottomInset });
   visibleInsetsRef.current = { right: visibleRightInset, bottom: visibleBottomInset };
+  const hasHint = Boolean(toolHint);
 
   const updateViewportPointer = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
@@ -600,13 +604,21 @@ export default function PalletViewport({
       y >= 0 &&
       x <= box.width - visibleInsetsRef.current.right &&
       y <= box.height - visibleInsetsRef.current.bottom;
+    const visibilityChanged = pointerInViewport.current !== inside;
     pointerInViewport.current = inside;
-    if (inside) cursor.current = [x, y];
+    if (inside) {
+      cursor.current = [x, y];
+    }
+    if (inside || visibilityChanged) {
+      wakeHintRef.current?.();
+    }
   }, []);
 
   useEffect(() => {
     const hidePointer = () => {
+      if (!pointerInViewport.current) return;
       pointerInViewport.current = false;
+      wakeHintRef.current?.();
     };
     window.addEventListener("blur", hidePointer);
     document.addEventListener("mouseleave", hidePointer);
@@ -616,115 +628,243 @@ export default function PalletViewport({
     };
   }, []);
 
-  useEffect(() => {
-    if (!toolHint) return;
+  useLayoutEffect(() => {
+    if (!hasHint) {
+      wakeHintRef.current = null;
+      return;
+    }
     let frame = 0;
+    let enterFrame1 = 0;
+    let enterFrame2 = 0;
+    let mountedPaintReady = false;
+    let lastVisible = false;
     const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     const spring = {
       x: 0,
       y: 0,
       vx: 0,
       vy: 0,
-      scale: 0,
-      vs: 0,
-      opacity: 0,
       initialized: false,
       lastTime: performance.now(),
     };
+    let layoutCache: {
+      size: { width: number; height: number };
+      bounds: Rect;
+      obstacles: Rect[];
+    } | null = null;
     const posStiffness = 500;
     const posDamping = 50;
-    const scaleStiffness = 460;
-    const scaleDamping = 34;
 
-    const update = (now: number) => {
+    const readLayout = (viewport: HTMLDivElement, card: HTMLDivElement) => {
+      if (!layoutDirtyRef.current && layoutCache) return layoutCache;
+      layoutDirtyRef.current = false;
+      const outer = viewport.getBoundingClientRect();
+      const relative = (rect: DOMRect): Rect => ({
+        left: rect.left - outer.left,
+        top: rect.top - outer.top,
+        right: rect.right - outer.left,
+        bottom: rect.bottom - outer.top,
+      });
+      const toolbar = viewport.querySelector<HTMLElement>(".viewport-floating-toolbar")?.getBoundingClientRect();
+      const footer = Array.from(
+        viewport.querySelectorAll<HTMLElement>(".viewport-fit-control, .viewport-navigation-help"),
+        (el) => relative(el.getBoundingClientRect()),
+      );
+      const bounds: Rect = {
+        left: 16,
+        top: toolbar ? toolbar.bottom - outer.top + 16 : 16,
+        right: outer.width - visibleInsetsRef.current.right - 16,
+        bottom: footer.length
+          ? Math.min(...footer.map((rect) => rect.top)) - 16
+          : outer.height - visibleInsetsRef.current.bottom - 16,
+      };
+      const obstacles = [
+        ...Array.from(
+          viewport.querySelectorAll<HTMLElement>(".manual-hud:not([aria-hidden='true']):not([inert]), .viewport-error-toast"),
+          (el) => relative(el.getBoundingClientRect()),
+        ),
+        ...Array.from(
+          document.querySelectorAll<HTMLElement>(".ui-combobox-menu[data-in-viewport='true']"),
+          (el) => relative(el.getBoundingClientRect()),
+        ),
+      ];
+      layoutCache = {
+        size: { width: card.offsetWidth, height: card.offsetHeight },
+        bounds,
+        obstacles,
+      };
+      return layoutCache;
+    };
+
+    const setCardVisible = (card: HTMLDivElement, visible: boolean) => {
+      card.classList.toggle("is-visible", visible);
+    };
+
+    const step = (now: number) => {
+      frame = 0;
       const viewport = viewportElement.current;
-      const hint = hintElement.current;
-      const dt = Math.min(0.05, Math.max(0.001, (now - spring.lastTime) / 1000));
+      const layer = hintElement.current;
+      const card = hintCardElement.current;
+      if (!viewport || !layer || !card) return;
+
+      const elapsed = now - spring.lastTime;
+      const dt = elapsed > 100 ? 1 / 60 : Math.min(0.05, Math.max(0.001, elapsed / 1000));
       spring.lastTime = now;
 
-      if (viewport && hint) {
-        const isVisible = pointerInViewport.current && cursor.current !== null;
-        if (isVisible && cursor.current) {
-          const outer = viewport.getBoundingClientRect();
-          const relative = (rect: DOMRect): Rect => ({
-            left: rect.left - outer.left,
-            top: rect.top - outer.top,
-            right: rect.right - outer.left,
-            bottom: rect.bottom - outer.top,
-          });
-          const toolbar = viewport.querySelector<HTMLElement>(".viewport-floating-toolbar")?.getBoundingClientRect();
-          const footer = Array.from(
-            viewport.querySelectorAll<HTMLElement>(".viewport-fit-control, .viewport-navigation-help"),
-            (el) => relative(el.getBoundingClientRect()),
-          );
-          const bounds = {
-            left: 16,
-            top: toolbar ? toolbar.bottom - outer.top + 16 : 16,
-            right: outer.width - visibleInsetsRef.current.right - 16,
-            bottom: footer.length
-              ? Math.min(...footer.map((rect) => rect.top)) - 16
-              : outer.height - visibleInsetsRef.current.bottom - 16,
-          };
-          const obstacles = Array.from(
-            viewport.querySelectorAll<HTMLElement>(".manual-hud:not([aria-hidden='true']):not([inert]), .viewport-error-toast"),
-            (el) => relative(el.getBoundingClientRect()),
-          );
-          const [targetX, targetY] = placeViewportHint(
-            cursor.current,
-            { width: hint.offsetWidth, height: hint.offsetHeight },
-            bounds,
-            obstacles,
-          );
+      const isVisible = pointerInViewport.current && cursor.current !== null;
+      let settled = true;
 
-          if (reducedMotion || !spring.initialized || spring.opacity < 0.02) {
-            spring.x = targetX;
-            spring.y = targetY;
-            spring.vx = 0;
-            spring.vy = 0;
-            spring.initialized = true;
-          } else {
-            const substeps = Math.max(1, Math.ceil(dt * 120));
-            const subDt = dt / substeps;
-            for (let i = 0; i < substeps; i += 1) {
-              const ax = (targetX - spring.x) * posStiffness - spring.vx * posDamping;
-              const ay = (targetY - spring.y) * posStiffness - spring.vy * posDamping;
-              spring.vx += ax * subDt;
-              spring.vy += ay * subDt;
-              spring.x += spring.vx * subDt;
-              spring.y += spring.vy * subDt;
-            }
-          }
-        }
+      if (isVisible && cursor.current) {
+        if (!lastVisible) layoutDirtyRef.current = true;
+        const layout = readLayout(viewport, card);
+        const [targetX, targetY] = placeViewportHint(cursor.current, layout.size, layout.bounds, layout.obstacles);
 
-        const targetScale = isVisible ? 1 : 0;
-        const targetOpacity = isVisible ? 1 : 0;
-        if (reducedMotion) {
-          spring.scale = targetScale;
-          spring.vs = 0;
-          spring.opacity = targetOpacity;
+        if (reducedMotion || !spring.initialized || (!lastVisible && mountedPaintReady)) {
+          spring.x = targetX;
+          spring.y = targetY;
+          spring.vx = 0;
+          spring.vy = 0;
+          spring.initialized = true;
         } else {
           const substeps = Math.max(1, Math.ceil(dt * 120));
           const subDt = dt / substeps;
           for (let i = 0; i < substeps; i += 1) {
-            const as = (targetScale - spring.scale) * scaleStiffness - spring.vs * scaleDamping;
-            spring.vs += as * subDt;
-            spring.scale += spring.vs * subDt;
+            const ax = (targetX - spring.x) * posStiffness - spring.vx * posDamping;
+            const ay = (targetY - spring.y) * posStiffness - spring.vy * posDamping;
+            spring.vx += ax * subDt;
+            spring.vy += ay * subDt;
+            spring.x += spring.vx * subDt;
+            spring.y += spring.vy * subDt;
           }
-          const alpha = 1 - Math.exp(-22 * dt);
-          spring.opacity += (targetOpacity - spring.opacity) * alpha;
+          settled =
+            Math.abs(targetX - spring.x) < 0.1 &&
+            Math.abs(targetY - spring.y) < 0.1 &&
+            Math.hypot(spring.vx, spring.vy) < 0.5;
+          if (settled) {
+            spring.x = targetX;
+            spring.y = targetY;
+            spring.vx = 0;
+            spring.vy = 0;
+          }
         }
-
-        const clampedScale = Math.max(0, spring.scale);
-        const clampedOpacity = Math.max(0, Math.min(1, spring.opacity));
-        hint.style.transform = `translate3d(${spring.x.toFixed(2)}px, ${spring.y.toFixed(2)}px, 0) scale(${clampedScale.toFixed(4)})`;
-        hint.style.opacity = `${clampedOpacity.toFixed(4)}`;
-        hint.style.visibility = clampedOpacity > 0.005 ? "visible" : "hidden";
+        layer.style.transform = `translate3d(${spring.x.toFixed(2)}px, ${spring.y.toFixed(2)}px, 0)`;
       }
-      frame = window.requestAnimationFrame(update);
+
+      if (mountedPaintReady && isVisible !== lastVisible) {
+        lastVisible = isVisible;
+        setCardVisible(card, isVisible);
+      }
+
+      if (isVisible && !settled) {
+        frame = window.requestAnimationFrame(step);
+      }
     };
-    frame = window.requestAnimationFrame(update);
-    return () => window.cancelAnimationFrame(frame);
-  }, [toolHint]);
+
+    const wake = () => {
+      if (frame !== 0) return;
+      spring.lastTime = performance.now();
+      frame = window.requestAnimationFrame(step);
+    };
+    wakeHintRef.current = wake;
+    layoutDirtyRef.current = true;
+    step(performance.now());
+
+    if (reducedMotion) {
+      mountedPaintReady = true;
+      const card = hintCardElement.current;
+      const isVisible = pointerInViewport.current && cursor.current !== null;
+      if (card && isVisible) {
+        lastVisible = true;
+        setCardVisible(card, true);
+      }
+    } else {
+      enterFrame1 = window.requestAnimationFrame(() => {
+        enterFrame2 = window.requestAnimationFrame(() => {
+          mountedPaintReady = true;
+          const isVisible = pointerInViewport.current && cursor.current !== null;
+          if (hintCardElement.current && isVisible !== lastVisible) {
+            lastVisible = isVisible;
+            setCardVisible(hintCardElement.current, isVisible);
+          }
+        });
+      });
+    }
+
+    const viewport = viewportElement.current;
+    const resizeObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => {
+        layoutDirtyRef.current = true;
+        wake();
+      })
+      : null;
+    if (resizeObserver) {
+      if (viewport) resizeObserver.observe(viewport);
+      if (hintCardElement.current) resizeObserver.observe(hintCardElement.current);
+    }
+
+    const mutationObserver = typeof MutationObserver === "function" && viewport
+      ? new MutationObserver((mutations) => {
+        const relevant = mutations.some((mutation) => !hintElement.current?.contains(mutation.target));
+        if (!relevant) return;
+        layoutDirtyRef.current = true;
+        wake();
+      })
+      : null;
+    mutationObserver?.observe(viewport!, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-hidden", "inert", "class"],
+    });
+
+    const handleTransitionEnd = (event: TransitionEvent) => {
+      if (event.target instanceof Node && hintElement.current?.contains(event.target)) return;
+      layoutDirtyRef.current = true;
+      wake();
+    };
+    viewport?.addEventListener("transitionend", handleTransitionEnd);
+
+    const hasViewportMenu = (nodes: NodeList) =>
+      Array.from(nodes).some((node) => node instanceof Element && node.matches(".ui-combobox-menu[data-in-viewport='true']"));
+
+    const bodyObserver = typeof MutationObserver === "function"
+      ? new MutationObserver((mutations) => {
+        if (!mutations.some((m) => hasViewportMenu(m.addedNodes) || hasViewportMenu(m.removedNodes))) return;
+        layoutDirtyRef.current = true;
+        wake();
+      })
+      : null;
+    bodyObserver?.observe(document.body, { childList: true });
+
+    const handleDocumentPointerMove = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const inMenu = Boolean(target.closest(".ui-combobox-menu[data-in-viewport='true']"));
+      if (inMenu) {
+        const box = viewportElement.current?.getBoundingClientRect();
+        if (!box) return;
+        pointerInViewport.current = true;
+        cursor.current = [event.clientX - box.left, event.clientY - box.top];
+        wake();
+      } else if (pointerInViewport.current && !viewportElement.current?.contains(target)) {
+        pointerInViewport.current = false;
+        wake();
+      }
+    };
+    document.addEventListener("pointermove", handleDocumentPointerMove);
+
+    return () => {
+      wakeHintRef.current = null;
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+      if (enterFrame1 !== 0) window.cancelAnimationFrame(enterFrame1);
+      if (enterFrame2 !== 0) window.cancelAnimationFrame(enterFrame2);
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+      bodyObserver?.disconnect();
+      viewport?.removeEventListener("transitionend", handleTransitionEnd);
+      document.removeEventListener("pointermove", handleDocumentPointerMove);
+    };
+  }, [hasHint]);
   const [hoveredBeam, setHoveredBeam] = useState<string | null>(null);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [showDetails, setShowDetails] = useState(false);
@@ -767,6 +907,11 @@ export default function PalletViewport({
     }, 220);
     return () => window.clearTimeout(timeout);
   }, [toolError, toolErrorVersion]);
+  useEffect(() => {
+    if (!hasHint) return;
+    layoutDirtyRef.current = true;
+    wakeHintRef.current?.();
+  }, [hasHint, toolHint, manualHud, dimensionHud, sectionHud, errorPresentation, visibleRightInset, visibleBottomInset]);
   const bounds = useMemo(() => {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -903,8 +1048,13 @@ export default function PalletViewport({
       }}
       onPointerEnter={updateViewportPointer}
       onPointerMove={updateViewportPointer}
-      onPointerLeave={() => {
+      onPointerLeave={(event) => {
+        if (!pointerInViewport.current) return;
+        if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".ui-combobox-menu[data-in-viewport='true']")) {
+          return;
+        }
         pointerInViewport.current = false;
+        wakeHintRef.current?.();
       }}
       onContextMenu={onUndoToolSelection ? (event) => {
         event.preventDefault();
@@ -1214,10 +1364,12 @@ export default function PalletViewport({
       </div>
       {toolHint ? (
         <div
-          className="viewport-hint"
+          className="viewport-hint-layer"
           ref={hintElement}
         >
-          <ViewportTip text={toolHint} canExit={toolHintCanExit} />
+          <div className="viewport-hint" ref={hintCardElement}>
+            <ViewportTip text={toolHint} canExit={toolHintCanExit} />
+          </div>
         </div>
       ) : null}
       {errorPresentation ? (

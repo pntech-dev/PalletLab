@@ -29,6 +29,7 @@ import { Button } from "./design/Button";
 import { Checkbox } from "./design/Checkbox";
 import { Combobox } from "./design/Combobox";
 import { SegmentedControl } from "./design/SegmentedControl";
+import { Tooltip, TooltipProvider } from "./design/Tooltip";
 import { Hud, HudHint } from "./design/Hud";
 import { detailCount, PalletSummary } from "./design/PalletSummary";
 import { ResetDialog } from "./design/ResetDialog";
@@ -2371,29 +2372,46 @@ export function App() {
 
   return (
     <main className="app-shell">
+      <TooltipProvider delay={0}>
       <header className="app-header">
         <img className="app-brand" src={logo} alt="Pallet Lab" />
         <nav className="app-actions" aria-label="Действия с проектом">
-          <Button variant="ghost" onClick={openProject} disabled={!status}><FolderOpen size={16} /> Открыть</Button>
-          <Button variant="ghost" onClick={() => void saveProject()} disabled={!project || saving || !hasUnsavedChanges}><Save size={16} /> Сохранить</Button>
-          <Button variant="ghost" onClick={() => void saveProject(true)} disabled={!project || saving}><SaveAll size={16} /> Сохранить как</Button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => void importStepModel()}
-            disabled={!status || stepImportPhase(stepImport?.state, stepModel !== null, stepRestoreError !== null) !== null}
-          >
-            <FolderInput size={16} /> Импорт модели…
-          </button>
-          <button type="button" onClick={openExportSetup} disabled={!project || exporting !== null}>
-            <FolderOutput size={16} /> Экспорт…
-          </button>
+          <Tooltip content="Открыть сохранённый проект поддона">
+            <Button variant="ghost" onClick={openProject} disabled={!status}><FolderOpen size={16} /> Открыть</Button>
+          </Tooltip>
+          <Tooltip content="Сохранить изменения в текущем проекте">
+            <Button variant="ghost" onClick={() => void saveProject()} disabled={!project || saving || !hasUnsavedChanges}><Save size={16} /> Сохранить</Button>
+          </Tooltip>
+          <Tooltip content="Сохранить проект в новый файл">
+            <Button variant="ghost" onClick={() => void saveProject(true)} disabled={!project || saving}><SaveAll size={16} /> Сохранить как</Button>
+          </Tooltip>
+          <span className="app-header-separator" aria-hidden="true" />
+          <Tooltip content="Загрузить 3D-модель изделия в формате STEP для подбора поддона">
+            <Button
+              variant="ghost"
+              onClick={() => void importStepModel()}
+              disabled={!status || stepImportPhase(stepImport?.state, stepModel !== null, stepRestoreError !== null) !== null}
+            >
+              <FolderInput size={16} /> Импорт модели…
+            </Button>
+          </Tooltip>
+          <span className="app-header-separator" aria-hidden="true" />
+          <Tooltip content="Настроить и выполнить экспорт поддона и чертежей">
+            <Button variant="ghost" onClick={openExportSetup} disabled={!project || exporting !== null}>
+              <FolderOutput size={16} /> Экспорт…
+            </Button>
+          </Tooltip>
         </nav>
         {updateDismissed && ["available", "ready", "failed"].includes(update.state) ? (
-          <button type="button" className="secondary" onClick={() => setUpdateDismissed(false)}>Доступно обновление</button>
+          <Tooltip content="Открыть окно с доступным обновлением">
+            <button type="button" className="secondary" onClick={() => setUpdateDismissed(false)}>Доступно обновление</button>
+          </Tooltip>
         ) : null}
-        <Button variant="ghost" className="app-settings-button" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}><Settings size={16} /> Настройки</Button>
+        <Tooltip content="Открыть настройки программы, 3D-вида и шаблонов CAD" className="app-settings-button">
+          <Button variant="ghost" onClick={() => { setSettingsInitialSection("general"); setSettingsOpen(true); }} disabled={!status}><Settings size={16} /> Настройки</Button>
+        </Tooltip>
       </header>
+      </TooltipProvider>
       {settingsOpen ? <SettingsDialog version={status?.version} settings={settings} solidworks={solidWorksOptions} initialSection={settingsInitialSection} update={update} lastUpdateCheck={lastUpdateCheck} onCheckUpdates={() => checkForUpdates(true)} onClose={closeSettings} onSave={saveApplicationSettings} /> : null}
       {resetOpen ? <ResetDialog onClose={closeReset} onConfirm={resetProject} /> : null}
       <div ref={workspaceRef} className={`workspace${viewportExpanded ? " is-viewport-expanded" : ""}${viewportTransition !== "none" ? ` is-viewport-${viewportTransition}` : ""}`}>

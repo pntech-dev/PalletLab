@@ -8,7 +8,10 @@ button.secondary, button.ui-button--secondary { color: var(--text-primary); bord
 button.secondary:hover:not(:disabled), button.ui-button--secondary:hover:not(:disabled) { background: var(--color-neutral-200); border-color: transparent; }
 button.ui-button--ghost, button.ui-button--tertiary { color: var(--text-muted); background: transparent; }
 button.ui-button--tertiary { color: var(--accent); }
-button.ui-button--ghost:hover:not(:disabled), button.ui-button--tertiary:hover:not(:disabled) { background: var(--surface-muted); }
+button.ui-button--ghost:hover:not(:disabled) { color: var(--text-primary); background: var(--color-neutral-200); }
+button.ui-button--ghost:active:not(:disabled) { color: var(--color-neutral-800); background: var(--color-neutral-200); }
+button.ui-button--tertiary:hover:not(:disabled) { background: var(--surface-muted); }
+button.ui-button--tertiary:active:not(:disabled) { background: var(--color-neutral-200); }
 button.ui-button--danger { color: var(--color-white); background: var(--color-red-600); }
 button.ui-button--danger:hover:not(:disabled) { background: var(--color-red-700); }
 button.ui-button--danger:active:not(:disabled) { background: var(--color-red-800); }
@@ -44,11 +47,20 @@ input[type='checkbox'], input[type='radio'], input[type='range'], progress { acc
 @keyframes ui-progress-indeterminate { from { transform: translateX(-100%); } to { transform: translateX(286%); } }
 @media (prefers-reduced-motion: reduce) { .ui-progress-fill.is-indeterminate { animation: none; transform: translateX(93%); } }
 .app-shell { grid-template-rows: 52px minmax(0, 1fr); background: var(--surface-app); }
-.app-header { padding: 0 var(--space-4); gap: var(--space-4); background: var(--surface-panel); border: 0; }
+.app-header { gap: 64px; padding: var(--space-2) var(--space-6); background: var(--surface-panel); border: 0; }
 .app-brand { display: block; width: 166px; height: 32px; object-fit: contain; flex: none; }
-.app-header button { padding: 8px; font-size: var(--font-size-caption); }
-.app-actions > button { color: var(--text-muted); background: transparent; border: 0; white-space: nowrap; }
-.app-actions > button:hover:not(:disabled) { color: var(--text-primary); background: var(--surface-muted); }
+.app-actions { gap: var(--space-2); }
+.app-header-separator { width: 1px; height: 18px; flex: none; background: var(--color-neutral-400); }
+.app-header button.ui-button--ghost { min-width: 36px; min-height: 36px; padding: var(--space-2); border: 0; font-size: var(--font-size-body); font-weight: 500; line-height: var(--line-height-ui); white-space: nowrap; }
+.app-header button.ui-button--ghost svg { flex: none; }
+.ui-tooltip-trigger { display: inline-flex; flex: none; align-items: center; }
+.ui-tooltip { position: fixed; top: -9999px; left: -9999px; z-index: 170; width: max-content; max-width: min(280px, calc(100vw - 16px)); padding: var(--space-2); border-radius: var(--radius-control); background: var(--surface-hud); box-shadow: var(--shadow-hud); backdrop-filter: blur(2.5px); color: var(--color-white); font-size: var(--font-size-caption); font-weight: 500; line-height: var(--line-height-ui); text-align: center; pointer-events: none; opacity: 0; transform: translateY(-3px) scale(0.92); transition: opacity 150ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1); will-change: transform, opacity; }
+.ui-tooltip[data-side='top'] { transform: translateY(3px) scale(0.92); }
+.ui-tooltip.is-open { opacity: 1; transform: translateY(0) scale(1); }
+@media (prefers-reduced-motion: reduce) {
+  .ui-tooltip { transition: none; }
+}
+@media (max-width: 1120px) { .app-header { gap: var(--space-4); padding: var(--space-2) var(--space-4); } }
 .workspace { display: block; position: relative; padding: var(--space-2); }
 .viewport-panel { grid-area: auto; position: absolute; inset: var(--space-2); z-index: 1; padding: 0; background: transparent; }
 .editor-panel { grid-area: auto; position: absolute; top: var(--space-2); right: var(--space-2); bottom: var(--space-2); width: min(500px, calc(100% - 16px)); z-index: 20; padding: var(--space-4); border: 0; border-radius: var(--radius-panel); background: var(--surface-panel); will-change: transform, opacity; }
@@ -173,7 +185,12 @@ button.ui-combobox-option.is-selected, button.ui-combobox-option.is-selected:hov
 .manual-hud .hud-actions button.ui-button--ghost:hover:not(:disabled) { background: var(--color-neutral-600); }
 .manual-hud .hud-actions button:disabled { color: var(--color-slate-300); background: var(--color-neutral-500); }
 .viewport-hint { padding: var(--space-2); border-radius: var(--radius-control); background: var(--surface-hud); box-shadow: var(--shadow-hud); backdrop-filter: blur(2.5px); color: var(--color-white); font-size: var(--font-size-caption); }
-.viewport-hint { left: 0; top: 0; max-width: min(320px, calc(100% - 32px)); opacity: 0; visibility: hidden; transform-origin: top left; will-change: transform, opacity; }
+.viewport-hint-layer { position: absolute; left: 0; top: 0; z-index: 6; max-width: min(320px, calc(100% - 32px)); pointer-events: none; will-change: transform; }
+.viewport-hint-layer > .viewport-hint { position: static; max-width: 100%; opacity: 0; transform: scale(0.86); transform-origin: top left; will-change: transform, opacity; transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1), transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.viewport-hint-layer > .viewport-hint.is-visible { opacity: 1; transform: scale(1); }
+@media (prefers-reduced-motion: reduce) {
+  .viewport-hint-layer > .viewport-hint { transition: none; }
+}
 .viewport-hint-message { display: block; font-weight: 500; }
 .viewport-hint-shortcuts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin-top: var(--space-2); color: var(--color-neutral-200); }
 .viewport-hint-shortcuts > span { white-space: nowrap; }
@@ -299,7 +316,6 @@ button.ui-combobox-option.is-selected, button.ui-combobox-option.is-selected:hov
 .layer-card-content input:not([type='radio']), .layer-card-content select, .layer-card-content button.ui-combobox-trigger { min-height: 36px; padding: 6px var(--space-3) 6px var(--space-4); }
 .layer-card-content input:not([type='radio']):disabled, .layer-card-content select:disabled, .layer-card-content button.ui-combobox-trigger:disabled { color: var(--color-slate-400); border-color: transparent; background: var(--color-neutral-200); }
 .layer-section-dimensions label:first-child { order: 2; }
-.layer-input-hint { margin-top: calc(-1 * var(--space-2)); }
 .editor-panel .pallet-margins, .editor-panel .rounding { gap: var(--space-4) var(--space-2); }
 .editor-panel .pallet-margins { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .pallet-margins > label { position: relative; display: grid; gap: var(--space-1); min-width: 0; color: var(--text-muted); font-size: var(--font-size-caption); }
