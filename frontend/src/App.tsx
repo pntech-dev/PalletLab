@@ -37,7 +37,7 @@ import { detailCount, PalletSummary } from "./design/PalletSummary";
 import { Scrollbar } from "./design/Scrollbar";
 import { ResetDialog } from "./design/ResetDialog";
 import { ProgressIndicator } from "./design/ProgressIndicator";
-import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo, Redo, Plus, Trash2, SquareDimensions, RulerDimensionLine, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronRight, ChevronUp, Info, X, ScanSquare, LayersPlus } from "lucide-react";
+import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo, Redo, Plus, Trash2, SquareDimensions, RulerDimensionLine, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronRight, Info, X, ScanSquare, LayersPlus } from "lucide-react";
 import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
 
@@ -2433,13 +2433,13 @@ export function App() {
             </button>
           </Tooltip>
         </div>
-        <Tooltip content={toolbarExpanded ? "Свернуть подписи инструментов" : "Развернуть подписи инструментов"}>
+        <Tooltip content={toolbarExpanded ? "Свернуть панель инструментов" : "Развернуть панель инструментов"}>
           <button
             type="button"
             className="viewport-toolbar-btn viewport-toolbar-standalone viewport-toolbar-toggle"
             onClick={() => setToolbarManualExpanded(nextToolbarManualExpanded(toolbarExpanded, viewportExpanded))}
             aria-expanded={toolbarExpanded}
-            aria-label={toolbarExpanded ? "Свернуть тулбар" : "Развернуть тулбар"}
+            aria-label={toolbarExpanded ? "Свернуть панель" : "Развернуть панель"}
           >
             <ChevronRight ref={toolbarChevronRef} size={16} className="viewport-toolbar-chevron" aria-hidden="true" />
           </button>
@@ -2549,35 +2549,41 @@ export function App() {
               <div className="layer-stack-heading">
                 <h2>Слои поддона</h2>
                 <div className="layer-toolbar" role="toolbar" aria-label="Инструменты слоёв">
-                  <button type="button" className="secondary" disabled={!selectedLayerId}
-                    aria-label={selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать слой" : "Заблокировать слой"}
-                    title={selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать слой" : "Заблокировать слой"}
-                    aria-pressed={selectedLayerId ? isLocked(selectedLayerId) : false}
-                    onClick={() => {
-                      if (selectedLayerId) toggleLayerLock(selectedLayerId);
-                    }}>
-                    {selectedLayerId && isLocked(selectedLayerId) ? <LockKeyholeOpen size={16} /> : <LockKeyhole size={16} />}
-                  </button>
-                  <button type="button" className="secondary" aria-label="Дублировать слой" title="Дублировать слой" disabled={!selectedLayerId || duplicateBusy} onClick={() => void duplicateLayer()}>
-                    <Copy size={16} />
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    aria-label="Удалить слой"
-                    title="Удалить слой"
-                    disabled={!selectedLayerId || project.pallet.layers.length <= 2 || isLocked(selectedLayerId)}
-                    onClick={() => {
-                      if (selectedLayerId) removeLayer(selectedLayerId);
-                    }}
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <Tooltip content="Создать копию выбранного слоя">
+                    <button type="button" className="ui-button--ghost" aria-label="Дублировать слой" disabled={!selectedLayerId || duplicateBusy} onClick={() => void duplicateLayer()}>
+                      <Copy size={16} />
+                    </button>
+                  </Tooltip>
+                  <Tooltip content={selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать выбранный слой" : "Заблокировать выбранный слой"}>
+                    <button type="button" className="ui-button--ghost" disabled={!selectedLayerId}
+                      aria-label={selectedLayerId && isLocked(selectedLayerId) ? "Разблокировать слой" : "Заблокировать слой"}
+                      aria-pressed={selectedLayerId ? isLocked(selectedLayerId) : false}
+                      onClick={() => {
+                        if (selectedLayerId) toggleLayerLock(selectedLayerId);
+                      }}>
+                      {selectedLayerId && isLocked(selectedLayerId) ? <LockKeyholeOpen size={16} /> : <LockKeyhole size={16} />}
+                    </button>
+                  </Tooltip>
+                  <Tooltip content="Удалить выбранный слой из поддона">
+                    <button
+                      type="button"
+                      className="ui-button--ghost"
+                      aria-label="Удалить слой"
+                      disabled={!selectedLayerId || project.pallet.layers.length <= 2 || isLocked(selectedLayerId)}
+                      onClick={() => {
+                        if (selectedLayerId) removeLayer(selectedLayerId);
+                      }}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </Tooltip>
                 </div>
               </div>
-              <button type="button" className="secondary layer-add-button" onClick={addLayer}>
-                <Plus size={24} /> Добавить новый слой
-              </button>
+              <Tooltip content="Добавить новый слой поверх остальных слоёв поддона" className="ui-tooltip-trigger--full">
+                <button type="button" className="secondary layer-add-button" onClick={addLayer}>
+                  <Plus size={24} /> Добавить новый слой
+                </button>
+              </Tooltip>
               <div className="layer-stack-list">
               {(() => {
                 const reversed = [...project.pallet.layers].reverse();
@@ -2619,7 +2625,6 @@ export function App() {
                           role="button"
                           tabIndex={-1}
                           aria-label={`Перетащить слой ${layerNumber(layer, index)}`}
-                          title="Перетащить слой"
                           onPointerDown={(event) => startLayerDrag(event, layer.id)}
                         >
                           <GripVertical size={24} />
@@ -2636,31 +2641,36 @@ export function App() {
                       <small>{layer.axis === "length" ? "Продольный" : "Поперечный"}{calculation?.snapshot?.pallet ? ` • ${calculation.snapshot.pallet.beams.filter((beam) => (beam.physicalLayerId ?? beam.layerId) === layer.id).length} шт` : ""}</small>
                     </button>
                     {isLocked(layer.id) ? (
+                      <Tooltip content="Разрешить редактирование слоя">
+                        <button
+                          type="button"
+                          className="layer-lock-indicator"
+                          aria-label={`Разблокировать слой ${layerNumber(layer, index)}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleLayerLock(layer.id);
+                          }}>
+                          <LockKeyhole size={16} aria-hidden="true" />
+                        </button>
+                      </Tooltip>
+                    ) : null}
+                    <Tooltip content={hiddenLayerIds.includes(layer.id) ? "Показать слой в области просмотра" : "Скрыть слой в области просмотра"}>
                       <button
                         type="button"
-                        className="layer-lock-indicator"
-                        aria-label={`Разблокировать слой ${layerNumber(layer, index)}`}
-                        title="Разблокировать слой"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleLayerLock(layer.id);
-                        }}>
-                        <LockKeyhole size={16} aria-hidden="true" />
+                        className="layer-visibility"
+                        aria-label={hiddenLayerIds.includes(layer.id) ? `Показать слой ${layerNumber(layer, index)}` : `Скрыть слой ${layerNumber(layer, index)}`}
+                        onClick={() => toggleLayerVisibility(layer.id)}
+                        aria-pressed={hiddenLayerIds.includes(layer.id)}
+                      >
+                        {hiddenLayerIds.includes(layer.id) ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="layer-visibility secondary"
-                      aria-label={hiddenLayerIds.includes(layer.id) ? `Показать слой ${layerNumber(layer, index)}` : `Скрыть слой ${layerNumber(layer, index)}`}
-                      onClick={() => toggleLayerVisibility(layer.id)}
-                      aria-pressed={hiddenLayerIds.includes(layer.id)}
-                    >
-                      {hiddenLayerIds.includes(layer.id) ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
-                    <button type="button" className="layer-expand" aria-label={`${expandedLayerId === layer.id ? "Свернуть" : "Развернуть"} слой ${layerNumber(layer, index)}`}
-                      aria-expanded={expandedLayerId === layer.id} onClick={() => setExpandedLayerId((current) => current === layer.id ? null : layer.id)}>
-                      {expandedLayerId === layer.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </button>
+                    </Tooltip>
+                    <Tooltip content={expandedLayerId === layer.id ? "Свернуть параметры слоя" : "Развернуть параметры слоя"}>
+                      <button type="button" className="layer-expand" aria-label={`${expandedLayerId === layer.id ? "Свернуть" : "Развернуть"} слой ${layerNumber(layer, index)}`}
+                        aria-expanded={expandedLayerId === layer.id} onClick={() => setExpandedLayerId((current) => current === layer.id ? null : layer.id)}>
+                        <ChevronDown size={16} aria-hidden="true" />
+                      </button>
+                    </Tooltip>
                   </div>
                   {expandedLayerId === layer.id ? (
                     <fieldset className="layer-card-content" disabled={isLocked(layer.id)}>
@@ -2694,22 +2704,7 @@ export function App() {
                       </label>
                       <div className="layer-section-dimensions">
                         <label>
-                          Высота, мм
-                          <input
-                            type="number"
-                            min="1"
-                            value={layer.direction.beam_height}
-                            disabled={layerSectionPreset(layer) !== "custom"}
-                            onFocus={beginFormEdit}
-                            onBlur={finishFormEdit}
-                            onChange={(event) => {
-                              setCustomLayerSectionIds((current) => current.includes(layer.id) ? current : [...current, layer.id]);
-                              updateLayerDirection(index, "beam_height", event.target.value);
-                            }}
-                          />
-                        </label>
-                        <label>
-                          Ширина, мм
+                          Ширина
                           <input
                             type="number"
                             min="1"
@@ -2722,6 +2717,23 @@ export function App() {
                               updateLayerDirection(index, "beam_width", event.target.value);
                             }}
                           />
+                          <span className="layer-dimension-unit" aria-hidden="true">мм</span>
+                        </label>
+                        <label>
+                          Высота
+                          <input
+                            type="number"
+                            min="1"
+                            value={layer.direction.beam_height}
+                            disabled={layerSectionPreset(layer) !== "custom"}
+                            onFocus={beginFormEdit}
+                            onBlur={finishFormEdit}
+                            onChange={(event) => {
+                              setCustomLayerSectionIds((current) => current.includes(layer.id) ? current : [...current, layer.id]);
+                              updateLayerDirection(index, "beam_height", event.target.value);
+                            }}
+                          />
+                          <span className="layer-dimension-unit" aria-hidden="true">мм</span>
                         </label>
                       </div>
                       {DIRECTION_FIELDS.filter((field) => field !== "beam_height" && field !== "beam_width" && field !== "margin_start" && field !== "margin_end").map((field) => (
@@ -2757,7 +2769,7 @@ export function App() {
               })()}
               </div>
             </section>
-              {project ? <fieldset className="pallet-margins" disabled={(project.view.locked_layer_ids ?? []).length > 0}>
+              {project ? <fieldset className="pallet-margins">
                 <h2>Отступы поддона</h2>
                 <p>Введите отступы от краёв поддона до размещаемого объекта</p>
                 {MARGIN_PAIRS.flatMap(({ first, second, labels }) => [first, second].map((index, position) =>
@@ -2778,9 +2790,11 @@ export function App() {
               </fieldset>
               <div className="layer-stack-footer">
                 <p><Info size={16} aria-hidden="true" /> Все размеры указаны в миллиметрах</p>
-                <button type="button" className="ui-button--tertiary" onClick={() => setResetOpen(true)}>
-                  Сбросить конфигурацию
-                </button>
+                <Tooltip content="Вернуть конфигурацию поддона к параметрам по умолчанию" side="top">
+                  <button type="button" className="ui-button--tertiary" onClick={() => setResetOpen(true)}>
+                    Сбросить конфигурацию
+                  </button>
+                </Tooltip>
               </div>
           </div>
           <Scrollbar orientation="vertical" targetRef={directionsRef} ariaLabel="Прокрутка редактора" />

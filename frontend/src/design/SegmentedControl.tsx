@@ -123,13 +123,25 @@ export function SegmentedControl<T extends string>({ label, value, options, onCh
     return () => observer.disconnect();
   }, [value, options]);
 
-  return <div className="ui-segmented" role="radiogroup" aria-label={label} ref={groupRef}>
+  const activeOption = options.find((option) => option.value === value);
+  const selectedDisabled = Boolean(disabled || activeOption?.disabled);
+  const allDisabled = Boolean(disabled || (options.length > 0 && options.every((option) => option.disabled)));
+
+  return <div
+    className={`ui-segmented${allDisabled ? " is-disabled" : ""}${selectedDisabled ? " is-selected-disabled" : ""}`}
+    role="radiogroup"
+    aria-label={label}
+    aria-disabled={allDisabled || undefined}
+    ref={groupRef}
+  >
     <span className="ui-segmented-indicator" ref={indicatorRef} aria-hidden="true" />
     {options.map((option) => {
       const active = value === option.value;
+      const optionDisabled = Boolean(disabled || option.disabled);
       return <label
         className="ui-segmented-option"
         data-active={active ? "true" : "false"}
+        data-disabled={optionDisabled ? "true" : "false"}
         data-value={option.value}
         key={option.value}
         ref={(node) => {
@@ -138,7 +150,7 @@ export function SegmentedControl<T extends string>({ label, value, options, onCh
         }}
       >
         <input type="radio" name={name} value={option.value} checked={active}
-          disabled={disabled || option.disabled} onChange={() => onChange(option.value)} />
+          disabled={optionDisabled} onChange={() => onChange(option.value)} />
         <span>{option.label}</span>
       </label>;
     })}
