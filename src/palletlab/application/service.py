@@ -223,12 +223,26 @@ class ApplicationService:
 
         used_ids = {layer.layer_id for layer in state.layers}
         number = 1
-        while f"layer-{number}" in used_ids:
+        while f"copy-{number}" in used_ids:
             number += 1
-        new_id = f"layer-{number}"
+        new_id = f"copy-{number}"
         source = state.layers[index]
+        if source.copy_source_number is not None:
+            source_number = source.copy_source_number
+        elif source.layer_id == "length":
+            source_number = 1
+        elif source.layer_id == "width":
+            source_number = 2
+        elif source.layer_id.startswith("layer-") and source.layer_id[6:].isdigit():
+            suffix = int(source.layer_id[6:])
+            source_number = 3 if suffix == 1 else suffix + 1
+        else:
+            source_number = index + 1
+        copy_number = max((layer.copy_number or 0 for layer in state.layers
+                           if layer.copy_source_number == source_number), default=0) + 1
         state.multi_layer_mode = True
-        state.layers.insert(index + 1, replace(source, layer_id=new_id, align_top=index == 0 or source.align_top))
+        state.layers.insert(index + 1, replace(source, layer_id=new_id, align_top=index == 0 or source.align_top,
+                                               copy_source_number=source_number, copy_number=copy_number))
         state.layer_sections.update({(new_id, beam_index): section
                                      for (owner, beam_index), section in list(state.layer_sections.items())
                                      if owner == layer_id})
@@ -329,7 +343,7 @@ class ApplicationService:
         result, error = self._calculate_result(state)
         if error:
             return {"ok": False, "error": error}
-        step_model_path, placement_matrix, error = _step_export_data(state, include_export_model)
+        step_model_path, placement_matrix, error = _step_export_data(state, include_export_model, result.pallet_height)
         if error:
             return {"ok": False, "error": error}
         try:
@@ -372,7 +386,7 @@ class ApplicationService:
         result, error = self._calculate_result(state)
         if error:
             return {"ok": False, "error": error}
-        step_model_path, placement_matrix, error = _step_export_data(state, include_export_model)
+        step_model_path, placement_matrix, error = _step_export_data(state, include_export_model, result.pallet_height)
         if error:
             return {"ok": False, "error": error}
         try:
@@ -641,6 +655,7 @@ def _solidworks_options(
 def _step_export_data(
     state: ProjectState,
     requested: bool,
+    pallet_height: float | None = None,
 ) -> tuple[Path | None, tuple[tuple[float, ...], ...] | None, str | None]:
     """Return persisted STEP placement inputs only for an export assembly request."""
     if not requested:
@@ -676,7 +691,11 @@ def _step_export_data(
         for row in matrix for value in row
     ):
         return None, None, "Матрица размещения STEP-модели содержит некорректные параметры."
-    placement = tuple(tuple(float(value) for value in row) for row in matrix)
+    placement_rows = [[float(value) for value in row] for row in matrix]
+    if pallet_height is not None:
+        # Projects created before the bearing-height field used three 70 mm layers.
+        placement_rows[2][3] += pallet_height - float(step_model.get("bearing_height", 210))
+    placement = tuple(tuple(row) for row in placement_rows)
     return Path(source), placement, None
 
 

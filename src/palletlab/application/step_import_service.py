@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 from threading import Lock, Thread
 from typing import Any
 from uuid import uuid4
@@ -210,6 +211,7 @@ class StepImportService:
         process: subprocess.Popen[str] | None = None
         try:
             environment = os.environ.copy()
+            environment["PALLETLAB_STEP_WEB_ASSET"] = "1"
             source_root = str(Path(__file__).resolve().parents[2])
             environment["PYTHONPATH"] = source_root + os.pathsep + environment.get("PYTHONPATH", "")
             arguments = (
@@ -339,13 +341,20 @@ def _write_model_asset(model: Any) -> dict[str, Any]:
     path = _web_asset_path(model.source_path)
     directory = path.parent
     directory.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as stream:
-        stream.write(b"PLSTEP01")
-        stream.write(len(header).to_bytes(4, "little"))
-        stream.write(header)
-        stream.write(b"\0" * padding)
-        for values in encoded.values():
-            stream.write(memoryview(values))
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", dir=directory, prefix="step-web-", suffix=".tmp", delete=False) as stream:
+            temporary_path = Path(stream.name)
+            stream.write(b"PLSTEP01")
+            stream.write(len(header).to_bytes(4, "little"))
+            stream.write(header)
+            stream.write(b"\0" * padding)
+            for values in encoded.values():
+                stream.write(memoryview(values))
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     _prune_web_assets(directory)
     return {
         "path": str(path),

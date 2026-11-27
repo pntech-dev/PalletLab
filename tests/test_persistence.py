@@ -126,6 +126,17 @@ def test_step_reference_and_placement_round_trip_and_validate(tmp_path):
         project_from_dict(payload)
 
 
+def test_step_bearing_height_round_trips_and_rejects_invalid_values():
+    state = _state()
+    state.step_model = {"source": "model.step", "transform": [0] * 16, "starts": [0, 0], "bearing_height": 210}
+    payload = project_to_dict(state)
+    assert project_from_dict(payload).step_model["bearing_height"] == 210
+    for value in (-1, True, float("nan"), "210"):
+        payload["step_model"]["bearing_height"] = value
+        with pytest.raises(ProjectPersistenceError, match="Высота опоры"):
+            project_from_dict(payload)
+
+
 def test_common_pallet_margins_survive_round_trip_and_validate():
     state = _state()
     state.pallet_margins = (120, 175, 80, 90)

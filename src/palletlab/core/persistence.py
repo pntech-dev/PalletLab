@@ -90,7 +90,9 @@ def _direction_from_dict(raw: object, name: str) -> DirectionInput:
 
 def _layer_to_dict(layer: LayerInput) -> dict[str, Any]:
     return {"id": layer.layer_id, "axis": layer.axis, "direction": _direction_to_dict(layer.direction),
-            **({"align_top": True} if layer.align_top else {})}
+            **({"align_top": True} if layer.align_top else {}),
+            **({"copy_source_number": layer.copy_source_number, "copy_number": layer.copy_number}
+               if layer.copy_source_number is not None else {})}
 
 
 def _layer_from_dict(raw: object) -> LayerInput:
@@ -103,7 +105,13 @@ def _layer_from_dict(raw: object) -> LayerInput:
     align_top = raw.get("align_top", False)
     if type(align_top) is not bool:
         raise ProjectPersistenceError("Выравнивание слоя должно быть логическим значением.")
-    return LayerInput(layer_id, axis, _direction_from_dict(raw.get("direction"), f"слой «{layer_id}»"), align_top)
+    copy_source_number, copy_number = raw.get("copy_source_number"), raw.get("copy_number")
+    if ((copy_source_number is not None or copy_number is not None)
+            and (type(copy_source_number) is not int or copy_source_number < 1
+                 or type(copy_number) is not int or copy_number < 1)):
+        raise ProjectPersistenceError("Номер копии слоя указан некорректно.")
+    return LayerInput(layer_id, axis, _direction_from_dict(raw.get("direction"), f"слой «{layer_id}»"),
+                      align_top, copy_source_number, copy_number)
 
 
 def _legacy_layers(length: DirectionInput, width: DirectionInput, upper_layer: str) -> list[LayerInput]:
@@ -186,6 +194,11 @@ def project_from_dict(raw: object) -> ProjectState:
                        for value in (*transform, *starts))):
             raise ProjectPersistenceError("Данные STEP-модели содержат некорректные параметры.")
         step_model = {"source": source, "transform": list(transform), "starts": list(starts)}
+        bearing_height = raw["step_model"].get("bearing_height")
+        if bearing_height is not None:
+            if isinstance(bearing_height, bool) or not isinstance(bearing_height, (int, float)) or not math.isfinite(bearing_height) or bearing_height < 0:
+                raise ProjectPersistenceError("Высота опоры STEP-модели указана некорректно.")
+            step_model["bearing_height"] = float(bearing_height)
         if placement_matrix is not None:
             if (not isinstance(placement_matrix, list) or len(placement_matrix) != 4
                     or any(not isinstance(row, list) or len(row) != 4 for row in placement_matrix)

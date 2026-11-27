@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 from palletlab.importers.step_import_protocol import encode_message
@@ -41,6 +42,12 @@ def main(path: str) -> int:
         if cached is None:
             raise RuntimeError("Не удалось сохранить кэш импортированной модели.")
         trace.checkpoint("cache-readback", **geometry_footprint(cached.mesh, cached.edges))
+        del cached
+        if os.environ.get("PALLETLAB_STEP_WEB_ASSET") == "1":
+            from palletlab.application.step_import_service import _write_model_asset
+
+            asset = _write_model_asset(model)
+            trace.checkpoint("web-asset-written", **asset["metrics"])
     except Exception as exc:
         _emit("error", message=str(exc))
         return 1

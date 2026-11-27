@@ -555,7 +555,7 @@ class PalletController:
 
     def _replace_layer_input(self, layer_id: str, data: DirectionInput) -> None:
         self.state.layers = [
-            LayerInput(layer.layer_id, layer.axis, data if layer.layer_id == layer_id else layer.direction)
+            replace(layer, direction=data if layer.layer_id == layer_id else layer.direction)
             for layer in self.state.layers
         ]
         if layer_id in ("length", "width"):

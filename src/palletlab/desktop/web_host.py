@@ -47,6 +47,18 @@ class WebApplicationApi:
         """Return a dependency-free handshake for the frontend shell."""
         return {"application": "PalletLab", "version": __version__, "snapshotVersion": SNAPSHOT_VERSION}
 
+    def report_viewport_error(self, details: object) -> dict[str, bool]:
+        """Keep the latest 3D rendering exception locally for troubleshooting."""
+        if not isinstance(details, str) or not details or len(details) > 16000:
+            return {"ok": False}
+        try:
+            root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "PalletLab"
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "viewport-error.log").write_text(details, encoding="utf-8")
+        except OSError:
+            return {"ok": False}
+        return {"ok": True}
+
     def copy_text(self, value: object) -> dict[str, object]:
         """Copy a contact value through the Windows clipboard."""
         if not isinstance(value, str) or not value.strip() or len(value) > 2048:

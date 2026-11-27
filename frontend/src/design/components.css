@@ -184,7 +184,10 @@ button.viewport-toolbar-btn:disabled { color: var(--color-slate-300); background
   .viewport button:not(:disabled):hover :is(.lucide-trash, .lucide-trash-2) path:nth-of-type(n+4) { animation: viewport-trash-lid 600ms ease-in-out; }
   .viewport button:not(:disabled):hover .lucide-square-dimensions path:first-of-type { animation: viewport-top-left 600ms ease-in-out; }
   .viewport button:not(:disabled):hover .lucide-square-dimensions path:last-of-type { animation: viewport-bottom-right 600ms ease-in-out; }
-  .viewport button:not(:disabled):hover .lucide-ruler-dimension-line :is(path, rect) { animation: viewport-ruler 600ms ease-in-out; }
+  .viewport .lucide-ruler-dimension-line path:nth-of-type(5) { transform-box: view-box; transform-origin: center; }
+  .viewport button:not(:disabled):hover .lucide-ruler-dimension-line path:nth-of-type(4) { animation: viewport-dimension-start 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-ruler-dimension-line path:nth-of-type(5) { animation: viewport-dimension-line 600ms ease-in-out; }
+  .viewport button:not(:disabled):hover .lucide-ruler-dimension-line path:nth-of-type(6) { animation: viewport-dimension-end 600ms ease-in-out; }
   .viewport button:not(:disabled):hover .viewport-toolbar-chevron path { animation: viewport-chevron-right 500ms ease-in-out; }
   .viewport button.ui-combobox-trigger:not(:disabled):hover .ui-combobox-arrow path { animation: settings-chevron 500ms ease-in-out; }
   .viewport button:not(:disabled):hover .lucide-maximize-2 path:nth-of-type(-n+2),
@@ -210,7 +213,9 @@ button.viewport-toolbar-btn:disabled { color: var(--color-slate-300); background
 @keyframes viewport-top-right { 0%, 100% { transform: translate(0, 0); } 45% { transform: translate(1px, -1px); } }
 @keyframes viewport-bottom-left { 0%, 100% { transform: translate(0, 0); } 45% { transform: translate(-1px, 1px); } }
 @keyframes viewport-bottom-right { 0%, 100% { transform: translate(0, 0); } 45% { transform: translate(1px, 1px); } }
-@keyframes viewport-ruler { 0%, 100% { transform: translateX(0); } 35% { transform: translateX(-1px); } 65% { transform: translateX(1px); } }
+@keyframes viewport-dimension-start { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(1.5px); } }
+@keyframes viewport-dimension-line { 0%, 100% { transform: scaleX(1); } 50% { transform: scaleX(.775); } }
+@keyframes viewport-dimension-end { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-1.5px); } }
 @keyframes viewport-chevron-right { 0%, 100% { transform: translateX(0); } 40% { transform: translateX(1.333px); } }
 @keyframes viewport-setting-right { 0%, 100% { transform: translateX(0); } 45% { transform: translateX(-2px); } }
 @keyframes viewport-setting-left { 0%, 100% { transform: translateX(0); } 45% { transform: translateX(2px); } }

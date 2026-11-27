@@ -2,7 +2,7 @@ import json
 
 from palletlab.application.service import ApplicationService
 from palletlab.core.models import DirectionInput
-from palletlab.core.persistence import project_to_dict
+from palletlab.core.persistence import project_from_dict, project_to_dict
 from palletlab.core.project_state import ProjectState
 from palletlab.exporters.drawings import DrawingScope
 
@@ -398,6 +398,29 @@ def test_kompas_export_includes_the_saved_step_model_in_the_export_assembly(tmp_
     }
 
 
+def test_step_export_tracks_current_pallet_height_and_keeps_saved_placement(tmp_path, monkeypatch) -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    project["step_model"] = {
+        "source": str(tmp_path / "equipment.step"),
+        "transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, .21, 0, 1],
+        "starts": [0, 0],
+        "bearing_height": 210,
+        "placement_matrix": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 210], [0, 0, 0, 1]],
+    }
+    project["pallet"]["layers"].append({**project["pallet"]["layers"][-1], "id": "layer-2"})
+    captured = {}
+    monkeypatch.setattr("palletlab.application.service.export_kompas_pallet", lambda *args, **kwargs: captured.update(kwargs) or tmp_path)
+    response = service.export_kompas(project, str(tmp_path), include_export_model=True)
+    assert response["ok"], response
+    assert captured["placement_matrix"][2][3] == 280
+    assert project["step_model"]["placement_matrix"][2][3] == 210
+    project["pallet"]["layers"].pop()
+    response = service.export_kompas(project, str(tmp_path), include_export_model=True)
+    assert response["ok"], response
+    assert captured["placement_matrix"][2][3] == 210
+
+
 def test_kompas_export_recovers_placement_for_legacy_step_projects(tmp_path, monkeypatch) -> None:
     from palletlab.application.step_import_service import _viewport_transform
 
@@ -705,6 +728,29 @@ def test_duplicate_copies_grid_sections_visibility_and_first_layer_alignment() -
         assert original["center"][:2] == duplicate["center"][:2]
         assert duplicate["center"][2] == original["center"][2] + delta
     assert service.calculate(snapshot["project"])["ok"]
+
+
+def test_layer_copies_keep_independent_numbers_after_recalculation_and_reload() -> None:
+    service = ApplicationService()
+    project = service.default_project()
+    for source_id in ("width", "width", "copy-1", "length"):
+        response = service.duplicate_layer(project, source_id)
+        assert response["ok"], response
+        project = response["snapshot"]["project"]
+    copies = {layer["id"]: (layer["copy_source_number"], layer["copy_number"])
+              for layer in project["pallet"]["layers"] if "copy_number" in layer}
+    assert copies == {"copy-1": (2, 1), "copy-2": (2, 2), "copy-3": (2, 3), "copy-4": (1, 1)}
+    restored = project_to_dict(project_from_dict(project))
+    assert restored["pallet"]["layers"] == project["pallet"]["layers"]
+    calculated = service.calculate(restored)
+    assert calculated["ok"], calculated
+    assert calculated["snapshot"]["project"]["pallet"]["layers"] == restored["pallet"]["layers"]
+    slot = next(item["slot"] for item in calculated["snapshot"]["pallet"]["insertionMarkers"]
+                if item["slot"]["layerId"] == "copy-1")
+    edited = service.insert_beam(restored, slot, slot["suggestedClearGap"])
+    assert edited["ok"], edited
+    saved_copy = next(layer for layer in edited["snapshot"]["project"]["pallet"]["layers"] if layer["id"] == "copy-1")
+    assert (saved_copy["copy_source_number"], saved_copy["copy_number"]) == (2, 1)
 
 
 def test_duplicate_preserves_manual_beams_in_both_original_and_copy() -> None:

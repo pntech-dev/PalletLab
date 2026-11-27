@@ -20,6 +20,7 @@ import type {
   StepModelSnapshot,
 } from "./PalletViewport";
 import type { StepModelPayload } from "./stepModelGeometry";
+import { LEGACY_STEP_BEARING_HEIGHT, stepViewportTransform, type StepPlacement } from "./stepPlacement";
 import { changeIndependentPalletMargin, MARGIN_PAIRS, palletMargins, type MarginIndex } from "./palletMargins";
 import { remainingImportFeedback, stepImportPhase } from "./stepImportUi";
 import { nextToolbarManualExpanded } from "./viewportToolbarState";
@@ -38,6 +39,7 @@ import { Scrollbar } from "./design/Scrollbar";
 import { ResetDialog } from "./design/ResetDialog";
 import { ProgressIndicator } from "./design/ProgressIndicator";
 import { MessageBox } from "./design/MessageBox";
+import { ViewportErrorBoundary } from "./design/ViewportErrorBoundary";
 import { FolderOpen, Save, SavePen, FolderInput, FolderOutput, Settings, Undo, Redo, Plus, Trash2, SquareDimensions, RulerDimensionLine, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronRight, Info, X, ScanSquare, LayersPlus } from "lucide-react";
 import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
@@ -92,7 +94,7 @@ export type Direction = {
   round_pallet_size: boolean;
   rounding_step: 5 | 50;
 };
-type Layer = { id: string; axis: "length" | "width"; direction: Direction; align_top?: boolean };
+type Layer = { id: string; axis: "length" | "width"; direction: Direction; align_top?: boolean; copy_source_number?: number; copy_number?: number };
 type ManualBeam = { id: string; first: [string, number]; second: [string, number]; first_face?: "top" | "bottom";
   reference?: [string, number] | null; second_reference?: [string, number] | null;
   physical_layer_id?: string; start_point?: number[] | null; [key: string]: unknown };
@@ -149,6 +151,7 @@ export type Project = {
     source: string;
     transform: number[];
     starts: [number, number];
+    bearing_height?: number;
     placement_matrix?: number[][];
   };
   pallet: {
@@ -280,6 +283,7 @@ declare global {
     pywebview?: {
       api?: {
         status: () => Promise<ApplicationStatus>;
+        report_viewport_error?: (details: string) => Promise<{ ok: boolean }>;
         copy_text: (value: string) => Promise<CommandResponse>;
         open_contact: (kind: "repository" | "email", value: string) => Promise<CommandResponse>;
         default_project: () => Promise<object>;
@@ -824,12 +828,35 @@ export function App() {
   const lastNotifiedCalculationError = useRef<string | null>(null);
   const connectionStarted = useRef(false);
   const calculatedInitialProject = useRef<Project | null>(null);
-  const stepPlacement = useRef<{ transform: number[]; starts: [number, number] } | null>(null);
-  // Set by a project reset and consumed by the first calculation that lands
-  // afterwards, so the isometric preset applies with the fresh bounds.
+  const stepPlacement = useRef<StepPlacement | null>(null);
+  // Apply the default camera and fit only after the reset geometry is ready.
   const resetCameraPending = useRef(false);
   const stepRestoreGeneration = useRef(0);
   const [stepRestoreError, setStepRestoreError] = useState<string | null>(null);
+  const [viewportRenderError, setViewportRenderError] = useState(false);
+  const viewportErrorDialog = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!viewportRenderError) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    viewportErrorDialog.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault(); event.stopImmediatePropagation(); setViewportRenderError(false);
+      } else if (event.key === "Tab" && viewportErrorDialog.current) {
+        const buttons = viewportErrorDialog.current.querySelectorAll<HTMLButtonElement>("button:not(:disabled)");
+        if (!buttons.length) return;
+        const first = buttons[0], last = buttons[buttons.length - 1];
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === viewportErrorDialog.current)) {
+          event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => { window.removeEventListener("keydown", onKey, true); previous?.focus(); };
+  }, [viewportRenderError]);
 
   async function restoreProjectStep(nextProject: Project) {
     const generation = ++stepRestoreGeneration.current;
@@ -842,7 +869,7 @@ export function App() {
     stepPlacement.current = null;
     if (!model) return;
     stepImportStartedAt.current = performance.now();
-    stepPlacement.current = { transform: model.transform, starts: model.starts };
+    stepPlacement.current = { transform: model.transform, starts: model.starts, bearingHeight: model.bearing_height ?? LEGACY_STEP_BEARING_HEIGHT };
     setStepPalletBuilt(true);
     setIncludeExportModel(true);
     setIncludePackagingDrawing(true);
@@ -975,11 +1002,10 @@ export function App() {
       setCalculation(response);
       setCalculationError(null);
       if (resetCameraPending.current) {
-        // A project reset replaced the whole scene: return the camera to the
-        // default isometric view once the reset snapshot has rendered, exactly
-        // like building a pallet from a model does.
+        // Match the initial view using the freshly calculated pallet bounds.
         resetCameraPending.current = false;
         setCameraRequest((value) => value + 1);
+        setFitRequest((value) => value + 1);
       }
     } else {
       resetCameraPending.current = false;
@@ -1476,6 +1502,7 @@ export function App() {
         stepPlacement.current = {
           transform: response.modelTransform,
           starts: [margins[0], margins[2]],
+          bearingHeight: response.snapshot.pallet?.size.height ?? LEGACY_STEP_BEARING_HEIGHT,
         };
         const nextProject: Project = {
           ...response.snapshot.project,
@@ -1483,6 +1510,7 @@ export function App() {
             source: stepImport.path,
             transform: response.modelTransform,
             starts: [margins[0], margins[2]],
+              bearing_height: response.snapshot.pallet?.size.height ?? LEGACY_STEP_BEARING_HEIGHT,
             placement_matrix: placementMatrix,
           },
           view: { ...response.snapshot.project.view, camera: "isometric" },
@@ -1835,7 +1863,7 @@ export function App() {
 
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
-      if (settingsOpen || exportSetupOpen || resetOpen) return;
+      if (settingsOpen || exportSetupOpen || resetOpen || viewportRenderError) return;
       if (exporting) {
         if (event.key === "Escape" && !exportCancelling) {
           event.preventDefault();
@@ -2075,11 +2103,16 @@ export function App() {
   }
 
   function layerNumber(layer: Layer, fallbackIndex: number) {
+    if (layer.copy_source_number !== undefined) return layer.copy_source_number;
     if (layer.id === "length") return 1;
     if (layer.id === "width") return 2;
     const suffix = /^layer-(\d+)$/.exec(layer.id)?.[1];
     if (suffix === undefined) return fallbackIndex + 1;
     return suffix === "1" ? 3 : Number(suffix) + 1;
+  }
+
+  function layerName(layer: Layer, fallbackIndex: number) {
+    return `Слой ${layerNumber(layer, fallbackIndex)}${layer.copy_number === undefined ? "" : ` (Копия ${layer.copy_number})`}`;
   }
 
   function toggleLayerVisibility(layerId: string) {
@@ -2705,7 +2738,7 @@ export function App() {
                           className="layer-drag-handle"
                           role="button"
                           tabIndex={-1}
-                          aria-label={`Перетащить слой ${layerNumber(layer, index)}`}
+                          aria-label={`Перетащить ${layerName(layer, index)}`}
                           onPointerDown={(event) => startLayerDrag(event, layer.id)}
                         >
                           <GripVertical size={24} />
@@ -2718,7 +2751,7 @@ export function App() {
                         setExpandedLayerId((current) => current === layer.id ? null : layer.id)
                       }
                     >
-                      <span>Слой {layerNumber(layer, index)}{isLocked(layer.id) ? <span className="sr-only"> · Заблокирован</span> : null}</span>
+                      <span>{layerName(layer, index)}{isLocked(layer.id) ? <span className="sr-only"> · Заблокирован</span> : null}</span>
                       <small>{layer.axis === "length" ? "Продольный" : "Поперечный"}{calculation?.snapshot?.pallet ? ` • ${calculation.snapshot.pallet.beams.filter((beam) => (beam.physicalLayerId ?? beam.layerId) === layer.id).length} шт` : ""}</small>
                     </button>
                     {isLocked(layer.id) ? (
@@ -2726,7 +2759,7 @@ export function App() {
                         <button
                           type="button"
                           className="layer-lock-indicator"
-                          aria-label={`Разблокировать слой ${layerNumber(layer, index)}`}
+                          aria-label={`Разблокировать ${layerName(layer, index)}`}
                           onClick={(event) => {
                             event.stopPropagation();
                             toggleLayerLock(layer.id);
@@ -2739,7 +2772,7 @@ export function App() {
                       <button
                         type="button"
                         className="layer-visibility"
-                        aria-label={hiddenLayerIds.includes(layer.id) ? `Показать слой ${layerNumber(layer, index)}` : `Скрыть слой ${layerNumber(layer, index)}`}
+                        aria-label={`${hiddenLayerIds.includes(layer.id) ? "Показать" : "Скрыть"} ${layerName(layer, index)}`}
                         onClick={() => toggleLayerVisibility(layer.id)}
                         aria-pressed={hiddenLayerIds.includes(layer.id)}
                       >
@@ -2747,7 +2780,7 @@ export function App() {
                       </button>
                     </Tooltip>
                     <Tooltip content={expandedLayerId === layer.id ? "Свернуть параметры слоя" : "Развернуть параметры слоя"}>
-                      <button type="button" className="layer-expand" aria-label={`${expandedLayerId === layer.id ? "Свернуть" : "Развернуть"} слой ${layerNumber(layer, index)}`}
+                      <button type="button" className="layer-expand" aria-label={`${expandedLayerId === layer.id ? "Свернуть" : "Развернуть"} ${layerName(layer, index)}`}
                         aria-expanded={expandedLayerId === layer.id} onClick={() => setExpandedLayerId((current) => current === layer.id ? null : layer.id)}>
                         <ChevronDown size={16} aria-hidden="true" />
                       </button>
@@ -2757,7 +2790,7 @@ export function App() {
                     <fieldset className="layer-card-content" disabled={isLocked(layer.id)}>
                       <div className="layer-direction-field layer-field-wide">
                         <span>Расположение брусьев</span>
-                        <SegmentedControl label={`Расположение брусьев слоя ${layerNumber(layer, index)}`} value={layer.axis}
+                        <SegmentedControl label={`Расположение брусьев: ${layerName(layer, index)}`} value={layer.axis}
                           options={[{ value: "length", label: "Продольные" }, { value: "width", label: "Поперечные" }]}
                           disabled={isLocked(layer.id)} onChange={(axis) => updateLayerAxis(index, axis)} />
                       </div>
@@ -2885,6 +2918,18 @@ export function App() {
         <section className="viewport-panel" aria-label="3D просмотр">
         {calculation?.ok && calculation.snapshot?.pallet ? (
           <>
+            <ViewportErrorBoundary resetKey={stepModelGeneration} onError={(error, info) => {
+              const details = `${error.stack || error.message || String(error)}\n${info.componentStack ?? ""}`;
+              void window.pywebview?.api?.report_viewport_error?.(details.slice(0, 16000)).catch(() => undefined);
+              setViewportRenderError(true);
+              if (stepModel) {
+                setStepModel(null);
+                setStepImport(null);
+                setSelectedStepFace(null);
+                setStepPalletBuilt(false);
+                setStepModelGeneration((value) => value + 1);
+              }
+            }}>
             <Suspense fallback={<p>Загрузка 3D-вида…</p>}>
               <PalletViewport
                 beams={calculation.snapshot.pallet.beams}
@@ -2894,12 +2939,7 @@ export function App() {
                 fitRequest={fitRequest}
                 stepModelGeneration={stepModelGeneration}
                 stepModel={stepModel && stepPalletBuilt && stepPlacement.current && calculation?.snapshot
-                  ? { ...stepModel, transform: stepPlacement.current.transform.map((value, index) => {
-                    const current = palletMargins(calculation.snapshot!.project);
-                    if (index === 12) return value + (current[0] - stepPlacement.current!.starts[0]) / 1000;
-                    if (index === 14) return value + (current[2] - stepPlacement.current!.starts[1]) / 1000;
-                    return value;
-                  }) }
+                  ? { ...stepModel, transform: stepViewportTransform(stepPlacement.current, palletMargins(calculation.snapshot.project), calculation.snapshot.pallet.size.height) }
                   : stepModel}
                 selectedStepFace={selectedStepFace}
                 onSelectStepFace={selectStepSupport}
@@ -2993,6 +3033,7 @@ export function App() {
                 beamSelectionEnabled={insertionMode || beamTool !== "none"}
               />
             </Suspense>
+            </ViewportErrorBoundary>
             <div ref={summaryTransitionRef} className="pallet-summary-transition" aria-hidden={viewportExpanded} inert={viewportExpanded}>
               <PalletSummary size={calculation.snapshot.pallet.size} mass={calculation.snapshot.pallet.massKg}
                 details={palletDetails(calculation.snapshot.pallet.beams)} millimetres={formatMillimetres} kilograms={formatKilograms} />
@@ -3204,6 +3245,15 @@ export function App() {
               label={stepImport.state === "completed" ? "Подготавливаем модель..." : stepImport.label ?? "Подготавливаем STEP-модель…"}
               value={stepImport.state === "running" && stepImport.phase === "faces" ? stepImport.phaseProgress ?? undefined : undefined}
             />
+          </section>
+        </div>
+      ) : null}
+      {viewportRenderError ? (
+        <div className="modal-backdrop" role="presentation">
+          <section ref={viewportErrorDialog} tabIndex={-1} className="modal result-modal" role="alertdialog" aria-modal="true" aria-labelledby="viewport-render-error-title">
+            <header className="result-header"><h2 id="viewport-render-error-title">Ошибка отображения</h2><Button variant="ghost" aria-label="Закрыть" onClick={() => setViewportRenderError(false)}><X size={16} aria-hidden="true" /></Button></header>
+            <MessageBox variant="error" title="Не удалось отобразить 3D-модель" text="Попробуйте повторить импорт модели." />
+            <footer className="modal-actions"><Button onClick={() => setViewportRenderError(false)}>Закрыть</Button></footer>
           </section>
         </div>
       ) : null}

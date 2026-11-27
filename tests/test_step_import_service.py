@@ -41,6 +41,32 @@ def test_step_import_uses_existing_web_asset_without_starting_a_worker(tmp_path,
     assert response["label"] == "STEP-модель загружена из web-кэша."
 
 
+def test_first_step_import_prepares_web_asset_in_worker(tmp_path, monkeypatch):
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+    import palletlab.importers.step_model as step_model
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    source = tmp_path / "model.step"
+    writer = STEPControl_Writer()
+    writer.Transfer(BRepPrimAPI_MakeBox(100, 80, 60).Shape(), STEPControl_AsIs)
+    assert writer.Write(str(source)) == IFSelect_RetDone
+    service = StepImportService()
+    service._operations["operation"] = {"ok": True, "state": "running", "path": str(source)}
+    service._run("operation", source)
+    assert service.status("operation")["state"] == "completed", service.status("operation")
+    assert _cached_web_asset(source) is not None
+
+    def fail_reload(_path):
+        raise AssertionError("The main process must not reload the large STEP cache")
+
+    monkeypatch.setattr(step_model, "load_cached_step_model", fail_reload)
+    response = service.model_snapshot("operation")
+    assert response["ok"], response
+    assert Path(response["assetPath"]).is_file()
+
+
 def test_step_import_status_and_cancel_reject_unknown_operation_ids():
     service = StepImportService()
 

@@ -26,13 +26,13 @@ type AssetHeader = {
 };
 
 function mapStepPositions(source: Float32Array): Float32Array {
-  const positions = new Float32Array(source.length);
   for (let index = 0; index < source.length; index += 3) {
-    positions[index] = source[index] / 1000;
-    positions[index + 1] = source[index + 2] / 1000;
-    positions[index + 2] = source[index + 1] / 1000;
+    const y = source[index + 1];
+    source[index] /= 1000;
+    source[index + 1] = source[index + 2] / 1000;
+    source[index + 2] = y / 1000;
   }
-  return positions;
+  return source;
 }
 
 function edgeSegmentIndices(cells: Uint32Array): Uint32Array {

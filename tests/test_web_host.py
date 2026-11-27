@@ -43,6 +43,16 @@ def test_web_application_api_reports_compatible_snapshot_version() -> None:
     assert status["snapshotVersion"] == 1
 
 
+def test_viewport_error_diagnostic_is_local_and_bounded(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    api = WebApplicationApi()
+    assert api.report_viewport_error("Error: example\nComponent stack") == {"ok": True}
+    log = tmp_path / "PalletLab" / "viewport-error.log"
+    assert log.read_text(encoding="utf-8") == "Error: example\nComponent stack"
+    assert api.report_viewport_error("x" * 16001) == {"ok": False}
+    assert log.read_text(encoding="utf-8") == "Error: example\nComponent stack"
+
+
 def test_restore_step_uses_import_service_and_reports_missing_path(monkeypatch, tmp_path) -> None:
     api = WebApplicationApi()
     source = str(tmp_path / "model.step")

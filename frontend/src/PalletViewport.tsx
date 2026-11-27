@@ -254,6 +254,11 @@ type ViewportBounds = {
   max: [number, number, number];
 };
 
+function ViewportOrbitControls({ bounds }: { bounds: ViewportBounds }) {
+  const canvas = useThree((state) => state.gl.domElement);
+  return <OrbitControls makeDefault domElement={canvas} target={bounds.center} minPolarAngle={0.03} maxPolarAngle={Math.PI - 0.03} />;
+}
+
 function Camera({
   preset,
   presetRequest,
@@ -1335,13 +1340,7 @@ export default function PalletViewport({
           }) : null}
         {showDetails && manualHud && manualSupports[0] ? <Html position={[manualSupports[0].point[0], manualSupports[0].point[1] + 0.24, manualSupports[0].point[2]]} center>{manualHud}</Html> : null}
           {showDetails && sectionHud && sectionHudAnchor ? <Html position={sectionHudAnchor} center>{sectionHud}</Html> : null}
-          <OrbitControls
-            key={preset}
-            makeDefault
-            target={bounds.center}
-            minPolarAngle={0.03}
-            maxPolarAngle={Math.PI - 0.03}
-          />
+          <ViewportOrbitControls key={preset} bounds={bounds} />
           {stepModel && modelVisible && modelTransparency < 100 ? (
             <Suspense fallback={null}>
               <StepModelViewport

@@ -50,6 +50,8 @@ class LayerInput:
     axis: PalletAxis
     direction: DirectionInput
     align_top: bool = False
+    copy_source_number: int | None = None
+    copy_number: int | None = None
 
 
 @dataclass(frozen=True)

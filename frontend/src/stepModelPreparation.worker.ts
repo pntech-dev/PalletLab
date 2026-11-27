@@ -19,7 +19,7 @@ worker.onmessage = async ({ data }) => {
     geometry.setIndex(new BufferAttribute(model.indices, 1));
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
-    const options: MeshBVHOptions & { indirect: true } = { indirect: true };
+    const options: MeshBVHOptions & { indirect: true } = { indirect: true, maxLeafTris: 48 };
     const boundsTree = MeshBVH.serialize(new MeshBVH(geometry, options), { cloneBuffers: false });
     const edges = new BufferGeometry();
     edges.setAttribute("position", new BufferAttribute(model.displayEdgePositions, 3));
