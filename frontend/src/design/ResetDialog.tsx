@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { TriangleAlert, X } from "lucide-react";
+import { X } from "lucide-react";
 import { Button } from "./Button";
+import { MessageBox } from "./MessageBox";
 
 type Props = { onClose: () => void; onConfirm: () => Promise<void> };
 
@@ -35,12 +36,16 @@ export function ResetDialog({ onClose, onConfirm }: Props) {
 
   return createPortal(<div className="modal-backdrop" role="presentation">
     <section ref={dialog} tabIndex={-1} className="modal reset-modal" role="dialog" aria-modal="true" aria-labelledby="reset-title">
-      <header className="reset-header"><h2 id="reset-title">Сбросить конфигуратор?</h2><Button variant="ghost" aria-label="Закрыть" disabled={busy} onClick={onClose}><X size={16} /></Button></header>
+      <header className="reset-header"><h2 id="reset-title">Сбросить конфигуратор?</h2><Button variant="ghost" aria-label="Закрыть" disabled={busy} onClick={onClose}><X size={16} aria-hidden="true" /></Button></header>
       <p>Параметры поддона вернутся к исходным значениям. Добавленные брусья и внесённые изменения будут удалены.</p>
-      <div className="ui-message ui-message--warning"><TriangleAlert size={24} aria-hidden="true" /><div><strong>Текущий проект будет изменён</strong><p>Сохранённые файлы останутся без изменений.</p></div></div>
-      <p className="modal-hint">Чтобы сохранить текущий результат, нажмите «Отмена» и сохраните проект перед сбросом.</p>
+      <MessageBox
+        variant="warning"
+        title="Сброс отменить нельзя"
+        text="Несохранённые изменения будут потеряны. Сохранённые файлы останутся без изменений."
+      />
+      <p className="modal-hint">Если хотите сохранить текущий результат, нажмите «Отменить» и сохраните его перед сбросом.</p>
       {error ? <p className="error" role="alert">{error}</p> : null}
-      <footer className="modal-actions"><Button variant="secondary" disabled={busy} onClick={onClose}>Отмена</Button><Button variant="danger" disabled={busy} onClick={() => void confirm()}>Да, сбросить</Button></footer>
+      <footer className="modal-actions"><Button variant="secondary" disabled={busy} onClick={onClose}>Отменить</Button><Button variant="danger" disabled={busy} onClick={() => void confirm()}>Да, сбросить</Button></footer>
     </section>
   </div>, document.body);
 }

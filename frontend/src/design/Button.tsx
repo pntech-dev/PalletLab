@@ -6,5 +6,5 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 /** Shared button behavior and design-system variants. */
 export function Button({ variant, className = "", type = "button", ...props }: ButtonProps) {
-  return <button type={type} className={[variant && `ui-button--${variant}`, className].filter(Boolean).join(" ")} {...props} />;
+  return <button type={type} className={["ui-button", variant && `ui-button--${variant}`, className].filter(Boolean).join(" ")} {...props} />;
 }

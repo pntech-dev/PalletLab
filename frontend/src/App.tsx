@@ -37,6 +37,7 @@ import { detailCount, PalletSummary } from "./design/PalletSummary";
 import { Scrollbar } from "./design/Scrollbar";
 import { ResetDialog } from "./design/ResetDialog";
 import { ProgressIndicator } from "./design/ProgressIndicator";
+import { MessageBox } from "./design/MessageBox";
 import { FolderOpen, Save, SaveAll, FolderInput, FolderOutput, Settings, Undo, Redo, Plus, Trash2, SquareDimensions, RulerDimensionLine, Maximize2, Minimize2, LockKeyhole, LockKeyholeOpen, Copy, Eye, EyeOff, GripVertical, ChevronDown, ChevronRight, Info, X, ScanSquare, LayersPlus } from "lucide-react";
 import logo from "./assets/logo.svg";
 import { DEFAULT_SETTINGS, projectWithDefaults, applyDefaultsIfUnmodified, type AppSettings } from "./appSettings";
@@ -711,6 +712,13 @@ export function App() {
   const [stepPalletBuilt, setStepPalletBuilt] = useState(false);
   const [solidWorksOptions, setSolidWorksOptions] = useState<SolidWorksOptions | null>(storedSolidWorksOptions);
   const [exporting, setExporting] = useState<DrawingCad | null>(null);
+  const [exportStage, setExportStage] = useState<"models" | "drawings">("models");
+  const [exportCancelling, setExportCancelling] = useState(false);
+  const exportCancelRequested = useRef(false);
+  const requestCancelExport = useCallback(() => {
+    exportCancelRequested.current = true;
+    setExportCancelling(true);
+  }, []);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exportSetupOpen, setExportSetupOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
@@ -1231,10 +1239,11 @@ export function App() {
     const cad = exportCadSystem;
     const options = solidWorksOptions;
     if (cad === "solidworks" && (!options
-      || !options.partTemplate
-      || (includePalletModel && !options.assemblyTemplate)
-      || !options.materialLibrary
-      || !options.materialName)) {
+      || !options.partTemplate.trim()
+      || !options.assemblyTemplate.trim()
+      || !options.drawingTemplate.trim()
+      || !options.materialLibrary.trim()
+      || !options.materialName.trim())) {
       setExportSetupOpen(false);
       setSettingsInitialSection("cad");
       setSettingsOpen(true);
@@ -1242,6 +1251,9 @@ export function App() {
     }
 
     setExportSetupOpen(false);
+    exportCancelRequested.current = false;
+    setExportCancelling(false);
+    setExportStage("models");
     setExporting(cad);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     const target = cad === "kompas" ? "КОМПАС-3D" : "SolidWorks";
@@ -1280,8 +1292,19 @@ export function App() {
       const drawingJobs: { scope: DrawingScope; exportModel: boolean }[] = [];
       if (drawingScope) drawingJobs.push({ scope: drawingScope, exportModel: false });
       if (includePackagingDrawing) drawingJobs.push({ scope: "assembly", exportModel: true });
+      if (exportCancelRequested.current) {
+        setExportResult({
+          target,
+          ok: false,
+          message: drawingJobs.length > 0
+            ? `Экспорт прерван пользователем.\nМодели сохранены в папке:\n${models.output}`
+            : `Экспорт прерван пользователем.\nМодели уже были сформированы в папке:\n${models.output}`,
+        });
+        return;
+      }
       let drawingsOutput: string | null = null;
       for (const job of drawingJobs) {
+        setExportStage("drawings");
         const drawings = await api.create_drawings(
           project,
           cad,
@@ -1290,6 +1313,14 @@ export function App() {
           models.output,
           job.exportModel,
         );
+        if (exportCancelRequested.current) {
+          setExportResult({
+            target,
+            ok: false,
+            message: `Экспорт прерван пользователем.\nМодели сохранены в папке:\n${models.output}`,
+          });
+          return;
+        }
         if (drawings.cancelled || !drawings.ok) {
           setExportResult({
             target,
@@ -1300,19 +1331,12 @@ export function App() {
         }
         drawingsOutput = drawings.output ?? drawingsOutput;
       }
-      if (drawingsOutput) {
-        setExportResult({
-          target,
-          ok: true,
-          message: `Модели сохранены в папке:\n${models.output}\n\nЧертежи сохранены в папке:\n${drawingsOutput}`,
-        });
-        return;
-      }
-
       setExportResult({
         target,
         ok: true,
-        message: `Модели сохранены в папке:\n${models.output}`,
+        message: drawingsOutput && drawingsOutput !== models.output
+          ? `Модели сохранены в папке:\n${models.output}\n\nЧертежи сохранены в папке:\n${drawingsOutput}`
+          : `Папка экспорта сохранена тут:\n${models.output}`,
       });
     } catch (error) {
       setExportResult({
@@ -1323,6 +1347,8 @@ export function App() {
           : error instanceof Error ? error.message : "Не удалось выполнить экспорт CAD.",
       });
     } finally {
+      exportCancelRequested.current = false;
+      setExportCancelling(false);
       setExporting(null);
     }
   }
@@ -1351,8 +1377,15 @@ export function App() {
   }
 
   async function cancelStepImport() {
+    if (!stepImport) return;
+    if (stepImport.state === "completed") {
+      stepRestoreGeneration.current += 1;
+      setStepImport(null);
+      setStepRestoreError(null);
+      return;
+    }
     const api = window.pywebview?.api;
-    if (!api || !stepImport?.operationId) return;
+    if (!api || !stepImport.operationId) return;
     setStepImport(await api.cancel_step_import(stepImport.operationId));
   }
 
@@ -1776,6 +1809,27 @@ export function App() {
   useEffect(() => {
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
       if (settingsOpen || exportSetupOpen || resetOpen) return;
+      if (exporting) {
+        if (event.key === "Escape" && !exportCancelling) {
+          event.preventDefault();
+          requestCancelExport();
+        }
+        return;
+      }
+      if (exportResult) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setExportResult(null);
+        }
+        return;
+      }
+      if (stepImport && stepImportPhase(stepImport.state, stepModel !== null, stepRestoreError !== null)) {
+        if (event.key === "Escape" && stepImport.state !== "cancelling") {
+          event.preventDefault();
+          void cancelStepImport();
+        }
+        return;
+      }
       if (event.key === "Escape" && event.target instanceof Element && event.target.closest(".scene-settings-anchor")) return;
       if (event.key === "Escape") {
         event.preventDefault();
@@ -2952,6 +3006,7 @@ export function App() {
             </div>
             <fieldset className="export-options">
               <legend>Что экспортируем</legend>
+              <div className="export-checkboxes">
               <div className="export-option-group">
               <label className="export-checkbox">
                 <Checkbox
@@ -3014,12 +3069,13 @@ export function App() {
                 </label>
                 </div>
               ) : null}
+              </div>
               {hasBuiltStepModel && includeExportModel && exportCadSystem === "solidworks" ? (
                 <p className="modal-hint">Если SolidWorks не сможет прочитать исходный STEP, будет создана совместимая копия геометрии. Имена и цвета компонентов могут не сохраниться; копия может быть значительно больше оригинала и потребовать много памяти при импорте. Исходный STEP останется в папке экспорта.</p>
               ) : null}
             </fieldset>
             <label className="file-field export-directory-field">
-              Папка сохранения
+              Путь сохранения (по умолчанию сохранение на рабочий стол)
               <div className="file-field-control">
                 <input
                   type="text"
@@ -3031,14 +3087,14 @@ export function App() {
                     setExportDirectoryError(null);
                   }}
                 />
-                <button type="button" className="secondary" onClick={() => void browseExportDirectory()}>
+                <Button variant="secondary" onClick={() => void browseExportDirectory()}>
                   Обзор
-                </button>
+                </Button>
               </div>
             </label>
             {exportDirectoryError ? <p className="error" role="alert">{exportDirectoryError}</p> : null}
             <footer className="modal-actions">
-              <Button variant="secondary" onClick={() => setExportSetupOpen(false)}>Отмена</Button>
+              <Button variant="secondary" onClick={() => setExportSetupOpen(false)}>Отменить</Button>
               <Button
                 disabled={!includePartModels || !exportDirectory.trim() || exporting !== null}
                 onClick={() => void exportCad()}
@@ -3052,40 +3108,75 @@ export function App() {
       {exporting ? (
         <div className="modal-backdrop" role="presentation">
           <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="export-progress-title">
-            <h2 id="export-progress-title">Экспорт выполняется</h2>
-            <ProgressIndicator label={exporting === "solidworks"
-                ? includeExportModel
-                  ? "SolidWorks импортирует STEP-модель и формирует упаковочную сборку. Для крупных моделей подготовка может занять несколько минут…"
-                  : "SolidWorks создаёт выбранные модели и чертежи…"
-                : includeExportModel
-                  ? "КОМПАС-3D импортирует STEP-модель и формирует упаковочную сборку. Импорт крупной модели может занять несколько минут…"
-                  : "КОМПАС-3D создаёт выбранные модели и чертежи…"} />
-            <p className="modal-hint">Не закрывайте PalletLab и CAD-систему до завершения операции.</p>
+            <header className="progress-header">
+              <h2 id="export-progress-title">Экспорт поддона</h2>
+              <Button variant="ghost" aria-label="Отменить экспорт" disabled={exportCancelling} onClick={requestCancelExport}>
+                <X size={16} aria-hidden="true" />
+              </Button>
+            </header>
+            <ProgressIndicator
+              label={
+                exportCancelling
+                  ? "Отменяем экспорт…"
+                  : exportStage === "drawings"
+                    ? "Создание чертежей..."
+                    : exporting === "solidworks"
+                      ? includeExportModel
+                        ? "SolidWorks импортирует STEP-модель и формирует упаковочную сборку..."
+                        : "SolidWorks создаёт модели..."
+                      : includeExportModel
+                        ? "КОМПАС-3D импортирует STEP-модель и формирует упаковочную сборку..."
+                        : "КОМПАС-3D создаёт модели..."
+              }
+            />
+            <footer className="modal-actions">
+              <Button variant="secondary" disabled={exportCancelling} onClick={requestCancelExport}>
+                {exportCancelling ? "Отменяем…" : "Отменить"}
+              </Button>
+            </footer>
           </section>
         </div>
       ) : null}
       {exportResult ? (
         <div className="modal-backdrop" role="presentation">
-          <section className="modal result-modal" role="dialog" aria-modal="true" aria-labelledby="export-result-title">
-            <h2 id="export-result-title">{exportResult.ok ? "Экспорт завершён" : "Не удалось экспортировать"}</h2>
-            <p><strong>{exportResult.target}</strong></p>
-            <p className={exportResult.ok ? "success-message" : "error"}>{exportResult.message}</p>
-            <footer className="modal-actions"><button type="button" onClick={() => setExportResult(null)}>Закрыть</button></footer>
+          <section
+            className="modal result-modal"
+            role={exportResult.ok ? "dialog" : "alertdialog"}
+            aria-modal="true"
+            aria-labelledby="export-result-title"
+          >
+            <header className="result-header">
+              <h2 id="export-result-title">{exportResult.ok ? "Экспорт поддона завершён" : "Ошибка экспорта"}</h2>
+              <Button variant="ghost" aria-label="Закрыть" onClick={() => setExportResult(null)}>
+                <X size={16} aria-hidden="true" />
+              </Button>
+            </header>
+            <MessageBox
+              variant={exportResult.ok ? "success" : "error"}
+              title={exportResult.ok ? "Экспорт успешно завершён" : "Не удалось экспортировать поддон"}
+              text={exportResult.message}
+            />
+            <footer className="modal-actions">
+              <Button onClick={() => setExportResult(null)}>
+                {exportResult.ok ? "Хорошо, продолжить!" : "Закрыть"}
+              </Button>
+            </footer>
           </section>
         </div>
       ) : null}
       {stepImport && stepImportPhase(stepImport.state, stepModel !== null, stepRestoreError !== null) ? (
         <div className="modal-backdrop" role="presentation">
           <section className="modal progress-modal" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="step-import-title">
-            <h2 id="step-import-title">Импорт STEP-модели</h2>
-            <ProgressIndicator label={stepImport.state === "completed" ? "Подготавливаем модель к отображению…" : stepImport.label ?? "Подготавливаем STEP-модель…"}
-              value={stepImport.state === "completed" ? undefined : stepImport.progress} />
-            <p className="modal-hint">Не изменяйте проект до окончания импорта.</p>
-            {stepImport.state === "running" ? (
-              <footer className="modal-actions">
-                <button type="button" className="secondary" onClick={() => void cancelStepImport()}>Отменить импорт</button>
-              </footer>
-            ) : null}
+            <header className="progress-header">
+              <h2 id="step-import-title">Импорт модели</h2>
+              <Button variant="ghost" aria-label="Отменить импорт" disabled={stepImport.state === "cancelling"} onClick={() => void cancelStepImport()}>
+                <X size={16} aria-hidden="true" />
+              </Button>
+            </header>
+            <ProgressIndicator
+              label={stepImport.state === "completed" ? "Подготавливаем модель..." : stepImport.label ?? "Подготавливаем STEP-модель…"}
+              value={stepImport.state === "completed" ? undefined : stepImport.progress}
+            />
           </section>
         </div>
       ) : null}

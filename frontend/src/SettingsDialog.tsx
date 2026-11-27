@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Settings, Box, Info, Axis3D, X, Copy, Check, TriangleAlert, WandSparkles } from "lucide-react";
+import { Settings, Box, Info, Axis3D, X, Copy, Check, WandSparkles } from "lucide-react";
 import { SegmentedControl } from "./design/SegmentedControl";
 import { Button } from "./design/Button";
 import { CopyButton, CopyButtonIcon } from "./design/CopyButton";
 import { Checkbox } from "./design/Checkbox";
 import { Combobox } from "./design/Combobox";
+import { MessageBox } from "./design/MessageBox";
 import type { AppSettings } from "./appSettings";
 import type { SolidWorksOptions, UpdateStatus } from "./App";
 
@@ -205,11 +206,11 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
       setActive("general"); setError("Период автосохранения должен быть от 1 до 1440 минут."); return;
     }
     const cadChanged = JSON.stringify(cadDraft) !== initialCad.current;
-    if (cadChanged && (missingFiles.partTemplate || missingFiles.assemblyTemplate || missingFiles.materialLibrary)) {
+    if (cadChanged && (missingFiles.partTemplate || missingFiles.assemblyTemplate || missingFiles.drawingTemplate || missingFiles.materialLibrary)) {
       setActive("cad"); setCadError("Укажите действующие пути к шаблонам и библиотеке материалов."); return;
     }
-    if (cadChanged && [cadDraft.partTemplate, cadDraft.assemblyTemplate, cadDraft.materialLibrary, cadDraft.materialName].some((value) => !value.trim())) {
-    setActive("cad"); setCadError("Для сохранения настроек SolidWorks выберите шаблоны детали и сборки, библиотеку и материал."); return;
+    if (cadChanged && [cadDraft.partTemplate, cadDraft.assemblyTemplate, cadDraft.drawingTemplate, cadDraft.materialLibrary, cadDraft.materialName].some((value) => !value.trim())) {
+    setActive("cad"); setCadError("Для сохранения настроек SolidWorks выберите шаблоны детали, сборки и чертежа, библиотеку и материал."); return;
     }
     setSaving(true);
     try { if (await onSave(draft, cadChanged ? cadDraft : null)) onClose(); else setError("Не удалось сохранить настройки программы."); }
@@ -299,14 +300,14 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
             </div>}
             {active === "cad" && <div className="settings-standard-groups settings-cad-groups">
               <section className="settings-cad-search" aria-label="Автопоиск шаблонов">
-                {searchMessage && Object.values(missingFiles).some(Boolean) ? <div className="settings-cad-warning" role="status">
-                  <TriangleAlert size={24} aria-hidden="true" /><div><strong>Не все файлы найдены</strong><p>{searchMessage}</p></div>
-                </div> : searchMessage ? <p className="settings-cad-search-status" role="status">{searchMessage}</p> : null}
+                {searchMessage && Object.values(missingFiles).some(Boolean) ? (
+                  <MessageBox variant="warning" role="status" title="Не все файлы найдены" text={searchMessage} />
+                ) : searchMessage ? <p className="settings-cad-search-status" role="status">{searchMessage}</p> : null}
                 <Button disabled={cadBusy || saving} onClick={() => void searchCadFiles()}><WandSparkles size={16} aria-hidden="true" />{searching ? "Поиск…" : "Заполнить автоматически"}</Button>
               </section>
               <section className="settings-group settings-cad-group"><h4>SolidWorks</h4>
                 <p>Выберите шаблоны детали, сборки и чертежа, библиотеку материалов и материал для экспорта.</p>
-                {initialSection === "cad" && !solidworks ? <p>Для экспорта в SolidWorks сначала заполните и сохраните эти настройки.</p> : null}
+                {initialSection === "cad" && (!solidworks || [solidworks.partTemplate, solidworks.assemblyTemplate, solidworks.drawingTemplate, solidworks.materialLibrary, solidworks.materialName].some((value) => !value.trim())) ? <p>Для экспорта в SolidWorks сначала заполните и сохраните эти настройки.</p> : null}
                 <label className="file-field">Шаблон детали (.prtdot)
                   <div className="file-field-control"><input value={cadDraft.partTemplate} placeholder="Не выбран" disabled={searching} aria-invalid={missingFiles.partTemplate} aria-describedby={missingFiles.partTemplate ? "part-template-error" : undefined} onChange={(event) => { setMissingFiles((current) => ({ ...current, partTemplate: false })); setCadDraft((current) => ({ ...current, partTemplate: event.target.value })); }} /><button type="button" className="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("part")}>Обзор</button></div>
                   {missingFiles.partTemplate ? <span id="part-template-error" className="field-error">Шаблон детали не найден.</span> : null}
@@ -316,7 +317,7 @@ export function SettingsDialog({ version, settings, solidworks, initialSection =
                   {missingFiles.assemblyTemplate ? <span id="assembly-template-error" className="field-error">Шаблон сборки не найден.</span> : null}
                 </label>
                 <label className="file-field">Шаблон чертежа (.drwdot)
-                  <div className="file-field-control"><input value={cadDraft.drawingTemplate} placeholder="Не выбран — использовать шаблон SolidWorks по умолчанию" disabled={searching} aria-invalid={missingFiles.drawingTemplate} aria-describedby={missingFiles.drawingTemplate ? "drawing-template-error" : undefined} onChange={(event) => { setMissingFiles((current) => ({ ...current, drawingTemplate: false })); setCadDraft((current) => ({ ...current, drawingTemplate: event.target.value })); }} /><button type="button" className="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("drawing")}>Обзор</button></div>
+                  <div className="file-field-control"><input value={cadDraft.drawingTemplate} placeholder="Не выбран" disabled={searching} aria-invalid={missingFiles.drawingTemplate} aria-describedby={missingFiles.drawingTemplate ? "drawing-template-error" : undefined} onChange={(event) => { setMissingFiles((current) => ({ ...current, drawingTemplate: false })); setCadDraft((current) => ({ ...current, drawingTemplate: event.target.value })); }} /><button type="button" className="secondary" disabled={cadBusy || saving} onClick={() => void selectTemplate("drawing")}>Обзор</button></div>
                   {missingFiles.drawingTemplate ? <span id="drawing-template-error" className="field-error">Шаблон чертежа не найден.</span> : null}
                 </label>
                 <label className="file-field">Библиотека материалов (.sldmat)
