@@ -2453,17 +2453,43 @@ fieldset {
     width: 20px;
     height: 20px;
 }
+.settings-range {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-4);
+}
+.settings-range > span,
+.settings-range > output {
+    color: var(--text-muted);
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-ui);
+    white-space: nowrap;
+}
+.settings-range > output {
+    min-width: 34px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
 .manual-hud .scene-settings-range {
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--space-2);
 }
+input.ui-slider,
+input.ui-slider:hover,
+input.ui-slider:focus,
 .manual-hud .scene-settings-range input.ui-slider {
     appearance: none;
+    width: 100%;
     height: 16px;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
     border: 0;
     border-radius: 0;
     background: transparent;
+    cursor: pointer;
 }
 .ui-slider::-webkit-slider-runnable-track {
     height: 4px;

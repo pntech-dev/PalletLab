@@ -8,6 +8,7 @@ export type AppSettings = {
     showDimensions: boolean;
     showGrid: boolean;
     camera: CameraPreset;
+    modelTransparency: number;
     checkUpdates: boolean;
     exportDirectory: string;
 };
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     showDimensions: true,
     showGrid: true,
     camera: "isometric",
+    modelTransparency: 80,
     checkUpdates: true,
     exportDirectory: "",
 };

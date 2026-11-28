@@ -656,6 +656,7 @@ export default function PalletViewport({
     fitRequest,
     stepModel,
     stepModelGeneration = 0,
+    defaultModelTransparency = DEFAULT_MODEL_TRANSPARENCY,
     selectedStepFace,
     onSelectStepFace,
     stepFaceSelectionEnabled = false,
@@ -709,6 +710,7 @@ export default function PalletViewport({
     fitRequest: number;
     stepModel?: StepModelSnapshot | null;
     stepModelGeneration?: number;
+    defaultModelTransparency?: number;
     selectedStepFace?: number | null;
     onSelectStepFace?: (faceId: number) => void;
     stepFaceSelectionEnabled?: boolean;
@@ -1147,14 +1149,24 @@ export default function PalletViewport({
     const [showDetails, setShowDetails] = useState(false);
     const [modelVisible, setModelVisible] = useState(true);
     const [modelTransparency, setModelTransparency] = useState(
-        DEFAULT_MODEL_TRANSPARENCY,
+        defaultModelTransparency,
     );
+    const modelTransparencyModified = useRef(false);
     // A freshly imported or restored model must show up visible with the
     // default scene display settings, whatever the previous model used.
     useEffect(() => {
+        modelTransparencyModified.current = false;
         setModelVisible(true);
-        setModelTransparency(DEFAULT_MODEL_TRANSPARENCY);
+        setModelTransparency(defaultModelTransparency);
     }, [stepModelGeneration]);
+    useEffect(() => {
+        if (!stepModel) {
+            modelTransparencyModified.current = false;
+        }
+        if (!modelTransparencyModified.current) {
+            setModelTransparency(defaultModelTransparency);
+        }
+    }, [defaultModelTransparency, stepModel]);
     const [errorPresentation, setErrorPresentation] = useState<{
         message: string;
         version: number;
@@ -1881,7 +1893,10 @@ export default function PalletViewport({
                         modelVisible={modelVisible}
                         setModelVisible={setModelVisible}
                         transparency={modelTransparency}
-                        setTransparency={setModelTransparency}
+                        setTransparency={(value) => {
+                            modelTransparencyModified.current = true;
+                            setModelTransparency(value);
+                        }}
                         dimensionsVisible={dimensionsVisible}
                         setDimensionsVisible={onDimensionsVisibleChange}
                         gridVisible={gridVisible}

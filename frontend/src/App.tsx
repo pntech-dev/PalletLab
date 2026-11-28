@@ -3746,7 +3746,7 @@ export function App() {
             tooltip: "Выбрать и удалить брусья со сцены",
             label:
                 beamTool === "delete"
-                    ? `Удалить (${selectedBeams.length})`
+                    ? `Удалить брус (${selectedBeams.length})`
                     : "Удалить брус",
             ariaLabel: "Удалить брус",
             icon: <Trash2 size={16} />,
@@ -5252,6 +5252,9 @@ export function App() {
                                             fitRequest={fitRequest}
                                             stepModelGeneration={
                                                 stepModelGeneration
+                                            }
+                                            defaultModelTransparency={
+                                                settings.modelTransparency
                                             }
                                             stepModel={
                                                 stepModel &&

@@ -397,7 +397,8 @@ class _WebSettings:
 
     _DEFAULTS: dict[str, object] = {
         "rounding": "50", "autosaveEnabled": True, "autosaveMinutes": 1,
-        "showDimensions": True, "showGrid": True, "camera": "isometric", "checkUpdates": True,
+        "showDimensions": True, "showGrid": True, "camera": "isometric",
+        "modelTransparency": 80, "checkUpdates": True,
     }
 
     @staticmethod
@@ -410,12 +411,14 @@ class _WebSettings:
 
     @classmethod
     def _valid_settings(cls, value: object) -> bool:
+        transparency = value.get("modelTransparency", cls._DEFAULTS["modelTransparency"]) if isinstance(value, dict) else None
         return (isinstance(value, dict)
                 and value.get("rounding") in ("50", "5", "none")
                 and value.get("camera") in ("isometric", "top", "front", "side")
                 and isinstance(value.get("exportDirectory", ""), str)
                 and all(type(value.get(key)) is bool for key in ("autosaveEnabled", "showDimensions", "showGrid", "checkUpdates"))
-                and type(value.get("autosaveMinutes")) is int and 1 <= value["autosaveMinutes"] <= 1440)
+                and type(value.get("autosaveMinutes")) is int and 1 <= value["autosaveMinutes"] <= 1440
+                and type(transparency) is int and 0 <= transparency <= 100)
 
     def application_settings(self) -> dict[str, object]:
         with self._lock:

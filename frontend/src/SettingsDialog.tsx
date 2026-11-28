@@ -17,6 +17,7 @@ import { Checkbox } from "./design/Checkbox";
 import { Combobox } from "./design/Combobox";
 import { MessageBox } from "./design/MessageBox";
 import { Scrollbar } from "./design/Scrollbar";
+import { Slider } from "./design/Slider";
 import { Tooltip } from "./design/Tooltip";
 import type { AppSettings } from "./appSettings";
 import type { SolidWorksOptions, UpdateStatus } from "./App";
@@ -780,6 +781,34 @@ export function SettingsDialog({
                                                 }
                                             />
                                         </div>
+                                    </section>
+                                    <section className="settings-group">
+                                        <h4>Параметры модели</h4>
+                                        <label className="settings-range">
+                                            <span>
+                                                Прозрачность по умолчанию
+                                            </span>
+                                            <Slider
+                                                min={0}
+                                                max={100}
+                                                step={1}
+                                                aria-label="Прозрачность по умолчанию"
+                                                value={draft.modelTransparency}
+                                                onChange={(event) =>
+                                                    setDraft({
+                                                        ...draft,
+                                                        modelTransparency:
+                                                            Number(
+                                                                event.target
+                                                                    .value,
+                                                            ),
+                                                    })
+                                                }
+                                            />
+                                            <output>
+                                                {draft.modelTransparency}%
+                                            </output>
+                                        </label>
                                     </section>
                                 </div>
                             )}

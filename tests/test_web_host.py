@@ -344,13 +344,17 @@ def test_application_settings_persist_and_do_not_replace_cad_settings(tmp_path) 
     assert store.save_drawing_template("kompas", "drawing.cdt")
     settings = store.application_settings()
     settings.update({"rounding": "5", "autosaveEnabled": False, "autosaveMinutes": 10,
-                     "showDimensions": False, "showGrid": False, "camera": "top", "checkUpdates": False})
+                     "showDimensions": False, "showGrid": False, "camera": "top",
+                     "modelTransparency": 45, "checkUpdates": False})
     assert store.save_application_settings(settings)
     reloaded = _WebSettings(tmp_path / "settings.json")
     assert reloaded.application_settings() == settings
     assert reloaded.drawing_templates() == {"kompas": "drawing.cdt"}
     assert not store.save_application_settings({**settings, "autosaveMinutes": 0})
     assert not store.save_application_settings({**settings, "showGrid": "false"})
+    assert not store.save_application_settings({**settings, "modelTransparency": -1})
+    assert not store.save_application_settings({**settings, "modelTransparency": 101})
+    assert not store.save_application_settings({**settings, "modelTransparency": "45"})
     assert store.application_settings() == settings
 
 
