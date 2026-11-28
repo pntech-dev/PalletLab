@@ -1,59 +1,81 @@
 /* Values from the Pallet Lab Figma styles; semantic aliases are used by UI components. */
 :root {
-  --color-white: #fff;
-  --color-neutral-50: #fafafa;
-  --color-neutral-100: #f5f5f5;
-  --color-neutral-200: #e5e5e5;
-  --color-neutral-300: #d4d4d4;
-  --color-neutral-400: #a1a1a1;
-  --color-neutral-500: #737373;
-  --color-neutral-600: #525252;
-  --color-neutral-700: #404040;
-  --color-neutral-800: #262626;
-  --color-neutral-950: #0a0a0;
-  --color-stone-400: #a6a09b;
-  --color-blue-50: #eff6ff;
-  --color-blue-100: #dbeafe;
-  --color-blue-400: #51a2ff;
-  --color-blue-500: #2b7fff;
-  --color-blue-600: #155dfc;
-  --color-blue-700: #1447e6;
-  --color-blue-800: #193cb8;
-  --color-red-50: #fef2f2;
-  --color-red-500: #fb2c36;
-  --color-red-600: #e7000b;
-  --color-red-700: #c10007;
-  --color-red-800: #9f0712;
-  --color-green-50: #f0fdf4;
-  --color-green-600: #00a63e;
-  --color-green-800: #016630;
-  --color-orange-50: #fff7ed;
-  --color-yellow-800: #894b00;
-  --color-slate-300: #cad5e2;
-  --color-slate-400: #90a1b9;
-  --surface-app: var(--color-neutral-200);
-  --surface-panel: var(--color-white);
-  --surface-muted: var(--color-neutral-100);
-  --text-primary: var(--color-neutral-700);
-  --text-muted: var(--color-neutral-500);
-  --border-default: var(--color-neutral-300);
-  --accent: var(--color-blue-600);
-  --danger: var(--color-red-500);
-  --font-ui: 'Inter Variable', Inter, sans-serif;
-  --font-size-caption: 12px;
-  --font-size-body: 14px;
-  --font-size-heading: 16px;
-  --line-height-ui: 1.4;
-  --radius-control: 8px;
-  --radius-panel: 16px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-6: 24px;
-  --shadow-card: 0 4px 24px rgb(0 0 0 / 8%);
-  --shadow-hud: 0 4px 15px rgb(0 0 0 / 15%);
-  --surface-hud: rgb(64 64 64 / 70%);
-  --surface-error: rgb(193 0 7 / 70%);
-  --ease-quick: linear(0, 0.065 5%, 0.219 10%, 0.412 15%, 0.606 20%, 0.777 25%, 0.913 30%, 1.01 35%, 1.071 40%, 1.101 45%, 1.108 50%, 1.1 55%, 1.082 60%, 1.061 65%, 1.04 70%, 1.022 75%, 1.008 80%, 0.998 85%, 0.992 90%, 0.989 95%, 1);
+    --color-white: #fff;
+    --color-neutral-50: #fafafa;
+    --color-neutral-100: #f5f5f5;
+    --color-neutral-200: #e5e5e5;
+    --color-neutral-300: #d4d4d4;
+    --color-neutral-400: #a1a1a1;
+    --color-neutral-500: #737373;
+    --color-neutral-600: #525252;
+    --color-neutral-700: #404040;
+    --color-neutral-800: #262626;
+    --color-neutral-950: #0a0a0;
+    --color-stone-400: #a6a09b;
+    --color-blue-50: #eff6ff;
+    --color-blue-100: #dbeafe;
+    --color-blue-400: #51a2ff;
+    --color-blue-500: #2b7fff;
+    --color-blue-600: #155dfc;
+    --color-blue-700: #1447e6;
+    --color-blue-800: #193cb8;
+    --color-red-50: #fef2f2;
+    --color-red-500: #fb2c36;
+    --color-red-600: #e7000b;
+    --color-red-700: #c10007;
+    --color-red-800: #9f0712;
+    --color-green-50: #f0fdf4;
+    --color-green-600: #00a63e;
+    --color-green-800: #016630;
+    --color-orange-50: #fff7ed;
+    --color-yellow-800: #894b00;
+    --color-slate-300: #cad5e2;
+    --color-slate-400: #90a1b9;
+    --surface-app: var(--color-neutral-200);
+    --surface-panel: var(--color-white);
+    --surface-muted: var(--color-neutral-100);
+    --text-primary: var(--color-neutral-700);
+    --text-muted: var(--color-neutral-500);
+    --border-default: var(--color-neutral-300);
+    --accent: var(--color-blue-600);
+    --danger: var(--color-red-500);
+    --font-ui: "Inter Variable", Inter, sans-serif;
+    --font-size-caption: 12px;
+    --font-size-body: 14px;
+    --font-size-heading: 16px;
+    --line-height-ui: 1.4;
+    --radius-control: 8px;
+    --radius-panel: 16px;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+    --shadow-card: 0 4px 24px rgb(0 0 0 / 8%);
+    --shadow-hud: 0 4px 15px rgb(0 0 0 / 15%);
+    --surface-hud: rgb(64 64 64 / 70%);
+    --surface-error: rgb(193 0 7 / 70%);
+    --ease-quick: linear(
+        0,
+        0.065 5%,
+        0.219 10%,
+        0.412 15%,
+        0.606 20%,
+        0.777 25%,
+        0.913 30%,
+        1.01 35%,
+        1.071 40%,
+        1.101 45%,
+        1.108 50%,
+        1.1 55%,
+        1.082 60%,
+        1.061 65%,
+        1.04 70%,
+        1.022 75%,
+        1.008 80%,
+        0.998 85%,
+        0.992 90%,
+        0.989 95%,
+        1
+    );
 }

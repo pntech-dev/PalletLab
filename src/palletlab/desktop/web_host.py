@@ -115,6 +115,9 @@ class WebApplicationApi:
     def download_update(self) -> dict[str, object]:
         return self._updates.download()
 
+    def cancel_update(self) -> dict[str, object]:
+        return self._updates.cancel()
+
     def install_update(self) -> dict[str, object]:
         if self._window is None:
             return {"state": "failed", "error": "Окно приложения недоступно."}

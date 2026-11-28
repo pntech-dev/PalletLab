@@ -2,114 +2,170 @@ import { useLayoutEffect, useRef } from "react";
 
 export const TOOLBAR_EXPAND_DURATION_MS = 520;
 export const TOOLBAR_COLLAPSE_DURATION_MS = 420;
-export const TOOLBAR_EXPAND_SPRING = sampleSpring(240, 20, TOOLBAR_EXPAND_DURATION_MS, 40);
-export const TOOLBAR_COLLAPSE_SPRING = sampleSpring(300, 26, TOOLBAR_COLLAPSE_DURATION_MS, 36);
+export const TOOLBAR_EXPAND_SPRING = sampleSpring(
+    240,
+    20,
+    TOOLBAR_EXPAND_DURATION_MS,
+    40,
+);
+export const TOOLBAR_COLLAPSE_SPRING = sampleSpring(
+    300,
+    26,
+    TOOLBAR_COLLAPSE_DURATION_MS,
+    36,
+);
 
-export function sampleSpring(stiffness: number, damping: number, durationMs: number, steps = 28): number[] {
-  const dt = durationMs / 1000 / steps;
-  let position = 0;
-  let velocity = 0;
-  const samples = [0];
-  for (let i = 1; i < steps; i += 1) {
-    const accel = (1 - position) * stiffness - velocity * damping;
-    velocity += accel * dt;
-    position += velocity * dt;
-    samples.push(position);
-  }
-  samples.push(1);
-  return samples;
+export function sampleSpring(
+    stiffness: number,
+    damping: number,
+    durationMs: number,
+    steps = 28,
+): number[] {
+    const dt = durationMs / 1000 / steps;
+    let position = 0;
+    let velocity = 0;
+    const samples = [0];
+    for (let i = 1; i < steps; i += 1) {
+        const accel = (1 - position) * stiffness - velocity * damping;
+        velocity += accel * dt;
+        position += velocity * dt;
+        samples.push(position);
+    }
+    samples.push(1);
+    return samples;
 }
 
 /** Label wrapper whose width, gap, and opacity spring cleanly on expand/collapse. */
-export function ExpandableLabel({ text, expanded, animate = true }: { text: string; expanded: boolean; animate?: boolean }) {
-  const wrapRef = useRef<HTMLSpanElement | null>(null);
-  const innerRef = useRef<HTMLSpanElement | null>(null);
-  const animRef = useRef<Animation | null>(null);
-  const prevExpandedRef = useRef<boolean | null>(null);
+export function ExpandableLabel({
+    text,
+    expanded,
+    animate = true,
+}: {
+    text: string;
+    expanded: boolean;
+    animate?: boolean;
+}) {
+    const wrapRef = useRef<HTMLSpanElement | null>(null);
+    const innerRef = useRef<HTMLSpanElement | null>(null);
+    const animRef = useRef<Animation | null>(null);
+    const prevExpandedRef = useRef<boolean | null>(null);
 
-  useLayoutEffect(() => {
-    const wrap = wrapRef.current;
-    const inner = innerRef.current;
-    if (!wrap || !inner) return;
+    useLayoutEffect(() => {
+        const wrap = wrapRef.current;
+        const inner = innerRef.current;
+        if (!wrap || !inner) return;
 
-    const applyRestStyles = (isExpanded: boolean) => {
-      wrap.style.width = isExpanded ? "auto" : "0px";
-      wrap.style.marginLeft = isExpanded ? "var(--space-2)" : "0px";
-      wrap.style.opacity = isExpanded ? "1" : "0";
-    };
+        const applyRestStyles = (isExpanded: boolean) => {
+            wrap.style.width = isExpanded ? "auto" : "0px";
+            wrap.style.marginLeft = isExpanded ? "var(--space-2)" : "0px";
+            wrap.style.opacity = isExpanded ? "1" : "0";
+        };
 
-    if (!animate) {
-      animRef.current?.cancel();
-      animRef.current = null;
-      prevExpandedRef.current = expanded;
-      applyRestStyles(expanded);
-      return;
-    }
+        if (!animate) {
+            animRef.current?.cancel();
+            animRef.current = null;
+            prevExpandedRef.current = expanded;
+            applyRestStyles(expanded);
+            return;
+        }
 
-    if (prevExpandedRef.current === null) {
-      prevExpandedRef.current = expanded;
-      applyRestStyles(expanded);
-      return;
-    }
+        if (prevExpandedRef.current === null) {
+            prevExpandedRef.current = expanded;
+            applyRestStyles(expanded);
+            return;
+        }
 
-    if (prevExpandedRef.current === expanded) {
-      if (!animRef.current) applyRestStyles(expanded);
-      return;
-    }
+        if (prevExpandedRef.current === expanded) {
+            if (!animRef.current) applyRestStyles(expanded);
+            return;
+        }
 
-    prevExpandedRef.current = expanded;
-    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    if (reducedMotion) {
-      animRef.current?.cancel();
-      animRef.current = null;
-      applyRestStyles(expanded);
-      return;
-    }
+        prevExpandedRef.current = expanded;
+        const reducedMotion =
+            window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
+            false;
+        if (reducedMotion) {
+            animRef.current?.cancel();
+            animRef.current = null;
+            applyRestStyles(expanded);
+            return;
+        }
 
-    const computed = window.getComputedStyle(wrap);
-    const fromWidth = parseFloat(computed.width) || 0;
-    const fromMargin = parseFloat(computed.marginLeft) || 0;
-    const fromOpacity = Number(computed.opacity);
-    const startOpacity = Number.isFinite(fromOpacity) ? fromOpacity : (expanded ? 0 : 1);
-    animRef.current?.cancel();
-    animRef.current = null;
+        const computed = window.getComputedStyle(wrap);
+        const fromWidth = parseFloat(computed.width) || 0;
+        const fromMargin = parseFloat(computed.marginLeft) || 0;
+        const fromOpacity = Number(computed.opacity);
+        const startOpacity = Number.isFinite(fromOpacity)
+            ? fromOpacity
+            : expanded
+              ? 0
+              : 1;
+        animRef.current?.cancel();
+        animRef.current = null;
 
-    const targetWidth = expanded ? Math.ceil(inner.scrollWidth) : 0;
-    const targetMargin = expanded ? 8 : 0;
-    const targetOpacity = expanded ? 1 : 0;
-    const curve = expanded ? TOOLBAR_EXPAND_SPRING : TOOLBAR_COLLAPSE_SPRING;
-    const duration = expanded ? TOOLBAR_EXPAND_DURATION_MS : TOOLBAR_COLLAPSE_DURATION_MS;
+        const targetWidth = expanded ? Math.ceil(inner.scrollWidth) : 0;
+        const targetMargin = expanded ? 8 : 0;
+        const targetOpacity = expanded ? 1 : 0;
+        const curve = expanded
+            ? TOOLBAR_EXPAND_SPRING
+            : TOOLBAR_COLLAPSE_SPRING;
+        const duration = expanded
+            ? TOOLBAR_EXPAND_DURATION_MS
+            : TOOLBAR_COLLAPSE_DURATION_MS;
 
-    const keyframes: Keyframe[] = curve.map((p) => {
-      const width = Math.max(0, fromWidth + (targetWidth - fromWidth) * p);
-      const marginLeft = Math.max(0, fromMargin + (targetMargin - fromMargin) * p);
-      const opacity = expanded
-        ? Math.max(0, Math.min(1, startOpacity + (targetOpacity - startOpacity) * Math.min(1, p * 1.45)))
-        : Math.max(0, Math.min(1, startOpacity * Math.max(0, 1 - p * 1.6)));
-      return {
-        width: `${width.toFixed(2)}px`,
-        marginLeft: `${marginLeft.toFixed(2)}px`,
-        opacity,
-      };
-    });
+        const keyframes: Keyframe[] = curve.map((p) => {
+            const width = Math.max(
+                0,
+                fromWidth + (targetWidth - fromWidth) * p,
+            );
+            const marginLeft = Math.max(
+                0,
+                fromMargin + (targetMargin - fromMargin) * p,
+            );
+            const opacity = expanded
+                ? Math.max(
+                      0,
+                      Math.min(
+                          1,
+                          startOpacity +
+                              (targetOpacity - startOpacity) *
+                                  Math.min(1, p * 1.45),
+                      ),
+                  )
+                : Math.max(
+                      0,
+                      Math.min(1, startOpacity * Math.max(0, 1 - p * 1.6)),
+                  );
+            return {
+                width: `${width.toFixed(2)}px`,
+                marginLeft: `${marginLeft.toFixed(2)}px`,
+                opacity,
+            };
+        });
 
-    const anim = wrap.animate(keyframes, {
-      duration,
-      easing: "linear",
-      fill: "forwards",
-    });
-    animRef.current = anim;
-    anim.onfinish = () => {
-      if (animRef.current !== anim) return;
-      animRef.current = null;
-      anim.cancel();
-      applyRestStyles(expanded);
-    };
-  }, [animate, expanded, text]);
+        const anim = wrap.animate(keyframes, {
+            duration,
+            easing: "linear",
+            fill: "forwards",
+        });
+        animRef.current = anim;
+        anim.onfinish = () => {
+            if (animRef.current !== anim) return;
+            animRef.current = null;
+            anim.cancel();
+            applyRestStyles(expanded);
+        };
+    }, [animate, expanded, text]);
 
-  return (
-    <span ref={wrapRef} className="toolbar-label-wrap" aria-hidden={!expanded}>
-      <span ref={innerRef} className="toolbar-label">{text}</span>
-    </span>
-  );
+    return (
+        <span
+            ref={wrapRef}
+            className="toolbar-label-wrap"
+            aria-hidden={!expanded}
+        >
+            <span ref={innerRef} className="toolbar-label">
+                {text}
+            </span>
+        </span>
+    );
 }

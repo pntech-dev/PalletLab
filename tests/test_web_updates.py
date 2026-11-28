@@ -168,3 +168,43 @@ def test_failed_check_records_attempt(monkeypatch):
     manager = update_manager.UpdateManager()
     assert manager.check()["state"] == "check_failed"
     assert manager.last_check_at is not None
+
+
+def test_manual_recheck_from_ready_preserves_same_version_and_upgrades_on_newer(tmp_path, monkeypatch):
+    v1 = Release("9.9.9", "https://example.test/v1", "https://example.test/h1", "")
+    v2 = Release("10.0.0", "https://example.test/v2", "https://example.test/h2", "")
+    pkg = tmp_path / "v1.zip"
+    pkg.write_bytes(b"zip")
+    current_release = {"value": v1}
+
+    class ImmediateThread:
+        def __init__(self, *, target, args=(), daemon):
+            self.target, self.args = target, args
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(update_manager, "installed_application", lambda: True)
+    monkeypatch.setattr(update_manager, "Thread", ImmediateThread)
+    monkeypatch.setattr(update_manager, "fetch_newer_release", lambda _version: current_release["value"])
+    monkeypatch.setattr(update_manager, "download_verified", lambda *_args: pkg)
+
+    manager = update_manager.UpdateManager()
+    assert manager.check(manual=True) == {"state": "available", "version": "9.9.9"}
+    assert manager.download() == {"state": "ready", "version": "9.9.9"}
+
+    # Re-checking when same version is still latest keeps ready state.
+    assert manager.check(manual=True) == {"state": "ready", "version": "9.9.9"}
+
+    # Re-checking when a newer version exists transitions to available for the newer version.
+    current_release["value"] = v2
+    assert manager.check(manual=True) == {"state": "available", "version": "10.0.0"}
+
+
+def test_cancel_download_reverts_to_available(monkeypatch):
+    release = Release("9.9.9", "https://example.test/update", "https://example.test/hash", "")
+    manager = update_manager.UpdateManager()
+    manager._release = release
+    manager._status = {"state": "downloading", "version": "9.9.9", "received": 10, "total": 100}
+
+    assert manager.cancel() == {"state": "available", "version": "9.9.9"}
+

@@ -8,11 +8,15 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 import zipfile
 
 from palletlab.update_service import Release, download_verified, fetch_newer_release
 from palletlab.version import __version__
+
+
+class _DownloadCancelled(Exception):
+    """Internal signal used to abort an in-flight update download cleanly."""
 
 
 def installed_application(executable: Path | None = None, *, frozen: bool | None = None) -> bool:
@@ -61,6 +65,7 @@ class UpdateManager:
         self._package: Path | None = None
         self._last_check_at: str | None = None
         self._manual_only = False
+        self._download_cancelled = Event()
 
     def status(self) -> dict[str, object]:
         with self._lock:
@@ -77,7 +82,8 @@ class UpdateManager:
             if not installed and not manual:
                 self._status = {"state": "unavailable"}
                 return dict(self._status)
-            if self._status["state"] in {"checking", "downloading", "ready", "installing"}:
+            blocked_states = {"checking", "downloading", "installing"} if manual else {"checking", "downloading", "ready", "installing"}
+            if self._status["state"] in blocked_states:
                 return dict(self._status)
             self._manual_only = not installed
             self._last_check_at = datetime.now(timezone.utc).isoformat()
@@ -89,33 +95,70 @@ class UpdateManager:
         try:
             release = fetch_newer_release(__version__)
             with self._lock:
+                if (
+                    release is not None
+                    and self._release is not None
+                    and self._package is not None
+                    and release.version == self._release.version
+                    and self._package.is_file()
+                ):
+                    self._status = {"state": "ready", "version": release.version}
+                    return
                 self._release = release
+                self._package = None
                 self._status = {"state": "available", "version": release.version} if release else {"state": "current"}
                 if release and self._manual_only:
                     self._status["manualOnly"] = True
         except Exception:
             with self._lock:
-                self._status = {"state": "check_failed"}
+                if self._package is not None and self._release is not None and self._package.is_file():
+                    self._status = {"state": "ready", "version": self._release.version}
+                else:
+                    self._status = {"state": "check_failed"}
 
     def download(self) -> dict[str, object]:
         with self._lock:
             if not installed_application() or self._release is None or self._status["state"] not in {"available", "failed"}:
                 return {"state": "failed", "error": "Обновление недоступно."}
+            self._download_cancelled.clear()
             self._status = {"state": "downloading", "version": self._release.version, "received": 0, "total": 0}
             release = self._release
         Thread(target=self._download, args=(release,), daemon=True).start()
         return self.status()
 
+    def cancel(self) -> dict[str, object]:
+        with self._lock:
+            if self._status["state"] == "downloading":
+                self._download_cancelled.set()
+                if self._release is not None:
+                    self._status = {"state": "available", "version": self._release.version}
+                    if self._manual_only:
+                        self._status["manualOnly"] = True
+                else:
+                    self._status = {"state": "idle"}
+            return dict(self._status)
+
     def _download(self, release: Release) -> None:
         def progress(received: int, total: int) -> None:
+            if self._download_cancelled.is_set():
+                raise _DownloadCancelled()
             with self._lock:
+                if self._download_cancelled.is_set():
+                    raise _DownloadCancelled()
                 self._status.update(received=received, total=total)
 
         try:
             package = download_verified(release, progress)
             with self._lock:
+                if self._download_cancelled.is_set():
+                    return
                 self._package = package
                 self._status = {"state": "ready", "version": release.version}
+        except _DownloadCancelled:
+            with self._lock:
+                self._status = {"state": "available", "version": release.version}
+                if self._manual_only:
+                    self._status["manualOnly"] = True
         except Exception as exc:
             with self._lock:
                 self._status = {"state": "failed", "version": release.version, "error": str(exc)}
